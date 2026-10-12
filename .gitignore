@@ -3,3 +3,4 @@ resources/*/bin/
 build/
 .mygo/
 *.exe
+.opencode
