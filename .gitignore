@@ -4,3 +4,4 @@ build/
 .mygo/
 *.exe
 .opencode
+opencode
