@@ -1,0 +1,533 @@
+package services
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
+	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
+	"github.com/fazi-gondal/video-downloader-mygo/internal/tools"
+)
+
+// YtDlpService wraps the yt-dlp CLI. All methods are blocking and must
+// be called from worker goroutines (never the UI thread).
+type YtDlpService struct {
+	ffmpegPath string
+	ytdlpPath  string
+	settings   func() config.AppSettings
+}
+
+func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtDlpService {
+	yt := tools.YtDlp()
+	if yt == "" {
+		yt = "yt-dlp" // hope PATH at exec time
+	}
+	if ffmpegPath == "" {
+		ffmpegPath = tools.FFmpeg()
+	}
+	return &YtDlpService{ffmpegPath: ffmpegPath, ytdlpPath: yt, settings: settings}
+}
+
+func (s *YtDlpService) Bin() string { return s.ytdlpPath }
+
+// Analyze performs a fast flat extraction (good for playlists).
+func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return nil, fmt.Errorf("empty URL")
+	}
+	args := s.baseArgs()
+	args = append(args,
+		"--dump-single-json",
+		"--flat-playlist",
+		"--no-download",
+		"--no-warnings",
+		url,
+	)
+	out, err := s.run(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("parse yt-dlp json: %w", err)
+	}
+	if t, _ := raw["_type"].(string); t == "playlist" {
+		return parsePlaylist(raw, url), nil
+	}
+	return parseMedia(raw, url), nil
+}
+
+// FetchFormats does a full extraction of a single video (formats + tracks).
+func (s *YtDlpService) FetchFormats(ctx context.Context, url string) (*models.MediaInfo, error) {
+	args := s.baseArgs()
+	args = append(args,
+		"--dump-single-json",
+		"--no-download",
+		"--no-playlist",
+		"--no-warnings",
+		url,
+	)
+	out, err := s.run(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, err
+	}
+	return parseMedia(raw, url), nil
+}
+
+// Download runs yt-dlp for a task and streams progress via the callback.
+// Returns the final output path.
+func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, onProgress func(models.ProgressInfo)) (string, error) {
+	req := task.Request
+	args := s.buildDownloadArgs(req)
+
+	// Progress template that we can parse.
+	args = append(args,
+		"--newline",
+		"--progress",
+		"--progress-template", "download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress.fragment_index)s|%(progress.fragment_count)s",
+		req.URL,
+	)
+
+	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start yt-dlp: %w", err)
+	}
+
+	var lastPath string
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if task.Cancelled() {
+			_ = cmd.Process.Kill()
+			return "", context.Canceled
+		}
+		line := scanner.Text()
+		if strings.HasPrefix(line, "download:") {
+			p := parseProgressLine(strings.TrimPrefix(line, "download:"))
+			if onProgress != nil {
+				onProgress(p)
+			}
+		}
+		// yt-dlp prints the final path on some templates; capture Destination
+		if strings.Contains(line, "[download] Destination:") {
+			lastPath = strings.TrimSpace(strings.SplitN(line, "Destination:", 2)[1])
+		}
+		if strings.Contains(line, "Merging formats into") {
+			// extract quoted path
+			if i := strings.Index(line, "\""); i >= 0 {
+				if j := strings.LastIndex(line, "\""); j > i {
+					lastPath = line[i+1 : j]
+				}
+			}
+		}
+	}
+
+	// drain stderr for error messages
+	errBuf := new(bytes.Buffer)
+	_, _ = errBuf.ReadFrom(stderr)
+
+	if err := cmd.Wait(); err != nil {
+		if task.Cancelled() {
+			return "", context.Canceled
+		}
+		msg := strings.TrimSpace(errBuf.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("%s", msg)
+	}
+
+	if lastPath == "" {
+		// fallback: look for newest file in output dir
+		lastPath = newestFile(req.OutputDir)
+	}
+	return lastPath, nil
+}
+
+func (s *YtDlpService) baseArgs() []string {
+	st := s.settings()
+	args := []string{
+		"--no-check-certificates",
+		"--prefer-free-formats",
+	}
+	if s.ffmpegPath != "" {
+		args = append(args, "--ffmpeg-location", s.ffmpegPath)
+	}
+	if st.Proxy != "" {
+		args = append(args, "--proxy", st.Proxy)
+	}
+	if st.CookiesBrowser != "" {
+		args = append(args, "--cookies-from-browser", st.CookiesBrowser)
+	}
+	if st.RateLimitKbps > 0 {
+		args = append(args, "--limit-rate", fmt.Sprintf("%dK", st.RateLimitKbps))
+	}
+	if st.ConcurrentFragments > 1 {
+		args = append(args, "--concurrent-fragments", strconv.Itoa(st.ConcurrentFragments))
+	}
+	return args
+}
+
+func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
+	args := s.baseArgs()
+	st := s.settings()
+
+	_ = os.MkdirAll(req.OutputDir, 0o755)
+	outTpl := filepath.Join(req.OutputDir, "%(title).200B [%(id)s].%(ext)s")
+	if req.PlaylistTitle != "" {
+		outTpl = filepath.Join(req.OutputDir, "%(playlist_title).100B", "%(playlist_index)02d - %(title).150B [%(id)s].%(ext)s")
+	}
+	args = append(args, "-o", outTpl)
+
+	// Format selection
+	switch req.Mode {
+	case models.ModeAudioOnly:
+		args = append(args, "-f", audioFormatSelector(req), "-x", "--audio-format", req.AudioFormat)
+		if req.AudioBitrateKbps > 0 {
+			args = append(args, "--audio-quality", strconv.Itoa(req.AudioBitrateKbps)+"K")
+		}
+	case models.ModeVideoOnly:
+		args = append(args, "-f", videoFormatSelector(req))
+	default: // VIDEO_AUDIO
+		args = append(args, "-f", videoAudioSelector(req))
+		merge := req.Container
+		if merge == "" {
+			merge = "mp4"
+		}
+		// VP9/AV1 + Opus cannot live in mp4 reliably — force mkv.
+		multiAudio := requiresMultiAudio(req)
+		if multiAudio {
+			merge = "mkv"
+		} else if req.PreferVP9 || strings.Contains(strings.ToLower(req.AudioFormatID), "opus") {
+			if merge == "mp4" {
+				merge = "mkv"
+			}
+		}
+		if multiAudio {
+			args = append(args, "--audio-multistreams")
+		}
+		args = append(args, "--merge-output-format", merge)
+	}
+
+	if req.WriteSubtitles || st.WriteSubtitles {
+		args = append(args, "--write-subs", "--write-auto-subs", "--embed-subs")
+		langs := req.SubtitleLangs
+		if len(langs) == 0 {
+			langs = st.SubtitleLangs
+		}
+		if len(langs) > 0 {
+			args = append(args, "--sub-langs", strings.Join(langs, ","))
+		}
+	}
+	if req.EmbedThumbnail || st.EmbedThumbnail {
+		args = append(args, "--embed-thumbnail")
+	}
+	if req.EmbedMetadata || st.EmbedMetadata {
+		args = append(args, "--embed-metadata", "--embed-chapters")
+	}
+	return args
+}
+
+func audioFormatSelector(req models.DownloadRequest) string {
+	if req.AudioFormatID != "" {
+		return req.AudioFormatID
+	}
+	return "ba/b"
+}
+
+func videoFormatSelector(req models.DownloadRequest) string {
+	if req.VideoFormatID != "" {
+		return req.VideoFormatID
+	}
+	filters := videoFilters(req)
+	sel := "bv" + filters
+	// Prefer VP9 only when user asked; keep a progressive fallback.
+	if req.PreferVP9 {
+		return "bv[vcodec~='vp0?9|vp9']" + filters + "/" + sel
+	}
+	if filters != "" {
+		return sel + "/bv/b" + filters + "/b"
+	}
+	return "bv/b"
+}
+
+// bestAudioSelector prefers Opus at the highest available bitrate, then any bestaudio.
+func bestAudioSelector(req models.DownloadRequest) string {
+	if selector := audioFormatSelector(req); selector != "ba/b" {
+		return selector
+	}
+	// Opus first (YouTube's high-quality audio), then generic bestaudio.
+	return "ba[acodec*=opus]/ba*"
+}
+
+func videoAudioSelector(req models.DownloadRequest) string {
+	video := videoAudioVideoSelector(req)
+	if len(req.SelectedAudioTrackIDs) > 0 {
+		audio := strings.Join(req.SelectedAudioTrackIDs, "+")
+		if len(req.SelectedAudioTrackIDs) == 1 {
+			return video + "+" + audio + "/" + video + "+ba/b"
+		}
+		return video + "+" + audio + "/" + video + "+mergeall[vcodec=none]/" + video + "+ba/b"
+	}
+
+	if req.MultiAudio {
+		filters := videoFilters(req)
+		fallback := "b"
+		if filters != "" {
+			fallback += filters + "/b"
+		}
+		return video + "+mergeall[vcodec=none]/" + fallback
+	}
+
+	// mp4 container: prefer H.264 + AAC (reliable merge into .mp4).
+	// Otherwise allow any best video + opus/best audio, with progressive fallbacks.
+	a := bestAudioSelector(req)
+	if req.Container == "mp4" && !req.PreferVP9 {
+		filters := videoFilters(req)
+		return "bv*[ext=mp4]" + filters + "+ba[ext=m4a]/bv*" + filters + "+ba/b" + filters
+	}
+
+	return video + "+" + a + "/b"
+}
+
+func videoAudioVideoSelector(req models.DownloadRequest) string {
+	if req.VideoFormatID != "" {
+		return req.VideoFormatID
+	}
+	return "bv*" + videoFilters(req)
+}
+
+func videoFilters(req models.DownloadRequest) string {
+	var filters strings.Builder
+	if req.MaxHeight > 0 {
+		filters.WriteString(fmt.Sprintf("[height<=?%d]", req.MaxHeight))
+	}
+	if req.MaxFPS > 0 {
+		filters.WriteString(fmt.Sprintf("[fps<=?%d]", req.MaxFPS))
+	}
+	return filters.String()
+}
+
+func requiresMultiAudio(req models.DownloadRequest) bool {
+	return req.MultiAudio || len(req.SelectedAudioTrackIDs) > 1
+}
+
+func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	return stdout.Bytes(), nil
+}
+
+// ---------- parsers ----------
+
+func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
+	m := &models.MediaInfo{
+		OriginalURL:       originalURL,
+		Subtitles:         map[string][]models.SubtitleTrack{},
+		AutomaticCaptions: map[string][]models.SubtitleTrack{},
+	}
+	m.ID, _ = raw["id"].(string)
+	m.Title, _ = raw["title"].(string)
+	m.Description, _ = raw["description"].(string)
+	m.Uploader, _ = raw["uploader"].(string)
+	m.Thumbnail, _ = raw["thumbnail"].(string)
+	m.WebpageURL, _ = raw["webpage_url"].(string)
+	m.Extractor, _ = raw["extractor"].(string)
+	if d, ok := raw["duration"].(float64); ok {
+		m.Duration = d
+	}
+	m.IsLive, _ = raw["is_live"].(bool)
+
+	if formats, ok := raw["formats"].([]any); ok {
+		for _, f := range formats {
+			fm, _ := f.(map[string]any)
+			fi := parseFormat(fm)
+			m.Formats = append(m.Formats, fi)
+			if fi.IsAudio && !fi.IsVideo {
+				m.AudioTracks = append(m.AudioTracks, models.AudioTrack{
+					ID:       fi.ID,
+					Language: fi.Language,
+					Codec:    fi.ACodec,
+					Bitrate:  fi.ABR,
+					Note:     fi.Note,
+				})
+			}
+		}
+	}
+	parseSubs(raw["subtitles"], m.Subtitles)
+	parseSubs(raw["automatic_captions"], m.AutomaticCaptions)
+	return m
+}
+
+func parseFormat(fm map[string]any) models.FormatInfo {
+	fi := models.FormatInfo{}
+	fi.ID, _ = fm["format_id"].(string)
+	fi.Ext, _ = fm["ext"].(string)
+	fi.Resolution, _ = fm["resolution"].(string)
+	fi.VCodec, _ = fm["vcodec"].(string)
+	fi.ACodec, _ = fm["acodec"].(string)
+	fi.Note, _ = fm["format_note"].(string)
+	fi.Protocol, _ = fm["protocol"].(string)
+	fi.Language, _ = fm["language"].(string)
+	if v, ok := fm["fps"].(float64); ok {
+		fi.FPS = v
+	}
+	if v, ok := fm["filesize"].(float64); ok {
+		fi.Filesize = int64(v)
+	}
+	if v, ok := fm["filesize_approx"].(float64); ok {
+		fi.FilesizeApprox = int64(v)
+	}
+	if v, ok := fm["tbr"].(float64); ok {
+		fi.TBR = v
+	}
+	if v, ok := fm["abr"].(float64); ok {
+		fi.ABR = v
+	}
+	if v, ok := fm["vbr"].(float64); ok {
+		fi.VBR = v
+	}
+	if v, ok := fm["height"].(float64); ok {
+		fi.Height = int(v)
+	}
+	if v, ok := fm["width"].(float64); ok {
+		fi.Width = int(v)
+	}
+	fi.IsVideo = fi.VCodec != "" && fi.VCodec != "none"
+	fi.IsAudio = fi.ACodec != "" && fi.ACodec != "none"
+	fi.HasAudio = fi.IsAudio
+	return fi
+}
+
+func parseSubs(raw any, dest map[string][]models.SubtitleTrack) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	for lang, list := range m {
+		arr, _ := list.([]any)
+		for _, item := range arr {
+			sm, _ := item.(map[string]any)
+			st := models.SubtitleTrack{Lang: lang}
+			st.Name, _ = sm["name"].(string)
+			st.Ext, _ = sm["ext"].(string)
+			st.URL, _ = sm["url"].(string)
+			dest[lang] = append(dest[lang], st)
+		}
+	}
+}
+
+func parsePlaylist(raw map[string]any, originalURL string) *models.PlaylistInfo {
+	p := &models.PlaylistInfo{OriginalURL: originalURL}
+	p.ID, _ = raw["id"].(string)
+	p.Title, _ = raw["title"].(string)
+	p.Uploader, _ = raw["uploader"].(string)
+	p.WebpageURL, _ = raw["webpage_url"].(string)
+	if entries, ok := raw["entries"].([]any); ok {
+		for i, e := range entries {
+			em, _ := e.(map[string]any)
+			if em == nil {
+				continue
+			}
+			ent := models.PlaylistEntry{Index: i + 1}
+			ent.ID, _ = em["id"].(string)
+			ent.Title, _ = em["title"].(string)
+			ent.URL, _ = em["url"].(string)
+			if ent.URL == "" {
+				ent.URL, _ = em["webpage_url"].(string)
+			}
+			if d, ok := em["duration"].(float64); ok {
+				ent.Duration = d
+			}
+			ent.Thumbnail, _ = em["thumbnail"].(string)
+			p.Entries = append(p.Entries, ent)
+		}
+	}
+	return p
+}
+
+var progressRe = regexp.MustCompile(`^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)$`)
+
+func parseProgressLine(line string) models.ProgressInfo {
+	p := models.ProgressInfo{}
+	m := progressRe.FindStringSubmatch(line)
+	if m == nil {
+		return p
+	}
+	p.DownloadedBytes, _ = strconv.ParseInt(m[1], 10, 64)
+	if m[2] != "" && m[2] != "NA" {
+		p.TotalBytes, _ = strconv.ParseInt(m[2], 10, 64)
+	} else if m[3] != "" && m[3] != "NA" {
+		p.TotalBytes, _ = strconv.ParseInt(m[3], 10, 64)
+		p.TotalIsEstimate = true
+	}
+	if m[4] != "" && m[4] != "NA" {
+		p.SpeedBps, _ = strconv.ParseFloat(m[4], 64)
+	}
+	if m[5] != "" && m[5] != "NA" {
+		if sec, err := strconv.ParseFloat(m[5], 64); err == nil {
+			p.ETA = time.Duration(sec) * time.Second
+		}
+	}
+	p.FragmentIndex, _ = strconv.Atoi(m[6])
+	p.FragmentCount, _ = strconv.Atoi(m[7])
+	if p.TotalBytes > 0 {
+		p.Percent = float64(p.DownloadedBytes) / float64(p.TotalBytes) * 100
+	}
+	return p
+}
+
+func newestFile(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var newest string
+	var newestMod time.Time
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(newestMod) {
+			newestMod = info.ModTime()
+			newest = filepath.Join(dir, e.Name())
+		}
+	}
+	return newest
+}

@@ -1,0 +1,130 @@
+# Multi-platform release for the native-UI MyGo app.
+# Trigger: push a version tag matching mygo.json (e.g. v2.0.0).
+#
+# Optional secrets (signing / auto-updates):
+#   MYGO_UPDATER_PRIVATE_KEY   contents of mygo-update.key
+#   MACOS_* / WINDOWS_*        see https://mygo.egoist.dev/docs/github-actions
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  draft-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches mygo.json version
+        run: |
+          ver="$(jq -r .version mygo.json)"
+          test "$GITHUB_REF_NAME" = "v${ver}" \
+            || (echo "Tag $GITHUB_REF_NAME != v${ver} from mygo.json" && exit 1)
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+
+  build:
+    needs: draft-release
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: ubuntu-latest
+            platform: windows/amd64
+            fetch: windows-amd64
+          - name: Linux
+            os: ubuntu-latest
+            platform: linux/amd64
+            fetch: linux-amd64
+          - name: macOS
+            os: macos-latest
+            platform: darwin/arm64
+            fetch: host
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install NSIS (Windows installers from Linux)
+        if: matrix.name == 'Windows'
+        run: sudo apt-get update && sudo apt-get install -y nsis unzip xz-utils
+
+      - name: Install extract tools (Linux row)
+        if: matrix.name == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y unzip xz-utils
+
+      - name: Fetch yt-dlp + ffmpeg into resources
+        run: |
+          chmod +x scripts/fetch-tools.sh
+          ./scripts/fetch-tools.sh "${{ matrix.fetch }}"
+          find resources -type f | head -40
+
+      - name: Install MyGo CLI
+        run: go install github.com/egoist/mygo/cmd/mygo@latest
+
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: |
+          mygo build -platform "${{ matrix.platform }}"
+          echo "Artifacts:"
+          find build -type f | head -50
+
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Upload everything mygo produced for this platform
+          shopt -s nullglob
+          files=(build/*/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            files=(build/**/*)
+          fi
+          # Prefer archives / installers over raw dirs
+          assets=()
+          while IFS= read -r -d '' f; do
+            case "$f" in
+              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage) assets+=("$f") ;;
+            esac
+          done < <(find build -type f -print0)
+
+          if [ ${#assets[@]} -eq 0 ]; then
+            # fallback: zip each platform output dir
+            for d in build/*/; do
+              [ -d "$d" ] || continue
+              name="$(basename "$d")"
+              (cd build && zip -r "${name}.zip" "$name")
+              assets+=("build/${name}.zip")
+            done
+          fi
+
+          echo "Uploading: ${assets[*]}"
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  # Uncomment to auto-publish after all platforms succeed:
+  # publish:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - env:
+  #         GH_TOKEN: ${{ github.token }}
+  #       run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
