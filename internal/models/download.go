@@ -33,6 +33,44 @@ const (
 	ModeVideoAudio DownloadMode = "video_audio"
 )
 
+// AudioSelectionMode controls which audio streams are included in a
+// video-plus-audio download. The zero value is the default: one best audio
+// stream. The legacy MultiAudio and SelectedAudioTrackIDs fields are honored
+// when AudioSelectionMode is not set.
+type AudioSelectionMode string
+
+const (
+	AudioSelectionNone   AudioSelectionMode = "none"
+	AudioSelectionAll    AudioSelectionMode = "all"
+	AudioSelectionCustom AudioSelectionMode = "custom"
+
+	// AudioSelectionDefault is an explicit spelling of the zero-value behavior.
+	AudioSelectionDefault AudioSelectionMode = "default"
+
+	// Long-form aliases make the state names discoverable alongside the type.
+	AudioSelectionModeNone   = AudioSelectionNone
+	AudioSelectionModeAll    = AudioSelectionAll
+	AudioSelectionModeCustom = AudioSelectionCustom
+)
+
+// SubtitleSelectionMode controls subtitle download and language selection.
+// The zero value preserves the legacy WriteSubtitles/SubtitleLangs behavior.
+type SubtitleSelectionMode string
+
+const (
+	SubtitleSelectionNone   SubtitleSelectionMode = "none"
+	SubtitleSelectionAll    SubtitleSelectionMode = "all"
+	SubtitleSelectionCustom SubtitleSelectionMode = "custom"
+
+	// SubtitleSelectionDefault is an explicit spelling of the legacy behavior.
+	SubtitleSelectionDefault SubtitleSelectionMode = "default"
+
+	// Long-form aliases make the state names discoverable alongside the type.
+	SubtitleSelectionModeNone   = SubtitleSelectionNone
+	SubtitleSelectionModeAll    = SubtitleSelectionAll
+	SubtitleSelectionModeCustom = SubtitleSelectionCustom
+)
+
 // DownloadRequest holds everything needed for one video download.
 type DownloadRequest struct {
 	URL       string
@@ -54,10 +92,14 @@ type DownloadRequest struct {
 	AudioFormatID string
 
 	// Extras
-	WriteSubtitles        bool
+	WriteSubtitles        bool // legacy switch; use SubtitleSelectionMode for new callers
 	SubtitleLangs         []string
-	MultiAudio            bool
+	SubtitleSelectionMode SubtitleSelectionMode
+	SubtitleSelection     SubtitleSelectionMode // concise alias for new callers
+	MultiAudio            bool                  // legacy switch; use AudioSelectionMode for new callers
 	SelectedAudioTrackIDs []string
+	AudioSelectionMode    AudioSelectionMode
+	AudioSelection        AudioSelectionMode // concise alias for new callers
 	EmbedThumbnail        bool
 	EmbedMetadata         bool
 	PreferVP9             bool
@@ -87,16 +129,16 @@ var idCounter atomic.Uint64
 
 // DownloadTask is one unit of work in the queue.
 type DownloadTask struct {
-	ID         string
-	Request    DownloadRequest
-	State      DownloadState
-	Progress   ProgressInfo
-	OutputPath string
-	Error      string
+	ID          string
+	Request     DownloadRequest
+	State       DownloadState
+	Progress    ProgressInfo
+	OutputPath  string
+	Error       string
 	ErrorDetail string
-	CreatedAt  time.Time
-	StartedAt  *time.Time
-	FinishedAt *time.Time
+	CreatedAt   time.Time
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
 
 	cancelCh chan struct{}
 	mu       sync.Mutex

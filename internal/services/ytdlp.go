@@ -76,6 +76,10 @@ func (s *YtDlpService) FetchFormats(ctx context.Context, url string) (*models.Me
 		"--no-download",
 		"--no-playlist",
 		"--no-warnings",
+		// The default YouTube client commonly exposes only the primary Opus
+		// stream. The richer client set exposes dubbed audio and subtitle
+		// languages so the picker can offer the complete set.
+		"--extractor-args", "youtube:player_client=all",
 		url,
 	)
 	out, err := s.run(ctx, args)
@@ -213,6 +217,13 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		args = append(args, "-f", videoFormatSelector(req))
 	default: // VIDEO_AUDIO
 		args = append(args, "-f", videoAudioSelector(req))
+		selectionMode, _ := audioSelection(req)
+		if selectionMode == models.AudioSelectionAll || selectionMode == models.AudioSelectionCustom {
+			// YouTube exposes language-specific/dubbed tracks through the richer
+			// player client set. Without this, a valid custom selector can appear
+			// unavailable even though the track exists.
+			args = append(args, "--extractor-args", "youtube:player_client=all")
+		}
 		merge := req.Container
 		if merge == "" {
 			merge = "mp4"
@@ -231,15 +242,21 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		}
 		args = append(args, "--merge-output-format", merge)
 	}
+	if req.PreferVP9 && req.Mode != models.ModeAudioOnly && req.VideoFormatID == "" {
+		// Sorting is preferable to filtering: it keeps VP9 as the first choice
+		// while retaining a working fallback when a video has no VP9 stream.
+		args = append(args, "--format-sort", "vcodec:vp9,res,fps,acodec:opus,acodec:m4a")
+	}
 
-	if req.WriteSubtitles || st.WriteSubtitles {
-		args = append(args, "--write-subs", "--write-auto-subs", "--embed-subs")
-		langs := req.SubtitleLangs
-		if len(langs) == 0 {
-			langs = st.SubtitleLangs
-		}
-		if len(langs) > 0 {
-			args = append(args, "--sub-langs", strings.Join(langs, ","))
+	if req.Mode != models.ModeAudioOnly {
+		subtitleMode, langs := subtitleSelection(req, st)
+		if subtitleMode != models.SubtitleSelectionNone {
+			args = append(args, "--write-subs", "--write-auto-subs", "--embed-subs")
+			if subtitleMode == models.SubtitleSelectionAll {
+				args = append(args, "--sub-langs", "all")
+			} else if len(langs) > 0 {
+				args = append(args, "--sub-langs", strings.Join(langs, ","))
+			}
 		}
 	}
 	if req.EmbedThumbnail || st.EmbedThumbnail {
@@ -264,10 +281,6 @@ func videoFormatSelector(req models.DownloadRequest) string {
 	}
 	filters := videoFilters(req)
 	sel := "bv" + filters
-	// Prefer VP9 only when user asked; keep a progressive fallback.
-	if req.PreferVP9 {
-		return "bv[vcodec~='vp0?9|vp9']" + filters + "/" + sel
-	}
 	if filters != "" {
 		return sel + "/bv/b" + filters + "/b"
 	}
@@ -279,21 +292,28 @@ func bestAudioSelector(req models.DownloadRequest) string {
 	if selector := audioFormatSelector(req); selector != "ba/b" {
 		return selector
 	}
-	// Opus first (YouTube's high-quality audio), then generic bestaudio.
-	return "ba[acodec*=opus]/ba*"
+	return "ba/b"
 }
 
 func videoAudioSelector(req models.DownloadRequest) string {
 	video := videoAudioVideoSelector(req)
-	if len(req.SelectedAudioTrackIDs) > 0 {
-		audio := strings.Join(req.SelectedAudioTrackIDs, "+")
-		if len(req.SelectedAudioTrackIDs) == 1 {
+	selectionMode, selected := audioSelection(req)
+	if req.VideoFormatID != "" && req.AudioFormatID != "" && selectionMode == models.AudioSelectionNone {
+		return req.VideoFormatID + "+" + req.AudioFormatID
+	}
+	if selectionMode == models.AudioSelectionCustom && len(selected) > 0 {
+		audioParts := make([]string, 0, len(selected))
+		for _, track := range selected {
+			audioParts = append(audioParts, audioSelector(track))
+		}
+		audio := strings.Join(audioParts, "+")
+		if len(selected) == 1 {
 			return video + "+" + audio + "/" + video + "+ba/b"
 		}
 		return video + "+" + audio + "/" + video + "+mergeall[vcodec=none]/" + video + "+ba/b"
 	}
 
-	if req.MultiAudio {
+	if selectionMode == models.AudioSelectionAll {
 		filters := videoFilters(req)
 		fallback := "b"
 		if filters != "" {
@@ -303,13 +323,16 @@ func videoAudioSelector(req models.DownloadRequest) string {
 	}
 
 	// mp4 container: prefer H.264 + AAC (reliable merge into .mp4).
-	// Otherwise allow any best video + opus/best audio, with progressive fallbacks.
+	// Otherwise allow any best video + best audio, with a progressive fallback.
 	a := bestAudioSelector(req)
 	if req.Container == "mp4" && !req.PreferVP9 {
 		filters := videoFilters(req)
 		return "bv*[ext=mp4]" + filters + "+ba[ext=m4a]/bv*" + filters + "+ba/b" + filters
 	}
 
+	if a == "ba/b" {
+		return video + "+ba/b"
+	}
 	return video + "+" + a + "/b"
 }
 
@@ -332,7 +355,84 @@ func videoFilters(req models.DownloadRequest) string {
 }
 
 func requiresMultiAudio(req models.DownloadRequest) bool {
-	return req.MultiAudio || len(req.SelectedAudioTrackIDs) > 1
+	mode, selected := audioSelection(req)
+	return mode == models.AudioSelectionAll || (mode == models.AudioSelectionCustom && len(selected) > 1)
+}
+
+var languageCodeRe = regexp.MustCompile(`^[a-z]{2,3}(-[A-Za-z]{2,4})?$`)
+
+func audioSelector(track string) string {
+	if languageCodeRe.MatchString(track) {
+		return "ba[language=" + track + "]"
+	}
+	return track
+}
+
+func audioSelection(req models.DownloadRequest) (models.AudioSelectionMode, []string) {
+	selection := req.AudioSelectionMode
+	if selection == "" {
+		selection = req.AudioSelection
+	}
+	if selection != "" {
+		switch selection {
+		case models.AudioSelectionAll:
+			return models.AudioSelectionAll, nil
+		case models.AudioSelectionCustom:
+			return models.AudioSelectionCustom, req.SelectedAudioTrackIDs
+		case models.AudioSelectionNone, models.AudioSelectionDefault:
+			return models.AudioSelectionNone, nil
+		}
+	}
+	if req.MultiAudio {
+		return models.AudioSelectionAll, nil
+	}
+	if len(req.SelectedAudioTrackIDs) > 0 {
+		return models.AudioSelectionCustom, req.SelectedAudioTrackIDs
+	}
+	return models.AudioSelectionNone, nil
+}
+
+func subtitleSelection(req models.DownloadRequest, settings config.AppSettings) (models.SubtitleSelectionMode, []string) {
+	selection := req.SubtitleSelectionMode
+	if selection == "" {
+		selection = req.SubtitleSelection
+	}
+	if selection != "" {
+		switch selection {
+		case models.SubtitleSelectionAll:
+			return models.SubtitleSelectionAll, nil
+		case models.SubtitleSelectionCustom:
+			if len(req.SubtitleLangs) > 0 {
+				return models.SubtitleSelectionCustom, req.SubtitleLangs
+			}
+			return models.SubtitleSelectionNone, nil
+		case models.SubtitleSelectionNone:
+			return models.SubtitleSelectionNone, nil
+		case models.SubtitleSelectionDefault:
+			// Continue with the legacy fields below.
+		}
+	}
+
+	if !req.WriteSubtitles && !settings.WriteSubtitles {
+		return models.SubtitleSelectionNone, nil
+	}
+	langs := req.SubtitleLangs
+	if len(langs) == 0 {
+		langs = settings.SubtitleLangs
+	}
+	if len(langs) == 0 || contains(langs, "all") {
+		return models.SubtitleSelectionAll, nil
+	}
+	return models.SubtitleSelectionCustom, langs
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
@@ -371,24 +471,49 @@ func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
 	m.IsLive, _ = raw["is_live"].(bool)
 
 	if formats, ok := raw["formats"].([]any); ok {
+		audioTrackIndexes := make(map[string]int)
 		for _, f := range formats {
 			fm, _ := f.(map[string]any)
 			fi := parseFormat(fm)
 			m.Formats = append(m.Formats, fi)
 			if fi.IsAudio && !fi.IsVideo {
-				m.AudioTracks = append(m.AudioTracks, models.AudioTrack{
+				track := models.AudioTrack{
 					ID:       fi.ID,
 					Language: fi.Language,
 					Codec:    fi.ACodec,
 					Bitrate:  fi.ABR,
 					Note:     fi.Note,
-				})
+				}
+				// A rich extraction returns several technical formats for the
+				// same logical language. Keep the best one in the picker rather
+				// than showing every bitrate/codec variant as a separate track.
+				key := track.Language
+				if previous, exists := audioTrackIndexes[key]; exists {
+					if preferAudioTrack(track, m.AudioTracks[previous]) {
+						m.AudioTracks[previous] = track
+					}
+				} else {
+					audioTrackIndexes[key] = len(m.AudioTracks)
+					m.AudioTracks = append(m.AudioTracks, track)
+				}
 			}
 		}
 	}
 	parseSubs(raw["subtitles"], m.Subtitles)
 	parseSubs(raw["automatic_captions"], m.AutomaticCaptions)
 	return m
+}
+
+func preferAudioTrack(candidate, current models.AudioTrack) bool {
+	candidateOpus := strings.Contains(strings.ToLower(candidate.Codec), "opus")
+	currentOpus := strings.Contains(strings.ToLower(current.Codec), "opus")
+	if candidateOpus != currentOpus {
+		return candidateOpus
+	}
+	if candidate.Bitrate != current.Bitrate {
+		return candidate.Bitrate > current.Bitrate
+	}
+	return candidate.ID > current.ID
 }
 
 func parseFormat(fm map[string]any) models.FormatInfo {

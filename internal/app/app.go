@@ -25,6 +25,14 @@ const (
 	PageHistory   = "history"
 	PageSettings  = "settings"
 	PageAbout     = "about"
+
+	audioTracksNone   = "none"
+	audioTracksAll    = "all"
+	audioTracksCustom = "custom"
+
+	subtitleModeNone   = "none"
+	subtitleModeAll    = "all"
+	subtitleModeCustom = "custom"
 )
 
 type App struct {
@@ -50,9 +58,10 @@ type App struct {
 	maxHeight           int
 	container           string
 	audioFormat         string
-	writeSubs           bool
-	multiAudio          bool
+	audioTracksMode     string
 	selectedAudio       map[string]bool
+	subtitleMode        string
+	selectedSubtitle    map[string]bool
 	selectedVideoFormat string
 	selectedAudioFormat string
 	selectedVideoLabel  string // shown in Select
@@ -99,16 +108,28 @@ func New() *App {
 		maxHeight:          1080,
 		container:          "mp4",
 		audioFormat:        "mp3",
+		audioTracksMode:    audioTracksNone,
+		subtitleMode:       subtitleModeNone,
 		convFormat:         "mp3",
 		convKind:           models.KindAudio,
 		selectedEntries:    map[int]bool{},
 		selectedAudio:      map[string]bool{},
-		writeSubs:          settings.WriteSubtitles,
-		multiAudio:         settings.MultiAudio,
+		selectedSubtitle:   map[string]bool{},
 		sidebarOpen:        [2]bool{true, true},
 		formatsOpen:        false,
 		selectedVideoLabel: "Auto (best for resolution)",
 		selectedAudioLabel: "Auto (Opus / best)",
+	}
+	if settings.MultiAudio {
+		a.audioTracksMode = audioTracksAll
+	}
+	if settings.WriteSubtitles {
+		a.subtitleMode = subtitleModeFromSettings(settings)
+		for _, lang := range settings.SubtitleLangs {
+			if lang != "" && lang != "all" {
+				a.selectedSubtitle[lang] = true
+			}
+		}
 	}
 	a.ytdlp = services.NewYtDlpService(ffmpeg.Path(), func() config.AppSettings { return a.settings })
 	a.manager = services.NewDownloadManager(a.ytdlp, settings.MaxConcurrent)
@@ -501,30 +522,77 @@ func (a *App) configPanel(c *ui.Context) {
 				}
 			})
 		}
-		if a.currentMedia != nil && len(a.currentMedia.AudioTracks) > 1 {
-			ui.Checkbox(c, &a.multiAudio, "Keep multiple audio tracks (mkv)")
-			if a.multiAudio {
-				ui.Column(c).Gap(2).Padding(0, 0, 0, 20).Children(func() {
-					for _, tr := range a.currentMedia.AudioTracks {
-						id := tr.ID
-						on := a.selectedAudio[id]
-						label := tr.Language
-						if label == "" {
-							label = id
-						}
-						if tr.Note != "" {
-							label += " · " + tr.Note
-						}
-						ui.Checkbox(c.Key("aud-"+id), &on, label)
-						a.selectedAudio[id] = on
-					}
-				})
-			}
+		if a.mode == models.ModeVideoAudio && a.currentMedia != nil {
+			a.audioTracksControls(c)
 		}
-		ui.Checkbox(c, &a.writeSubs, "Download & embed subtitles")
+		if a.mode != models.ModeAudioOnly {
+			a.subtitleControls(c)
+			ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
+		}
 		if ui.PrimaryButton(c, "Start download").Clicked() {
 			a.startDownload()
 		}
+	})
+}
+
+func (a *App) audioTracksControls(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Gap(6).Children(func() {
+		ui.Text(c, "Audio tracks").FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).Gap(8).Children(func() {
+			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksNone, "None (default)")
+			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksAll, "All")
+			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksCustom, "Custom")
+		})
+		if a.audioTracksMode == audioTracksCustom {
+			ui.Column(c).Gap(2).Padding(0, 0, 0, 20).Children(func() {
+				for _, tr := range a.currentMedia.AudioTracks {
+					id := tr.ID
+					on := a.selectedAudio[id]
+					label := tr.Language
+					if label == "" {
+						label = id
+					}
+					if tr.Note != "" {
+						label += " · " + tr.Note
+					}
+					ui.Checkbox(c.Key("aud-"+id), &on, label)
+					a.selectedAudio[id] = on
+				}
+			})
+		}
+	})
+}
+
+func (a *App) subtitleControls(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Gap(6).Children(func() {
+		ui.Text(c, "Subtitles").FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).Gap(8).Children(func() {
+			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeNone, "None")
+			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeAll, "All")
+			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeCustom, "Custom")
+		})
+		if a.subtitleMode == subtitleModeCustom {
+			langs := subtitleLanguages(a.currentMedia)
+			if len(langs) == 0 {
+				ui.Text(c, "No subtitle languages found").FontSize(11).TextColor(t.TextMuted)
+				return
+			}
+			ui.Column(c).Gap(2).Padding(0, 0, 0, 20).Children(func() {
+				for _, lang := range langs {
+					on := a.selectedSubtitle[lang]
+					ui.Checkbox(c.Key("sub-"+lang), &on, lang)
+					a.selectedSubtitle[lang] = on
+				}
+			})
+		}
+	})
+}
+
+func (a *App) selectionModeBtn(c *ui.Context, key string, selected *string, value, label string) {
+	a.toggleBtn(c, key+"-"+value, label, *selected == value, func() {
+		*selected = value
 	})
 }
 
@@ -598,6 +666,8 @@ func (a *App) doAnalyze() {
 	a.currentMedia = nil
 	a.currentPlaylist = nil
 	a.selectedEntries = map[int]bool{}
+	a.selectedAudio = map[string]bool{}
+	a.selectedSubtitle = map[string]bool{}
 	a.selectedVideoFormat = ""
 	a.selectedAudioFormat = ""
 	a.selectedVideoLabel = "Auto (best for resolution)"
@@ -673,18 +743,37 @@ func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) m
 		URL: url, Title: title, Mode: a.mode, OutputDir: a.settings.DownloadDir,
 		Container: a.container, MaxHeight: a.maxHeight, AudioFormat: a.audioFormat,
 		AudioBitrateKbps: 0, // 0 = best available (yt-dlp ba* / opus preferred)
-		WriteSubtitles:   a.writeSubs, MultiAudio: a.multiAudio,
-		EmbedThumbnail: a.settings.EmbedThumbnail, EmbedMetadata: a.settings.EmbedMetadata,
+		EmbedThumbnail:   a.settings.EmbedThumbnail, EmbedMetadata: a.settings.EmbedMetadata,
 		PreferVP9: a.settings.PreferVP9Video, ThumbnailURL: thumb,
 		PlaylistTitle: playlistTitle, PlaylistIndex: index,
 		VideoFormatID: a.selectedVideoFormat, AudioFormatID: a.selectedAudioFormat,
+		AudioSelectionMode:    models.AudioSelectionMode(a.audioTracksMode),
+		AudioSelection:        models.AudioSelectionMode(a.audioTracksMode),
+		SubtitleSelectionMode: models.SubtitleSelectionMode(a.subtitleMode),
+		SubtitleSelection:     models.SubtitleSelectionMode(a.subtitleMode),
 	}
-	if a.multiAudio {
+	if a.audioTracksMode == audioTracksAll {
+		req.MultiAudio = true
+	} else if a.audioTracksMode == audioTracksCustom {
 		for id, on := range a.selectedAudio {
 			if on {
 				req.SelectedAudioTrackIDs = append(req.SelectedAudioTrackIDs, id)
 			}
 		}
+		sort.Strings(req.SelectedAudioTrackIDs)
+	}
+	switch a.subtitleMode {
+	case subtitleModeAll:
+		req.WriteSubtitles = true
+		req.SubtitleLangs = []string{"all"}
+	case subtitleModeCustom:
+		req.WriteSubtitles = true
+		for lang, on := range a.selectedSubtitle {
+			if on {
+				req.SubtitleLangs = append(req.SubtitleLangs, lang)
+			}
+		}
+		sort.Strings(req.SubtitleLangs)
 	}
 	return req
 }
@@ -934,7 +1023,7 @@ func (a *App) settingsPage(c *ui.Context) {
 		})
 		ui.Checkbox(c, &a.settings.EmbedThumbnail, "Embed thumbnail")
 		ui.Checkbox(c, &a.settings.EmbedMetadata, "Embed metadata & chapters")
-		ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 / AV1 when available")
+		ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
 		ui.Checkbox(c, &a.settings.KeepOriginals, "Keep originals after conversion")
 		ui.Checkbox(c, &a.settings.WriteSubtitles, "Write subtitles by default")
 		ui.Checkbox(c, &a.settings.MultiAudio, "Multi-audio by default")
@@ -1058,6 +1147,41 @@ func shortCodec(c string) string {
 		return c[:12]
 	}
 	return c
+}
+
+func subtitleModeFromSettings(settings config.AppSettings) string {
+	if len(settings.SubtitleLangs) == 0 {
+		return subtitleModeNone
+	}
+	for _, lang := range settings.SubtitleLangs {
+		if lang == "all" {
+			return subtitleModeAll
+		}
+	}
+	return subtitleModeCustom
+}
+
+func subtitleLanguages(m *models.MediaInfo) []string {
+	if m == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(m.Subtitles)+len(m.AutomaticCaptions))
+	for lang := range m.Subtitles {
+		if lang != "" {
+			seen[lang] = true
+		}
+	}
+	for lang := range m.AutomaticCaptions {
+		if lang != "" {
+			seen[lang] = true
+		}
+	}
+	langs := make([]string, 0, len(seen))
+	for lang := range seen {
+		langs = append(langs, lang)
+	}
+	sort.Strings(langs)
+	return langs
 }
 
 func maxInt(a, b int) int {
