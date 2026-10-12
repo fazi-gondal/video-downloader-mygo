@@ -59,9 +59,9 @@ type App struct {
 	container           string
 	audioFormat         string
 	audioTracksMode     string
-	selectedAudio       map[string]bool
+	selectedAudio       map[string]*bool
 	subtitleMode        string
-	selectedSubtitle    map[string]bool
+	selectedSubtitle    map[string]*bool
 	selectedVideoFormat string
 	selectedAudioFormat string
 	selectedVideoLabel  string // shown in Select
@@ -113,8 +113,8 @@ func New() *App {
 		convFormat:         "mp3",
 		convKind:           models.KindAudio,
 		selectedEntries:    map[int]bool{},
-		selectedAudio:      map[string]bool{},
-		selectedSubtitle:   map[string]bool{},
+		selectedAudio:      map[string]*bool{},
+		selectedSubtitle:   map[string]*bool{},
 		sidebarOpen:        [2]bool{true, true},
 		formatsOpen:        false,
 		selectedVideoLabel: "Auto (best for resolution)",
@@ -127,7 +127,7 @@ func New() *App {
 		a.subtitleMode = subtitleModeFromSettings(settings)
 		for _, lang := range settings.SubtitleLangs {
 			if lang != "" && lang != "all" {
-				a.selectedSubtitle[lang] = true
+				a.selectedSubtitle[lang] = boolPtr(true)
 			}
 		}
 	}
@@ -548,16 +548,18 @@ func (a *App) audioTracksControls(c *ui.Context) {
 			ui.Column(c).Gap(2).Padding(0, 0, 0, 20).Children(func() {
 				for _, tr := range a.currentMedia.AudioTracks {
 					id := tr.ID
-					on := a.selectedAudio[id]
-					label := tr.Language
+					on := checkboxState(a.selectedAudio, id)
+					label := languageDisplayName(tr.Language)
 					if label == "" {
-						label = id
+						label = "Unknown language"
+					}
+					if tr.Language != "" && label != tr.Language {
+						label += " (" + tr.Language + ")"
 					}
 					if tr.Note != "" {
 						label += " · " + tr.Note
 					}
-					ui.Checkbox(c.Key("aud-"+id), &on, label)
-					a.selectedAudio[id] = on
+					ui.Checkbox(c.Key("aud-"+id), on, label)
 				}
 			})
 		}
@@ -581,9 +583,12 @@ func (a *App) subtitleControls(c *ui.Context) {
 			}
 			ui.Column(c).Gap(2).Padding(0, 0, 0, 20).Children(func() {
 				for _, lang := range langs {
-					on := a.selectedSubtitle[lang]
-					ui.Checkbox(c.Key("sub-"+lang), &on, lang)
-					a.selectedSubtitle[lang] = on
+					on := checkboxState(a.selectedSubtitle, lang)
+					label := languageDisplayName(lang)
+					if label != lang {
+						label += " (" + lang + ")"
+					}
+					ui.Checkbox(c.Key("sub-"+lang), on, label)
 				}
 			})
 		}
@@ -666,8 +671,8 @@ func (a *App) doAnalyze() {
 	a.currentMedia = nil
 	a.currentPlaylist = nil
 	a.selectedEntries = map[int]bool{}
-	a.selectedAudio = map[string]bool{}
-	a.selectedSubtitle = map[string]bool{}
+	a.selectedAudio = map[string]*bool{}
+	a.selectedSubtitle = map[string]*bool{}
 	a.selectedVideoFormat = ""
 	a.selectedAudioFormat = ""
 	a.selectedVideoLabel = "Auto (best for resolution)"
@@ -756,7 +761,7 @@ func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) m
 		req.MultiAudio = true
 	} else if a.audioTracksMode == audioTracksCustom {
 		for id, on := range a.selectedAudio {
-			if on {
+			if on != nil && *on {
 				req.SelectedAudioTrackIDs = append(req.SelectedAudioTrackIDs, id)
 			}
 		}
@@ -769,7 +774,7 @@ func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) m
 	case subtitleModeCustom:
 		req.WriteSubtitles = true
 		for lang, on := range a.selectedSubtitle {
-			if on {
+			if on != nil && *on {
 				req.SubtitleLangs = append(req.SubtitleLangs, lang)
 			}
 		}
@@ -1147,6 +1152,48 @@ func shortCodec(c string) string {
 		return c[:12]
 	}
 	return c
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+// checkboxState returns a stable pointer for ui.Checkbox. The checkbox mutates
+// the pointed-to value after the click event, so using a local bool here would
+// lose the selection before the next render.
+func checkboxState(states map[string]*bool, key string) *bool {
+	if state, ok := states[key]; ok && state != nil {
+		return state
+	}
+	state := boolPtr(false)
+	states[key] = state
+	return state
+}
+
+func languageDisplayName(language string) string {
+	if language == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(language, func(r rune) bool {
+		return r == '-' || r == '_'
+	})
+	if len(parts) == 0 {
+		return language
+	}
+	base := strings.ToLower(parts[0])
+	names := map[string]string{
+		"ar": "Arabic", "bn": "Bengali", "de": "German", "en": "English",
+		"es": "Spanish", "fa": "Persian", "fr": "French", "gu": "Gujarati",
+		"hi": "Hindi", "id": "Indonesian", "it": "Italian", "ja": "Japanese",
+		"ko": "Korean", "mr": "Marathi", "ne": "Nepali", "nl": "Dutch",
+		"pa": "Punjabi", "pl": "Polish", "pt": "Portuguese", "ru": "Russian",
+		"ta": "Tamil", "te": "Telugu", "tr": "Turkish", "ur": "Urdu",
+		"vi": "Vietnamese", "zh": "Chinese",
+	}
+	if name, ok := names[base]; ok {
+		return name
+	}
+	return language
 }
 
 func subtitleModeFromSettings(settings config.AppSettings) string {
