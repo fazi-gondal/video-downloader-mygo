@@ -1,7 +1,7 @@
 # Bundled tools (fetched by scripts/fetch-tools.sh / CI)
 resources/*/bin/
 build/
+opencode/
 .mygo/
 *.exe
 .opencode
-opencode
