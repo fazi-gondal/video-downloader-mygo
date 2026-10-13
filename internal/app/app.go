@@ -16,6 +16,7 @@ import (
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/services"
+	appui "github.com/fazi-gondal/video-downloader-mygo/internal/ui"
 )
 
 const (
@@ -208,11 +209,14 @@ func (a *App) pumpConversionEvents() {
 }
 
 func (a *App) View(c *ui.Context) {
+	// Apply the reference app's palette without replacing mygo's native
+	// controls. The initial theme tells us whether the OS is currently dark.
+	c.SetTheme(appui.NativeTheme(c.Theme().Dark))
 	t := c.Theme()
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		ui.Sidebar(c, &a.page, func() {
 			ui.SidebarSection(c, "Library", &a.sidebarOpen[0], func() {
-				ui.SidebarItem(c, PageDashboard, nil, "Dashboard")
+				ui.SidebarItem(c, PageDashboard, nil, "Home")
 				ui.SidebarItem(c, PageDownloads, nil, "Downloads")
 				ui.SidebarItem(c, PageConverter, nil, "Converter")
 				ui.SidebarItem(c, PageHistory, nil, "History")
@@ -221,7 +225,7 @@ func (a *App) View(c *ui.Context) {
 				ui.SidebarItem(c, PageSettings, nil, "Settings")
 				ui.SidebarItem(c, PageAbout, nil, "About")
 			})
-		}).Width(200)
+		}).Width(212)
 		ui.Column(c).Grow(1).FillHeight().Background(t.Background).Children(func() {
 			a.topBar(c)
 			ui.Column(c).Grow(1).Padding(16).Children(func() {
@@ -248,7 +252,7 @@ func (a *App) View(c *ui.Context) {
 func (a *App) topBar(c *ui.Context) {
 	t := c.Theme()
 	titles := map[string]string{
-		PageDashboard: "Dashboard", PageDownloads: "Downloads", PageConverter: "Converter",
+		PageDashboard: "Home", PageDownloads: "Downloads", PageConverter: "Converter",
 		PageHistory: "History", PageSettings: "Settings", PageAbout: "About",
 	}
 	ui.Row(c).Height(44).FillWidth().Padding(0, 16).AlignItems(ui.Center).Background(t.Surface).Children(func() {
@@ -289,21 +293,17 @@ func (a *App) dashboardPage(c *ui.Context) {
 	t := c.Theme()
 	// ui.Scroll lets media + formats + options scroll when they overflow the window.
 	ui.Scroll(c).Grow(1).Gap(12).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.TextInput(c, &a.urlInput).Placeholder("Paste video or playlist URL…").Grow(1)
-			btn := ui.PrimaryButton(c, "Analyze")
-			if a.analyzing {
-				btn.Disabled(true)
-			}
-			if btn.Clicked() && !a.analyzing {
-				go a.doAnalyze()
-			}
-			if a.analyzing {
-				ui.Spinner(c)
-			}
-		})
+		idle := a.currentMedia == nil && a.currentPlaylist == nil && !a.analyzing && a.analyzeError == ""
+		if idle {
+			a.dashboardHero(c)
+			return
+		}
+
+		a.dashboardSearch(c)
 		if a.analyzeError != "" {
-			ui.Text(c, a.analyzeError).FontSize(13).TextColor(t.Danger)
+			ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Danger).Radius(10).Padding(10, 12).Children(func() {
+				ui.Text(c, a.analyzeError).FontSize(13).TextColor(t.Danger).Grow(1)
+			})
 		}
 		if a.currentMedia != nil {
 			a.mediaCard(c)
@@ -311,11 +311,50 @@ func (a *App) dashboardPage(c *ui.Context) {
 			a.formatPicker(c) // optional advanced format IDs (collapsed)
 		} else if a.currentPlaylist != nil {
 			a.playlistPanel(c)
-		} else if !a.analyzing {
-			ui.Column(c).FillWidth().Padding(40, 0).Center().Gap(6).Children(func() {
-				ui.Text(c, "Paste a link to get started").FontSize(17).TextColor(t.TextMuted)
-				ui.Text(c, "YouTube · TikTok · Instagram · X · ARY Plus · 1000+ sites").FontSize(12).TextColor(t.TextMuted)
+		} else if a.analyzing {
+			ui.Column(c).FillWidth().Padding(42, 0).Center().Gap(10).Children(func() {
+				ui.Spinner(c)
+				ui.Text(c, "Analyzing media…").FontSize(13).TextColor(t.TextMuted)
 			})
+		}
+	})
+}
+
+func (a *App) dashboardHero(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).FillWidth().Grow(1).Center().Gap(18).Padding(28, 20).Children(func() {
+		ui.Row(c).Justify(ui.Center).Children(func() {
+			ui.Text(c, "Extract. ").FontSize(29).Bold()
+			ui.Text(c, "Convert. ").FontSize(29).Bold().TextColor(t.TextMuted)
+			ui.Text(c, "Master.").FontSize(29).Bold().TextColor(t.Accent)
+		})
+		ui.Text(c, "Download, organize, and convert media from your favorite platforms.").FontSize(14).TextColor(t.TextMuted).MaxWidth(560)
+		a.dashboardSearch(c)
+		ui.Column(c).Center().Gap(8).Children(func() {
+			ui.Text(c, "SUPPORTED SERVICES").FontSize(10).Bold().TextColor(t.TextMuted)
+			ui.Row(c).Justify(ui.Center).Gap(18).Children(func() {
+				for _, service := range []string{"YouTube", "TikTok", "Instagram", "X", "ARY Plus"} {
+					ui.Row(c).Gap(5).Children(func() {
+						ui.Box(c).Size(6, 6).Background(t.Accent).Radius(3)
+						ui.Text(c, service).FontSize(11).TextColor(t.TextMuted)
+					})
+				}
+			})
+		})
+	})
+}
+
+func (a *App) dashboardSearch(c *ui.Context) {
+	t := c.Theme()
+	ui.Row(c).FillWidth().MaxWidth(720).Background(t.Surface).Border(1, t.Border).Radius(12).Padding(6, 8).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "↗").FontSize(18).Bold().TextColor(t.TextMuted).Width(20)
+		ui.TextInput(c, &a.urlInput).Placeholder("Paste video or playlist URL…").Grow(1)
+		btn := ui.PrimaryButton(c, "Analyze")
+		if a.analyzing {
+			btn.Disabled(true)
+		}
+		if btn.Clicked() && !a.analyzing {
+			go a.doAnalyze()
 		}
 	})
 }
@@ -323,22 +362,29 @@ func (a *App) dashboardPage(c *ui.Context) {
 func (a *App) mediaCard(c *ui.Context) {
 	t := c.Theme()
 	m := a.currentMedia
-	ui.Column(c).FillWidth().Background(t.Surface).Padding(14).Radius(10).Gap(4).Children(func() {
-		ui.Text(c, m.Title).FontSize(15).Bold()
-		meta := m.Uploader
-		if m.Duration > 0 {
-			meta += " · " + formatDuration(m.Duration)
-		}
-		if m.Extractor != "" {
-			meta += " · " + m.Extractor
-		}
-		ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
-		if len(m.AudioTracks) > 1 {
-			ui.Text(c, fmt.Sprintf("%d audio tracks", len(m.AudioTracks))).FontSize(12).TextColor(t.Accent)
-		}
-		if len(m.Subtitles) > 0 {
-			ui.Text(c, fmt.Sprintf("%d subtitle languages", len(m.Subtitles))).FontSize(12).TextColor(t.Accent)
-		}
+	ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Border).Padding(14, 16).Radius(14).Gap(14).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Width(68).Height(56).Background(t.SurfaceHover).Radius(10).Center().Children(func() {
+			ui.Text(c, "▶").FontSize(21).Bold().TextColor(t.Accent)
+		})
+		ui.Column(c).Grow(1).Gap(4).Children(func() {
+			ui.Text(c, m.Title).FontSize(16).Bold().MaxWidth(720)
+			meta := m.Uploader
+			if m.Duration > 0 {
+				meta += " · " + formatDuration(m.Duration)
+			}
+			if m.Extractor != "" {
+				meta += " · " + m.Extractor
+			}
+			ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
+		})
+		ui.Column(c).Gap(5).AlignItems(ui.End).Children(func() {
+			if len(m.AudioTracks) > 1 {
+				ui.Text(c, fmt.Sprintf("%d audio tracks", len(m.AudioTracks))).FontSize(11).TextColor(t.Accent)
+			}
+			if len(m.Subtitles) > 0 {
+				ui.Text(c, fmt.Sprintf("%d subtitle languages", len(m.Subtitles))).FontSize(11).TextColor(t.Accent)
+			}
+		})
 	})
 }
 

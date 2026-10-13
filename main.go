@@ -19,9 +19,9 @@ func main() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Video Downloader",
 			Width:     1120,
-			Height:    560,
+			Height:    680,
 			MinWidth:  800,
-			MinHeight: 500,
+			MinHeight: 560,
 			StateKey:  "main",
 			Content:   ui.View(a.View),
 		})
