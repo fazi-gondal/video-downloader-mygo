@@ -97,16 +97,8 @@ func (s *YtDlpService) fetchFormatsArgs(url string) []string {
 // Returns the final output path.
 func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, onProgress func(models.ProgressInfo)) (string, error) {
 	req := task.Request
-	args := s.buildDownloadArgs(req)
+	args := s.downloadArgs(req)
 	subtitleErrorsIgnored := subtitleDownloadEnabled(req, s.settings())
-
-	// Progress template that we can parse.
-	args = append(args,
-		"--newline",
-		"--progress",
-		"--progress-template", "download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress.fragment_index)s|%(progress.fragment_count)s",
-		req.URL,
-	)
 
 	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...)
 	stdout, err := cmd.StdoutPipe()
@@ -148,6 +140,12 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 				}
 			}
 		}
+		// after_move:filepath is emitted after subtitle embedding/remuxing and
+		// therefore points at the final playable file, including when a
+		// progressive source was remuxed from mp4/webm to mkv.
+		if info, statErr := os.Stat(line); line != "" && statErr == nil && !info.IsDir() {
+			lastPath = line
+		}
 	}
 
 	// Drain stderr for error messages. yt-dlp is allowed to continue past
@@ -178,6 +176,21 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		lastPath = newestFile(req.OutputDir)
 	}
 	return lastPath, nil
+}
+
+func (s *YtDlpService) downloadArgs(req models.DownloadRequest) []string {
+	args := s.buildDownloadArgs(req)
+	// Progress template that we can parse. after_move:filepath is emitted only
+	// after subtitle embedding/remuxing, so it identifies the final playable
+	// output rather than a temporary media or subtitle sidecar.
+	args = append(args,
+		"--newline",
+		"--progress",
+		"--progress-template", "download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress.fragment_index)s|%(progress.fragment_count)s",
+		"--print", "after_move:filepath",
+		req.URL,
+	)
+	return args
 }
 
 func subtitleDownloadEnabled(req models.DownloadRequest, settings config.AppSettings) bool {
@@ -215,6 +228,11 @@ func (s *YtDlpService) baseArgs() []string {
 func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	args := s.baseArgs()
 	st := s.settings()
+	subtitleMode, subtitleLangs := models.SubtitleSelectionNone, []string(nil)
+	if req.Mode != models.ModeAudioOnly {
+		subtitleMode, subtitleLangs = subtitleSelection(req, st)
+	}
+	embedSubtitles := subtitleMode != models.SubtitleSelectionNone
 
 	_ = os.MkdirAll(req.OutputDir, 0o755)
 	outTpl := filepath.Join(req.OutputDir, "%(title).200B [%(id)s].%(ext)s")
@@ -232,15 +250,19 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		}
 	case models.ModeVideoOnly:
 		args = append(args, "-f", videoFormatSelector(req))
+		if embedSubtitles {
+			args = append(args, "--merge-output-format", "mkv", "--remux-video", "mkv")
+		}
 	default: // VIDEO_AUDIO
 		args = append(args, "-f", videoAudioSelector(req))
 		merge := req.Container
 		if merge == "" {
 			merge = "mp4"
 		}
-		// VP9/AV1 + Opus cannot live in mp4 reliably — force mkv.
+		// MKV is the reliable VLC target for text subtitles and also supports
+		// the multiple audio streams requested by the multi-audio selector.
 		multiAudio := requiresMultiAudio(req)
-		if multiAudio {
+		if multiAudio || embedSubtitles {
 			merge = "mkv"
 		} else if req.PreferVP9 || strings.Contains(strings.ToLower(req.AudioFormatID), "opus") {
 			if merge == "mp4" {
@@ -251,6 +273,9 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 			args = append(args, "--audio-multistreams")
 		}
 		args = append(args, "--merge-output-format", merge)
+		if embedSubtitles {
+			args = append(args, "--remux-video", "mkv")
+		}
 	}
 	if req.PreferVP9 && req.Mode != models.ModeAudioOnly && req.VideoFormatID == "" {
 		// Sorting is preferable to filtering: it keeps VP9 as the first choice
@@ -259,7 +284,6 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	}
 
 	if req.Mode != models.ModeAudioOnly {
-		subtitleMode, langs := subtitleSelection(req, st)
 		if subtitleMode != models.SubtitleSelectionNone {
 			// Subtitle URLs are requested separately from media streams and are
 			// commonly rate-limited more aggressively. Space requests and back
@@ -268,6 +292,7 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 			// and --embed-subs are used together.
 			args = append(args,
 				"--write-subs", "--write-auto-subs", "--embed-subs",
+				"--convert-subs", "srt",
 				"--compat-options", "no-keep-subs",
 				"--sleep-subtitles", "5",
 				"--retry-sleep", "http:exp=5:60",
@@ -278,8 +303,8 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 			)
 			if subtitleMode == models.SubtitleSelectionAll {
 				args = append(args, "--sub-langs", "all,-live_chat")
-			} else if len(langs) > 0 {
-				args = append(args, "--sub-langs", strings.Join(langs, ","))
+			} else if len(subtitleLangs) > 0 {
+				args = append(args, "--sub-langs", strings.Join(subtitleLangs, ","))
 			}
 		}
 	}

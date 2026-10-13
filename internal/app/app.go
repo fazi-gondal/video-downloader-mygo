@@ -545,7 +545,7 @@ func (a *App) audioTracksControls(c *ui.Context) {
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksCustom, "Custom")
 		})
 		if a.audioTracksMode == audioTracksCustom {
-			ui.Column(c).Gap(2).Padding(0, 0, 0, 20).Children(func() {
+			ui.Grid(c).Columns(3).Gap(4).Padding(0, 0, 0, 12).Children(func() {
 				for _, tr := range a.currentMedia.AudioTracks {
 					id := tr.ID
 					on := checkboxState(a.selectedAudio, id)
@@ -559,7 +559,10 @@ func (a *App) audioTracksControls(c *ui.Context) {
 					if tr.Note != "" {
 						label += " · " + tr.Note
 					}
-					ui.Checkbox(c.Key("aud-"+id), on, label)
+					ui.Row(c.Key("aud-tile-"+id)).FillWidth().Padding(5, 6).Gap(4).
+						AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(8).Children(func() {
+						ui.Checkbox(c.Key("aud-"+id), on, label)
+					})
 				}
 			})
 		}
@@ -581,11 +584,14 @@ func (a *App) subtitleControls(c *ui.Context) {
 				ui.Text(c, "No subtitle languages found").FontSize(11).TextColor(t.TextMuted)
 				return
 			}
-			ui.Column(c).Gap(2).Padding(0, 0, 0, 20).Children(func() {
+			ui.Grid(c).Columns(3).Gap(4).Padding(0, 0, 0, 12).Children(func() {
 				for _, lang := range langs {
 					on := checkboxState(a.selectedSubtitle, lang)
 					label := languageDisplayName(lang)
-					ui.Checkbox(c.Key("sub-"+lang), on, label)
+					ui.Row(c.Key("sub-tile-"+lang)).FillWidth().Padding(5, 6).Gap(4).
+						AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(8).Children(func() {
+						ui.Checkbox(c.Key("sub-"+lang), on, label)
+					})
 				}
 			})
 		}
