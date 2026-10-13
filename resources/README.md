@@ -12,10 +12,12 @@ resources/
   icon.png          # shared (not platform-specific)
 ```
 
-At runtime `internal/tools` resolves:
+At runtime `internal/tools` resolves the flattened packaged path first:
 
 1. `App.Path(PathResources)/bin/<tool>`
-2. system `PATH`
+2. `App.Path(PathResources)/<tool>`
+3. the matching development path, `resources/<platform>/bin/<tool>`
+4. system `PATH`
 
 ## Populate binaries
 

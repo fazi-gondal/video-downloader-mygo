@@ -42,11 +42,15 @@ func lookIn(dir, name string) string {
 	if dir == "" {
 		return ""
 	}
-	candidates := []string{
-		filepath.Join(dir, "bin", exeName(name)),
-		filepath.Join(dir, exeName(name)),
-		filepath.Join(dir, "bin", name),
-		filepath.Join(dir, name),
+	platformDir := filepath.Join(dir, runtime.GOOS+"-"+runtime.GOARCH)
+	candidates := make([]string, 0, 8)
+	for _, root := range []string{dir, platformDir} {
+		candidates = append(candidates,
+			filepath.Join(root, "bin", exeName(name)),
+			filepath.Join(root, exeName(name)),
+			filepath.Join(root, "bin", name),
+			filepath.Join(root, name),
+		)
 	}
 	// During development the checked-in resources retain their platform
 	// directory. MyGo flattens the matching directory in packaged apps, so
