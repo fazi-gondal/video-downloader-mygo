@@ -70,18 +70,7 @@ func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
 
 // FetchFormats does a full extraction of a single video (formats + tracks).
 func (s *YtDlpService) FetchFormats(ctx context.Context, url string) (*models.MediaInfo, error) {
-	args := s.baseArgs()
-	args = append(args,
-		"--dump-single-json",
-		"--no-download",
-		"--no-playlist",
-		"--no-warnings",
-		// The default YouTube client commonly exposes only the primary Opus
-		// stream. The richer client set exposes dubbed audio and subtitle
-		// languages so the picker can offer the complete set.
-		"--extractor-args", "youtube:player_client=all",
-		url,
-	)
+	args := s.fetchFormatsArgs(url)
 	out, err := s.run(ctx, args)
 	if err != nil {
 		return nil, err
@@ -91,6 +80,17 @@ func (s *YtDlpService) FetchFormats(ctx context.Context, url string) (*models.Me
 		return nil, err
 	}
 	return parseMedia(raw, url), nil
+}
+
+func (s *YtDlpService) fetchFormatsArgs(url string) []string {
+	args := s.baseArgs()
+	return append(args,
+		"--dump-single-json",
+		"--no-download",
+		"--no-playlist",
+		"--no-warnings",
+		url,
+	)
 }
 
 // Download runs yt-dlp for a task and streams progress via the callback.
@@ -157,11 +157,7 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		if task.Cancelled() {
 			return "", context.Canceled
 		}
-		msg := strings.TrimSpace(errBuf.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("%s", msg)
+		return "", fmt.Errorf("%s", ytDlpErrorMessage(errBuf.String(), err))
 	}
 
 	if lastPath == "" {
@@ -217,13 +213,6 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		args = append(args, "-f", videoFormatSelector(req))
 	default: // VIDEO_AUDIO
 		args = append(args, "-f", videoAudioSelector(req))
-		selectionMode, _ := audioSelection(req)
-		if selectionMode == models.AudioSelectionAll || selectionMode == models.AudioSelectionCustom {
-			// YouTube exposes language-specific/dubbed tracks through the richer
-			// player client set. Without this, a valid custom selector can appear
-			// unavailable even though the track exists.
-			args = append(args, "--extractor-args", "youtube:player_client=all")
-		}
 		merge := req.Container
 		if merge == "" {
 			merge = "mp4"
@@ -251,9 +240,19 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	if req.Mode != models.ModeAudioOnly {
 		subtitleMode, langs := subtitleSelection(req, st)
 		if subtitleMode != models.SubtitleSelectionNone {
-			args = append(args, "--write-subs", "--write-auto-subs", "--embed-subs")
+			// Subtitle URLs are requested separately from media streams and are
+			// commonly rate-limited more aggressively. Space requests and back
+			// off between HTTP retries instead of immediately retrying a 429.
+			// yt-dlp otherwise keeps the downloaded sidecars when --write-subs
+			// and --embed-subs are used together.
+			args = append(args,
+				"--write-subs", "--write-auto-subs", "--embed-subs",
+				"--compat-options", "no-keep-subs",
+				"--sleep-subtitles", "5",
+				"--retry-sleep", "http:exp=5:60",
+			)
 			if subtitleMode == models.SubtitleSelectionAll {
-				args = append(args, "--sub-langs", "all")
+				args = append(args, "--sub-langs", "all,-live_chat")
 			} else if len(langs) > 0 {
 				args = append(args, "--sub-langs", strings.Join(langs, ","))
 			}

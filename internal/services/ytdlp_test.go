@@ -7,6 +7,17 @@ import (
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
 
+func TestFetchFormatsArgsUsesYTDLPDefaults(t *testing.T) {
+	args := testYtDlpService().fetchFormatsArgs("https://example.test/video")
+
+	if hasArgument(args, "--extractor-args") {
+		t.Fatal("format extraction unexpectedly overrides yt-dlp extractor clients")
+	}
+	if got := args[len(args)-1]; got != "https://example.test/video" {
+		t.Fatalf("URL = %q, want video URL", got)
+	}
+}
+
 func TestBuildDownloadArgsAudioOnlyUsesSelectedFormat(t *testing.T) {
 	service := testYtDlpService()
 	req := models.DownloadRequest{
@@ -94,7 +105,6 @@ func TestBuildDownloadArgsAudioSelectionModes(t *testing.T) {
 		tracks           []string
 		wantFormat       string
 		wantMultiStreams bool
-		wantRichClient   bool
 	}{
 		{
 			name:       "none selects one best track",
@@ -107,7 +117,6 @@ func TestBuildDownloadArgsAudioSelectionModes(t *testing.T) {
 			selection:        models.AudioSelectionAll,
 			wantFormat:       "bv*+mergeall[vcodec=none]/b",
 			wantMultiStreams: true,
-			wantRichClient:   true,
 		},
 		{
 			name:             "custom converts language codes",
@@ -115,7 +124,6 @@ func TestBuildDownloadArgsAudioSelectionModes(t *testing.T) {
 			tracks:           []string{"en", "251"},
 			wantFormat:       "bv*+ba[language=en]+251/bv*+mergeall[vcodec=none]/bv*+ba/b",
 			wantMultiStreams: true,
-			wantRichClient:   true,
 		},
 	}
 
@@ -135,8 +143,8 @@ func TestBuildDownloadArgsAudioSelectionModes(t *testing.T) {
 			if got := hasArgument(args, "--audio-multistreams"); got != tt.wantMultiStreams {
 				t.Fatalf("audio multistreams = %t, want %t", got, tt.wantMultiStreams)
 			}
-			if got := hasArgument(args, "--extractor-args"); got != tt.wantRichClient {
-				t.Fatalf("rich extractor client = %t, want %t", got, tt.wantRichClient)
+			if hasArgument(args, "--extractor-args") {
+				t.Fatal("audio selection unexpectedly overrides yt-dlp extractor clients")
 			}
 		})
 	}
@@ -150,6 +158,9 @@ func TestBuildDownloadArgsSubtitleSelectionModes(t *testing.T) {
 		langs     []string
 		wantWrite bool
 		wantLangs string
+		wantSleep bool
+		wantRetry bool
+		wantClean bool
 	}{
 		{
 			name:      "none disables legacy subtitle switch",
@@ -160,7 +171,10 @@ func TestBuildDownloadArgsSubtitleSelectionModes(t *testing.T) {
 			name:      "all writes every language",
 			selection: models.SubtitleSelectionAll,
 			wantWrite: true,
-			wantLangs: "all",
+			wantLangs: "all,-live_chat",
+			wantSleep: true,
+			wantRetry: true,
+			wantClean: true,
 		},
 		{
 			name:      "custom writes selected languages",
@@ -168,6 +182,9 @@ func TestBuildDownloadArgsSubtitleSelectionModes(t *testing.T) {
 			langs:     []string{"en", "de"},
 			wantWrite: true,
 			wantLangs: "en,de",
+			wantSleep: true,
+			wantRetry: true,
+			wantClean: true,
 		},
 	}
 
@@ -188,7 +205,84 @@ func TestBuildDownloadArgsSubtitleSelectionModes(t *testing.T) {
 			if got := argumentValue(args, "--sub-langs"); got != tt.wantLangs {
 				t.Fatalf("subtitle languages = %q, want %q", got, tt.wantLangs)
 			}
+			if got := hasArgument(args, "--sleep-subtitles"); got != tt.wantSleep {
+				t.Fatalf("subtitle sleep = %t, want %t", got, tt.wantSleep)
+			}
+			if tt.wantSleep && argumentValue(args, "--sleep-subtitles") != "5" {
+				t.Fatalf("subtitle sleep duration = %q, want %q", argumentValue(args, "--sleep-subtitles"), "5")
+			}
+			if got := hasArgument(args, "--retry-sleep"); got != tt.wantRetry {
+				t.Fatalf("subtitle retry backoff = %t, want %t", got, tt.wantRetry)
+			}
+			if tt.wantRetry && argumentValue(args, "--retry-sleep") != "http:exp=5:60" {
+				t.Fatalf("subtitle retry backoff value = %q, want %q", argumentValue(args, "--retry-sleep"), "http:exp=5:60")
+			}
+			if got := hasArgument(args, "--compat-options"); got != tt.wantClean {
+				t.Fatalf("subtitle cleanup option = %t, want %t", got, tt.wantClean)
+			}
+			if tt.wantClean && argumentValue(args, "--compat-options") != "no-keep-subs" {
+				t.Fatalf("subtitle cleanup option value = %q, want %q", argumentValue(args, "--compat-options"), "no-keep-subs")
+			}
 		})
+	}
+}
+
+func TestBuildDownloadArgsMultipleSubtitlesKeepContainerAndCleanSidecars(t *testing.T) {
+	for _, container := range []string{"mp4", "mkv", "webm"} {
+		t.Run(container, func(t *testing.T) {
+			req := models.DownloadRequest{
+				Mode:                  models.ModeVideoAudio,
+				Container:             container,
+				SubtitleSelectionMode: models.SubtitleSelectionCustom,
+				SubtitleLangs:         []string{"en", "de"},
+				OutputDir:             t.TempDir(),
+			}
+
+			args := testYtDlpService().buildDownloadArgs(req)
+			if got := argumentValue(args, "--sub-langs"); got != "en,de" {
+				t.Fatalf("subtitle languages = %q, want %q", got, "en,de")
+			}
+			if !hasArgument(args, "--embed-subs") {
+				t.Fatal("multiple subtitle selection is missing --embed-subs")
+			}
+			if got := argumentValue(args, "--compat-options"); got != "no-keep-subs" {
+				t.Fatalf("subtitle cleanup option = %q, want %q", got, "no-keep-subs")
+			}
+			if got := argumentValue(args, "--merge-output-format"); got != container {
+				t.Fatalf("merge output format = %q, want selected container %q", got, container)
+			}
+		})
+	}
+}
+
+func TestBuildDownloadArgsEmptyCustomSubtitleSelectionDisablesSubtitleOptions(t *testing.T) {
+	req := models.DownloadRequest{
+		Mode:                  models.ModeVideoAudio,
+		SubtitleSelectionMode: models.SubtitleSelectionCustom,
+		OutputDir:             t.TempDir(),
+	}
+
+	args := testYtDlpService().buildDownloadArgs(req)
+	for _, name := range []string{"--write-subs", "--write-auto-subs", "--embed-subs", "--compat-options", "--sleep-subtitles", "--retry-sleep", "--sub-langs"} {
+		if hasArgument(args, name) {
+			t.Fatalf("empty custom subtitle selection unexpectedly includes %s", name)
+		}
+	}
+}
+
+func TestBuildDownloadArgsAudioOnlyDisablesSubtitleOptions(t *testing.T) {
+	req := models.DownloadRequest{
+		Mode:           models.ModeAudioOnly,
+		WriteSubtitles: true,
+		AudioFormat:    "mp3",
+		OutputDir:      t.TempDir(),
+	}
+
+	args := testYtDlpService().buildDownloadArgs(req)
+	for _, name := range []string{"--write-subs", "--write-auto-subs", "--embed-subs", "--compat-options", "--sleep-subtitles", "--retry-sleep", "--sub-langs"} {
+		if hasArgument(args, name) {
+			t.Fatalf("audio-only download unexpectedly includes %s", name)
+		}
 	}
 }
 
