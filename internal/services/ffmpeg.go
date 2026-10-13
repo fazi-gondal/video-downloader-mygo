@@ -39,6 +39,16 @@ func (s *FFmpegService) Path() string {
 	return s.ffmpeg
 }
 
+// CanRemux conservatively reports whether a container-only conversion is a
+// safe choice. Same-container copies are always safe; uncertain container or
+// codec combinations remain re-encodes so the converter never promises a
+// lossless result that FFmpeg cannot produce.
+func (s *FFmpegService) CanRemux(source, target string) bool {
+	srcExt := strings.TrimPrefix(strings.ToLower(filepath.Ext(source)), ".")
+	targetExt := strings.TrimPrefix(strings.ToLower(target), ".")
+	return srcExt != "" && targetExt != "" && srcExt == targetExt
+}
+
 // Convert runs a conversion job. onProgress receives 0–100.
 func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, onProgress func(float64)) (string, error) {
 	if s.ffmpeg == "" {

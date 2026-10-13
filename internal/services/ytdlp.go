@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -215,6 +216,16 @@ func (s *YtDlpService) baseArgs() []string {
 	}
 	if st.CookiesBrowser != "" {
 		args = append(args, "--cookies-from-browser", st.CookiesBrowser)
+	}
+	keys := make([]string, 0, len(st.CustomHeaders))
+	for key := range st.CustomHeaders {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if value := strings.TrimSpace(st.CustomHeaders[key]); key != "" && value != "" {
+			args = append(args, "--add-header", key+":"+value)
+		}
 	}
 	if st.RateLimitKbps > 0 {
 		args = append(args, "--limit-rate", fmt.Sprintf("%dK", st.RateLimitKbps))

@@ -145,6 +145,19 @@ func (m *DownloadManager) All() []*models.DownloadTask {
 	return out
 }
 
+// ClearFinished removes terminal tasks from the in-memory queue. History is
+// persisted separately, so clearing the downloads screen does not erase the
+// user's history.
+func (m *DownloadManager) ClearFinished() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, task := range m.tasks {
+		if task.State.IsTerminal() {
+			delete(m.tasks, id)
+		}
+	}
+}
+
 func (m *DownloadManager) Shutdown() {
 	close(m.shutdown)
 	m.wg.Wait()

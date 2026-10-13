@@ -2,12 +2,13 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ const (
 	PageHistory   = "history"
 	PageSettings  = "settings"
 	PageAbout     = "about"
+	PageConfig    = "config"
 
 	audioTracksNone   = "none"
 	audioTracksAll    = "all"
@@ -70,6 +72,7 @@ type App struct {
 	selectedVideoLabel  string // shown in Select
 	selectedAudioLabel  string
 	formatsOpen         bool // Collapsible: advanced format IDs
+	formatsLoading      bool
 
 	videoFmtLabels []string
 	videoFmtIDs    []string
@@ -90,6 +93,12 @@ type App struct {
 
 	historyEntries []services.HistoryEntry
 	historyLoaded  bool
+	historyQuery   string
+	historyFilter  string
+
+	settingsHeaders       string
+	settingsSubtitleLangs string
+	settingsRateLimit     string
 
 	dlListState, plListState, fmtListState, histListState, convListState ui.ListState
 
@@ -127,10 +136,19 @@ func New() *App {
 		formatsOpen:        false,
 		selectedVideoLabel: "Auto (best for resolution)",
 		selectedAudioLabel: "Auto (Opus / best)",
-		thumbnails:        map[string]*ui.Bitmap{},
-		thumbnailLoading:  map[string]bool{},
-		thumbnailFailures: map[string]bool{},
+		historyFilter:      "all",
+		settingsRateLimit:  strconv.Itoa(settings.RateLimitKbps),
+		thumbnails:         map[string]*ui.Bitmap{},
+		thumbnailLoading:   map[string]bool{},
+		thumbnailFailures:  map[string]bool{},
 	}
+	var headerLines []string
+	for key, value := range settings.CustomHeaders {
+		headerLines = append(headerLines, key+": "+value)
+	}
+	sort.Strings(headerLines)
+	a.settingsHeaders = strings.Join(headerLines, "\n")
+	a.settingsSubtitleLangs = strings.Join(settings.SubtitleLangs, ", ")
 	if settings.MultiAudio {
 		a.audioTracksMode = audioTracksAll
 	}
@@ -261,6 +279,8 @@ func (a *App) View(c *ui.Context) {
 				switch a.page {
 				case PageDashboard:
 					a.dashboardPage(c)
+				case PageConfig:
+					a.configPage(c)
 				case PageDownloads:
 					a.downloadsPage(c)
 				case PageConverter:
@@ -268,9 +288,9 @@ func (a *App) View(c *ui.Context) {
 				case PageHistory:
 					a.historyPage(c)
 				case PageSettings:
-					a.settingsPage(c)
+					a.refinedSettingsPage(c)
 				case PageAbout:
-					a.aboutPage(c)
+					a.refinedAboutPage(c)
 				}
 			})
 			a.toastBar(c)
@@ -283,6 +303,7 @@ func (a *App) topBar(c *ui.Context) {
 	titles := map[string]string{
 		PageDashboard: "Home", PageDownloads: "Downloads", PageConverter: "Converter",
 		PageHistory: "History", PageSettings: "Settings", PageAbout: "About",
+		PageConfig: "Download options",
 	}
 	ui.Row(c).Height(44).FillWidth().Padding(0, 16).AlignItems(ui.Center).Background(t.Surface).Children(func() {
 		ui.Text(c, titles[a.page]).FontSize(15).Bold()
@@ -336,8 +357,11 @@ func (a *App) dashboardPage(c *ui.Context) {
 		}
 		if a.currentMedia != nil {
 			a.mediaCard(c)
-			a.configPanel(c)  // resolution, container, mode — always visible
-			a.formatPicker(c) // optional advanced format IDs (collapsed)
+			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
+				if ui.PrimaryButton(c, "Continue to download options").Clicked() {
+					a.page = PageConfig
+				}
+			})
 		} else if a.currentPlaylist != nil {
 			a.playlistPanel(c)
 		} else if a.analyzing {
@@ -362,9 +386,13 @@ func (a *App) dashboardHero(c *ui.Context) {
 		ui.Column(c).Center().Gap(8).Children(func() {
 			ui.Text(c, "SUPPORTED SERVICES").FontSize(10).Bold().TextColor(t.TextMuted)
 			ui.Row(c).Justify(ui.Center).Gap(18).Children(func() {
-				for _, service := range []string{"YouTube", "TikTok", "Instagram", "X", "ARY Plus"} {
+				for i, service := range []string{"YouTube", "TikTok", "Instagram", "X", "ARY Plus"} {
 					ui.Row(c).Gap(5).Children(func() {
-						ui.Box(c).Size(6, 6).Background(t.Accent).Radius(3)
+						icon := appui.IconVideo
+						if i == 1 {
+							icon = appui.IconMusic
+						}
+						ui.Icon(c, icon).FontSize(14).TextColor(t.TextMuted)
 						ui.Text(c, service).FontSize(11).TextColor(t.TextMuted)
 					})
 				}
@@ -376,7 +404,7 @@ func (a *App) dashboardHero(c *ui.Context) {
 func (a *App) dashboardSearch(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).FillWidth().MaxWidth(720).Background(t.Surface).Border(1, t.Border).Radius(12).Padding(6, 8).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "↗").FontSize(18).Bold().TextColor(t.TextMuted).Width(20)
+		ui.Icon(c, appui.IconLink).FontSize(18).TextColor(t.TextMuted).Width(20)
 		ui.TextInput(c, &a.urlInput).Placeholder("Paste video or playlist URL…").Grow(1)
 		btn := ui.PrimaryButton(c, "Analyze")
 		if a.analyzing {
@@ -388,13 +416,59 @@ func (a *App) dashboardSearch(c *ui.Context) {
 	})
 }
 
+func (a *App) thumbnailElement(c *ui.Context, url string, width, height float32, fallback *ui.SVG) ui.Element {
+	if bitmap := a.thumbnail(url); bitmap != nil {
+		return ui.Image(c, bitmap).Size(width, height).Fit(ui.Cover).Radius(10)
+	}
+	a.ensureThumbnail(url)
+	return ui.Box(c).Size(width, height).Background(c.Theme().SurfaceHover).Radius(10).Center().Children(func() {
+		ui.Icon(c, fallback).FontSize(22).TextColor(c.Theme().TextMuted)
+	})
+}
+
+func (a *App) thumbnail(url string) *ui.Bitmap {
+	if strings.TrimSpace(url) == "" {
+		return nil
+	}
+	a.thumbnailMu.Lock()
+	defer a.thumbnailMu.Unlock()
+	return a.thumbnails[url]
+}
+
+func (a *App) ensureThumbnail(url string) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return
+	}
+	a.thumbnailMu.Lock()
+	if a.thumbnails[url] != nil || a.thumbnailLoading[url] || a.thumbnailFailures[url] {
+		a.thumbnailMu.Unlock()
+		return
+	}
+	a.thumbnailLoading[url] = true
+	a.thumbnailMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		bitmap, err := fetchThumbnail(ctx, nil, url)
+		a.thumbnailMu.Lock()
+		delete(a.thumbnailLoading, url)
+		if err != nil {
+			a.thumbnailFailures[url] = true
+		} else {
+			a.thumbnails[url] = bitmap
+		}
+		a.thumbnailMu.Unlock()
+		a.invalidate()
+	}()
+}
+
 func (a *App) mediaCard(c *ui.Context) {
 	t := c.Theme()
 	m := a.currentMedia
 	ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Border).Padding(14, 16).Radius(14).Gap(14).AlignItems(ui.Center).Children(func() {
-		ui.Column(c).Width(68).Height(56).Background(t.SurfaceHover).Radius(10).Center().Children(func() {
-			ui.Text(c, "▶").FontSize(21).Bold().TextColor(t.Accent)
-		})
+		a.thumbnailElement(c, m.Thumbnail, 152, 86, appui.IconVideo)
 		ui.Column(c).Grow(1).Gap(4).Children(func() {
 			ui.Text(c, m.Title).FontSize(16).Bold().MaxWidth(720)
 			meta := m.Uploader
@@ -420,7 +494,20 @@ func (a *App) mediaCard(c *ui.Context) {
 func (a *App) formatPicker(c *ui.Context) {
 	t := c.Theme()
 	m := a.currentMedia
-	if m == nil || len(m.Formats) == 0 {
+	if m == nil {
+		return
+	}
+	if len(m.Formats) == 0 {
+		ui.Collapsible(c, "Formats (optional)", &a.formatsOpen, func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				if a.formatsLoading {
+					ui.Spinner(c)
+					ui.Text(c, "Loading formats…").FontSize(12).TextColor(t.TextMuted)
+				} else if ui.Button(c, "Load available formats").Clicked() {
+					a.fetchFormats()
+				}
+			})
+		})
 		return
 	}
 
@@ -605,7 +692,11 @@ func (a *App) configPanel(c *ui.Context) {
 			ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
 		}
 		if ui.PrimaryButton(c, "Start download").Clicked() {
-			a.startDownload()
+			if a.currentMedia != nil {
+				a.startDownload()
+			} else if a.currentPlaylist != nil {
+				a.startPlaylistDownloads()
+			}
 		}
 	})
 }
@@ -738,8 +829,24 @@ func (a *App) playlistPanel(c *ui.Context) {
 			})
 		}).Grow(1)
 		if ui.PrimaryButton(c, "Download selected").Clicked() {
-			a.startPlaylistDownloads()
+			a.page = PageConfig
 		}
+	})
+}
+
+func (a *App) configPage(c *ui.Context) {
+	ui.Column(c).Grow(1).Gap(12).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			if ui.Button(c, "← Back").Clicked() {
+				a.page = PageDashboard
+			}
+			ui.Text(c, "Download configuration").FontSize(18).Bold()
+		})
+		if a.currentMedia != nil {
+			a.mediaCard(c)
+		}
+		a.configPanel(c)
+		a.formatPicker(c)
 	})
 }
 
@@ -772,18 +879,36 @@ func (a *App) doAnalyze() {
 	}
 	switch v := result.(type) {
 	case *models.MediaInfo:
-		full, err := a.ytdlp.FetchFormats(ctx, a.urlInput)
-		if err == nil {
-			a.currentMedia = full
-		} else {
-			a.currentMedia = v
-		}
-		a.rebuildFormatOptions()
+		a.currentMedia = v
 	case *models.PlaylistInfo:
 		a.currentPlaylist = v
 	}
 	a.analyzing = false
 	a.invalidate()
+}
+
+func (a *App) fetchFormats() {
+	if a.currentMedia == nil || a.formatsLoading {
+		return
+	}
+	a.formatsLoading = true
+	a.invalidate()
+	url := a.currentMedia.WebpageURL
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		full, err := a.ytdlp.FetchFormats(ctx, url)
+		if err != nil {
+			a.analyzeError = err.Error()
+		} else if a.currentMedia != nil && a.currentMedia.WebpageURL == url {
+			a.currentMedia.Formats = full.Formats
+			a.currentMedia.Subtitles = full.Subtitles
+			a.currentMedia.AudioTracks = full.AudioTracks
+			a.rebuildFormatOptions()
+		}
+		a.formatsLoading = false
+		a.invalidate()
+	}()
 }
 
 func (a *App) startDownload() {
@@ -868,59 +993,85 @@ func (a *App) downloadsPage(c *ui.Context) {
 	a.tasksMu.Unlock()
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.After(tasks[j].CreatedAt) })
 	if len(tasks) == 0 {
-		ui.Column(c).Grow(1).Center().Children(func() {
-			ui.Text(c, "No downloads yet").FontSize(15).TextColor(t.TextMuted)
-		})
+		emptyState(c, appui.IconDownload, "No downloads yet", "Your downloaded videos and audio will appear here.")
 		return
 	}
-	ui.List(c, &a.dlListState, len(tasks), func(i int) {
-		task := tasks[i]
-		ui.Column(c).FillWidth().Background(t.Surface).Padding(12).Radius(8).Gap(4).Children(func() {
-			ui.Row(c).FillWidth().Children(func() {
-				ui.Text(c, task.Request.Title).FontSize(13).Bold().Grow(1)
-				ui.Text(c, string(task.State)).FontSize(11).TextColor(stateColor(c, task.State))
+	active, queued, finished := 0, 0, 0
+	for _, task := range tasks {
+		switch task.State {
+		case models.StatePending:
+			queued++
+		case models.StateCompleted, models.StateError, models.StateCancelled:
+			finished++
+		default:
+			active++
+		}
+	}
+	ui.Column(c).Grow(1).Gap(12).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Text(c, "Downloads").FontSize(20).Bold()
+				ui.Text(c, fmt.Sprintf("%d active · %d queued · %d finished", active, queued, finished)).FontSize(12).TextColor(t.TextMuted)
 			})
-			if task.State == models.StateDownloading || task.State == models.StateProcessing {
-				pct := task.Progress.Percent / 100
-				if pct <= 0 {
-					pct = -1
-				}
-				ui.Progress(c, pct)
-				ui.Row(c).FillWidth().Children(func() {
-					ui.Text(c, fmt.Sprintf("%.1f%%", task.Progress.Percent)).FontSize(11).TextColor(t.TextMuted)
-					ui.Spacer(c).Grow(1)
-					if task.Progress.SpeedBps > 0 {
-						ui.Text(c, formatSpeed(task.Progress.SpeedBps)).FontSize(11).TextColor(t.TextMuted)
-					}
-				})
+			ui.Spacer(c).Grow(1)
+			if finished > 0 && ui.Button(c, "Clear finished").Clicked() {
+				a.manager.ClearFinished()
+				a.invalidate()
 			}
-			if task.State == models.StateError && task.Error != "" {
-				ui.Text(c, task.Error).FontSize(11).TextColor(t.Danger)
-			}
-			if task.ErrorDetail != "" {
-				ui.Text(c, task.ErrorDetail).FontSize(11).TextColor(t.Warning)
-			}
-			ui.Row(c).Gap(6).Children(func() {
-				if !task.State.IsTerminal() {
-					if ui.Button(c.Key("cancel-"+task.ID), "Cancel").Clicked() {
-						a.manager.Cancel(task.ID)
-					}
-				}
-				if task.State == models.StateError || task.State == models.StateCancelled {
-					if ui.Button(c.Key("retry-"+task.ID), "Retry").Clicked() {
-						a.manager.Retry(task.ID)
-					}
-				}
-				if task.State == models.StateCompleted && task.OutputPath != "" {
-					ui.Text(c, filepath.Base(task.OutputPath)).FontSize(11).TextColor(t.TextMuted)
-					path := task.OutputPath
-					if ui.Button(c.Key("show-"+task.ID), "Show in folder").Clicked() {
-						go mygo.Shell.ShowItemInFolder(path)
-					}
-				}
-			})
 		})
-	}).Grow(1).Gap(8)
+		ui.List(c, &a.dlListState, len(tasks), func(i int) {
+			task := tasks[i]
+			ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Border).Padding(10, 12).Radius(12).Gap(12).AlignItems(ui.Center).Children(func() {
+				a.thumbnailElement(c, task.Request.ThumbnailURL, 112, 63, downloadFallbackIcon(task.Request.Mode))
+				ui.Column(c).Grow(1).Gap(5).Children(func() {
+					ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+						ui.Text(c, task.Request.Title).FontSize(13).Bold().Grow(1).MaxWidth(680)
+						statusPill(c, task.State)
+					})
+					if task.State == models.StatePreparing || task.State == models.StateDownloading || task.State == models.StateProcessing {
+						pct := task.Progress.Percent / 100
+						if task.State == models.StatePreparing || task.State == models.StateProcessing || pct <= 0 {
+							pct = -1
+						}
+						ui.Progress(c, pct)
+						ui.Row(c).FillWidth().Children(func() {
+							ui.Text(c, downloadMetrics(task.Progress)).FontSize(11).TextColor(t.TextMuted)
+							ui.Spacer(c).Grow(1)
+							if task.Progress.SpeedBps > 0 {
+								ui.Text(c, formatSpeed(task.Progress.SpeedBps)).FontSize(11).TextColor(t.TextMuted)
+							}
+						})
+					}
+					if task.State == models.StateError && task.Error != "" {
+						ui.Text(c, task.Error).FontSize(11).TextColor(t.Danger).MaxWidth(720)
+					}
+					if task.ErrorDetail != "" {
+						ui.Text(c, task.ErrorDetail).FontSize(11).TextColor(t.Warning).MaxWidth(720)
+					}
+					ui.Row(c).Gap(6).Children(func() {
+						if !task.State.IsTerminal() {
+							if ui.Button(c.Key("cancel-"+task.ID), "Cancel").Clicked() {
+								a.manager.Cancel(task.ID)
+							}
+						}
+						if task.State == models.StateError || task.State == models.StateCancelled {
+							if ui.Button(c.Key("retry-"+task.ID), "Retry").Clicked() {
+								a.manager.Retry(task.ID)
+							}
+						}
+						if task.State == models.StateCompleted && task.OutputPath != "" {
+							ui.Text(c, filepath.Base(task.OutputPath)).FontSize(11).TextColor(t.TextMuted).Grow(1)
+							path := task.OutputPath
+							if ui.Button(c.Key("show-"+task.ID), "Show in folder").Clicked() {
+								go mygo.Shell.ShowItemInFolder(path)
+							}
+						}
+					})
+				})
+			})
+		}).Grow(1).Gap(8)
+	})
+	return
 }
 
 func stateColor(c *ui.Context, s models.DownloadState) ui.Color {
@@ -930,108 +1081,219 @@ func stateColor(c *ui.Context, s models.DownloadState) ui.Color {
 		return t.Success
 	case models.StateError:
 		return t.Danger
-	case models.StateDownloading, models.StateProcessing:
+	case models.StateDownloading:
 		return t.Accent
+	case models.StateProcessing:
+		return appui.ColorTeal
+	case models.StatePreparing:
+		return t.Warning
 	default:
 		return t.TextMuted
 	}
 }
 
+func statusPill(c *ui.Context, state models.DownloadState) {
+	label := strings.Title(string(state))
+	color := stateColor(c, state)
+	ui.Row(c).Background(ui.Color{R: color.R, G: color.G, B: color.B, A: 0x22}).Border(1, ui.Color{R: color.R, G: color.G, B: color.B, A: 0x55}).Radius(999).Padding(3, 8).Children(func() {
+		ui.Text(c, label).FontSize(10).Bold().TextColor(color)
+	})
+}
+
+func emptyState(c *ui.Context, icon *ui.SVG, title, detail string) {
+	t := c.Theme()
+	ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
+		ui.Box(c).Size(56, 56).Background(t.Surface).Border(1, t.Border).Radius(18).Center().Children(func() {
+			ui.Icon(c, icon).FontSize(24).TextColor(t.Accent)
+		})
+		ui.Text(c, title).FontSize(16).Bold()
+		ui.Text(c, detail).FontSize(12).TextColor(t.TextMuted).MaxWidth(360)
+	})
+}
+
+func downloadFallbackIcon(mode models.DownloadMode) *ui.SVG {
+	if mode == models.ModeAudioOnly {
+		return appui.IconMusic
+	}
+	return appui.IconVideo
+}
+
+func conversionDownloadState(state models.ConversionState) models.DownloadState {
+	switch state {
+	case models.ConvCompleted:
+		return models.StateCompleted
+	case models.ConvError:
+		return models.StateError
+	case models.ConvCancelled:
+		return models.StateCancelled
+	case models.ConvRunning:
+		return models.StateProcessing
+	default:
+		return models.StatePending
+	}
+}
+
+func historyDownloadState(state string) models.DownloadState {
+	switch state {
+	case string(models.StateCompleted):
+		return models.StateCompleted
+	case string(models.StateError):
+		return models.StateError
+	case string(models.StateCancelled):
+		return models.StateCancelled
+	default:
+		return models.StatePending
+	}
+}
+
+func historyMode(mode string) models.DownloadMode {
+	if mode == string(models.ModeAudioOnly) {
+		return models.ModeAudioOnly
+	}
+	if mode == string(models.ModeVideoOnly) {
+		return models.ModeVideoOnly
+	}
+	return models.ModeVideoAudio
+}
+
+func downloadMetrics(p models.ProgressInfo) string {
+	parts := []string{fmt.Sprintf("%.1f%%", p.Percent)}
+	if p.TotalBytes > 0 {
+		parts = append(parts, formatBytes(p.DownloadedBytes)+" / "+formatBytes(p.TotalBytes))
+	} else {
+		parts = append(parts, formatBytes(p.DownloadedBytes))
+	}
+	if p.SpeedBps > 0 {
+		parts = append(parts, formatSpeed(p.SpeedBps))
+	}
+	if p.ETA > 0 {
+		parts = append(parts, "ETA "+formatDuration(p.ETA.Seconds()))
+	}
+	return strings.Join(parts, " · ")
+}
+
 func (a *App) converterPage(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
-		ui.Text(c, "Media Converter").FontSize(15).Bold()
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Text(c, "Media Converter").FontSize(20).Bold()
+				ui.Text(c, "Remux or re-encode your local media with FFmpeg.").FontSize(12).TextColor(t.TextMuted)
+			})
+		})
 		if !a.ffmpeg.Available() {
-			ui.Text(c, "FFmpeg not found on PATH.").FontSize(13).TextColor(t.Danger)
+			ui.Row(c).Background(t.Surface).Border(1, t.Danger).Radius(12).Padding(12).Children(func() {
+				ui.Text(c, "FFmpeg not found on PATH. Install FFmpeg to enable conversion.").FontSize(13).TextColor(t.Danger)
+			})
 			return
 		}
-		ui.Column(c).FillWidth().Background(t.Surface).Padding(14).Radius(10).Gap(10).Children(func() {
-			// Drop zone + path + Browse
-			drop := ui.Column(c).FillWidth().Padding(16).Radius(8).
-				Border(1, t.Border).AlignItems(ui.Center).Gap(6)
-			if drop.FileDragOver() {
-				drop.Border(2, t.Accent)
-			}
-			if files := drop.DroppedFiles(); files != nil && len(files) > 0 {
-				a.convSource = files[0]
-			}
-			drop.Children(func() {
-				ui.Text(c, "Drop a media file here").FontSize(13).TextColor(t.TextMuted)
-				ui.Text(c, "or use Browse").FontSize(11).TextColor(t.TextMuted)
-			})
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Source").FontSize(12).TextColor(t.TextMuted).Width(90)
-				ui.TextInput(c, &a.convSource).Placeholder("/path/to/file.mp4").Grow(1)
-				if ui.Button(c, "Browse…").Clicked() {
-					go a.pickConvertFile()
+		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Stretch).Children(func() {
+			ui.Column(c).Grow(7).Background(t.Surface).Border(1, t.Border).Padding(14).Radius(14).Gap(10).Children(func() {
+				// Drop zone + path + Browse
+				drop := ui.Column(c).FillWidth().Padding(16).Radius(8).
+					Border(1, t.Border).AlignItems(ui.Center).Gap(6)
+				if drop.FileDragOver() {
+					drop.Border(2, t.Accent)
 				}
-			})
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Text(c, "Kind").FontSize(12).TextColor(t.TextMuted).Width(90)
-				a.toggleBtn(c, "ck-a", "Audio", a.convKind == models.KindAudio, func() {
-					a.convKind = models.KindAudio
-					a.convFormat = "mp3"
-				})
-				a.toggleBtn(c, "ck-v", "Video", a.convKind == models.KindVideo, func() {
-					a.convKind = models.KindVideo
-					a.convFormat = "mp4"
-				})
-			})
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Target").FontSize(12).TextColor(t.TextMuted).Width(90)
-				formats := []string{"mp3", "m4a", "opus", "flac", "wav"}
-				if a.convKind == models.KindVideo {
-					formats = []string{"mp4", "mkv", "webm"}
+				if files := drop.DroppedFiles(); files != nil && len(files) > 0 {
+					a.convSource = files[0]
 				}
-				for _, f := range formats {
-					f := f
-					a.toggleBtn(c, "cf-"+f, f, a.convFormat == f, func() {
-						a.convFormat = f
+				drop.Children(func() {
+					ui.Text(c, "Drop a media file here").FontSize(13).TextColor(t.TextMuted)
+					ui.Text(c, "or use Browse").FontSize(11).TextColor(t.TextMuted)
+				})
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Source").FontSize(12).TextColor(t.TextMuted).Width(90)
+					ui.TextInput(c, &a.convSource).Placeholder("/path/to/file.mp4").Grow(1)
+					if ui.Button(c, "Browse…").Clicked() {
+						go a.pickConvertFile()
+					}
+				})
+				ui.Row(c).Gap(8).Children(func() {
+					ui.Text(c, "Kind").FontSize(12).TextColor(t.TextMuted).Width(90)
+					a.toggleBtn(c, "ck-a", "Audio", a.convKind == models.KindAudio, func() {
+						a.convKind = models.KindAudio
+						a.convFormat = "mp3"
+					})
+					a.toggleBtn(c, "ck-v", "Video", a.convKind == models.KindVideo, func() {
+						a.convKind = models.KindVideo
+						a.convFormat = "mp4"
+					})
+				})
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Target").FontSize(12).TextColor(t.TextMuted).Width(90)
+					formats := []string{"mp3", "m4a", "aac", "opus", "flac", "wav"}
+					if a.convKind == models.KindVideo {
+						formats = []string{"mp4", "mkv", "webm", "avi", "mov", "ts"}
+					}
+					for _, f := range formats {
+						f := f
+						a.toggleBtn(c, "cf-"+f, f, a.convFormat == f, func() {
+							a.convFormat = f
+						})
+					}
+				})
+				if strings.TrimSpace(a.convSource) != "" {
+					remux := a.convKind == models.KindVideo && a.ffmpeg.CanRemux(a.convSource, a.convFormat)
+					label, color := "Re-encode", t.Warning
+					if remux {
+						label, color = "Lossless remux", t.Success
+					}
+					ui.Row(c).Gap(6).Children(func() {
+						ui.Text(c, label).FontSize(12).Bold().TextColor(color)
+						ui.Text(c, "for this source/target").FontSize(12).TextColor(t.TextMuted)
 					})
 				}
-			})
-			if ui.PrimaryButton(c, "Convert").Clicked() {
-				src := strings.TrimSpace(a.convSource)
-				if src == "" {
-					a.showToast("Enter a source path")
-					return
+				if ui.PrimaryButton(c, "Convert").Clicked() {
+					src := strings.TrimSpace(a.convSource)
+					if src == "" {
+						a.showToast("Enter a source path")
+						return
+					}
+					mode := models.ConversionReencode
+					if a.convKind == models.KindVideo && a.ffmpeg.CanRemux(src, a.convFormat) {
+						mode = models.ConversionRemux
+					}
+					a.conv.Enqueue(models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, KeepOriginal: a.settings.KeepOriginals})
 				}
-				a.conv.Enqueue(models.ConversionRequest{
-					Source: src, TargetFormat: a.convFormat, Kind: a.convKind,
-					Mode: models.ConversionReencode, KeepOriginal: a.settings.KeepOriginals,
-				})
-			}
+			})
+			ui.Column(c).Grow(5).Background(t.Surface).Border(1, t.Border).Padding(14).Radius(14).Gap(8).Children(func() {
+				ui.Text(c, "Conversion queue").FontSize(14).Bold()
+				a.convJobsMu.Lock()
+				jobs := append([]*models.ConversionJob(nil), a.convJobs...)
+				a.convJobsMu.Unlock()
+				sort.Slice(jobs, func(i, j int) bool { return jobs[i].CreatedAt.After(jobs[j].CreatedAt) })
+				if len(jobs) == 0 {
+					emptyState(c, appui.IconConverter, "No conversion jobs", "Converted files will appear here.")
+				} else {
+					ui.List(c, &a.convListState, len(jobs), func(i int) {
+						j := jobs[i]
+						ui.Column(c).FillWidth().Background(t.Background).Border(1, t.Border).Padding(9).Radius(10).Gap(4).Children(func() {
+							ui.Row(c).FillWidth().Children(func() {
+								ui.Text(c, filepath.Base(j.Request.Source)).FontSize(12).Bold().Grow(1)
+								statusPill(c, conversionDownloadState(j.State))
+							})
+							if j.State == models.ConvRunning {
+								ui.Progress(c, j.Percent/100)
+							}
+							if j.State == models.ConvError {
+								ui.Text(c, j.Error).FontSize(11).TextColor(t.Danger)
+							}
+							if j.State == models.ConvCompleted {
+								ui.Text(c, filepath.Base(j.OutputPath)).FontSize(11).TextColor(t.TextMuted)
+								path := j.OutputPath
+								if ui.Button(c.Key("conv-show-"+j.ID), "Show in folder").Clicked() {
+									go mygo.Shell.ShowItemInFolder(path)
+								}
+							}
+							if !j.State.IsTerminal() && ui.Button(c.Key("cc-"+j.ID), "Cancel").Clicked() {
+								a.conv.Cancel(j.ID)
+							}
+						})
+					}).Grow(1).Gap(6)
+				}
+			})
 		})
-		a.convJobsMu.Lock()
-		jobs := append([]*models.ConversionJob(nil), a.convJobs...)
-		a.convJobsMu.Unlock()
-		sort.Slice(jobs, func(i, j int) bool { return jobs[i].CreatedAt.After(jobs[j].CreatedAt) })
-		if len(jobs) > 0 {
-			ui.Text(c, "Jobs").FontSize(13).Bold()
-			ui.List(c, &a.convListState, len(jobs), func(i int) {
-				j := jobs[i]
-				ui.Column(c).FillWidth().Background(t.Surface).Padding(10).Radius(8).Gap(4).Children(func() {
-					ui.Row(c).FillWidth().Children(func() {
-						ui.Text(c, filepath.Base(j.Request.Source)).FontSize(13).Bold().Grow(1)
-						ui.Text(c, string(j.State)).FontSize(11).TextColor(t.TextMuted)
-					})
-					if j.State == models.ConvRunning {
-						ui.Progress(c, j.Percent/100)
-					}
-					if j.State == models.ConvError {
-						ui.Text(c, j.Error).FontSize(11).TextColor(t.Danger)
-					}
-					if j.State == models.ConvCompleted {
-						ui.Text(c, j.OutputPath).FontSize(11).TextColor(t.TextMuted)
-					}
-					if !j.State.IsTerminal() {
-						if ui.Button(c.Key("cc-"+j.ID), "Cancel").Clicked() {
-							a.conv.Cancel(j.ID)
-						}
-					}
-				})
-			}).Grow(1).Gap(6)
-		}
 	})
 }
 
@@ -1050,40 +1312,102 @@ func (a *App) historyPage(c *ui.Context) {
 		a.historyEntries = entries
 		a.historyLoaded = true
 	}
-	ui.Column(c).Grow(1).Gap(10).Children(func() {
-		ui.Row(c).Children(func() {
-			ui.Text(c, "History").FontSize(15).Bold()
+	filtered := make([]services.HistoryEntry, 0, len(a.historyEntries))
+	query := strings.ToLower(strings.TrimSpace(a.historyQuery))
+	for _, entry := range a.historyEntries {
+		if a.historyFilter == "video" && strings.EqualFold(entry.Mode, string(models.ModeAudioOnly)) {
+			continue
+		}
+		if a.historyFilter == "audio" && !strings.EqualFold(entry.Mode, string(models.ModeAudioOnly)) {
+			continue
+		}
+		if a.historyFilter == "error" && !strings.EqualFold(entry.State, string(models.StateError)) {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(entry.Title+" "+entry.URL), query) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	ui.Column(c).Grow(1).Gap(12).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Text(c, "History").FontSize(20).Bold()
+				ui.Text(c, fmt.Sprintf("%d saved downloads", len(a.historyEntries))).FontSize(12).TextColor(t.TextMuted)
+			})
 			ui.Spacer(c).Grow(1)
 			if ui.Button(c, "Refresh").Clicked() {
 				a.historyLoaded = false
 			}
-			if ui.Button(c, "Clear").Clicked() {
+			if ui.Button(c, "Clear all").Clicked() {
 				_ = a.history.Clear()
 				a.historyLoaded = false
 			}
 		})
+		ui.Row(c).FillWidth().Gap(8).Children(func() {
+			ui.TextInput(c, &a.historyQuery).Placeholder("Search title or URL…").Grow(1)
+			for _, filter := range []string{"all", "video", "audio", "error"} {
+				filter := filter
+				label := filter
+				if filter != "all" {
+					label = strings.Title(filter)
+				}
+				a.toggleBtn(c, "history-"+filter, label, a.historyFilter == filter || (a.historyFilter == "" && filter == "all"), func() {
+					a.historyFilter = filter
+				})
+			}
+		})
 		if len(a.historyEntries) == 0 {
-			ui.Column(c).Grow(1).Center().Children(func() {
-				ui.Text(c, "No history yet").FontSize(14).TextColor(t.TextMuted)
-			})
+			emptyState(c, appui.IconHistory, "No history yet", "Completed downloads will be saved here.")
 			return
 		}
-		ui.List(c, &a.histListState, len(a.historyEntries), func(i int) {
-			e := a.historyEntries[i]
-			ui.Column(c).FillWidth().Background(t.Surface).Padding(10).Radius(8).Gap(2).Children(func() {
-				ui.Row(c).FillWidth().Children(func() {
-					ui.Text(c, e.Title).FontSize(13).Bold().Grow(1)
-					ui.Text(c, e.State).FontSize(11).TextColor(t.TextMuted)
+		if len(filtered) == 0 {
+			emptyState(c, appui.IconHistory, "No matches", "Try another search or filter.")
+			return
+		}
+		ui.List(c, &a.histListState, len(filtered), func(i int) {
+			e := filtered[i]
+			ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Border).Padding(10, 12).Radius(12).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Box(c).Size(40, 40).Background(t.SurfaceHover).Radius(10).Center().Children(func() {
+					if e.Mode == string(models.ModeAudioOnly) {
+						ui.Icon(c, appui.IconMusic).FontSize(19).TextColor(t.Accent)
+					} else {
+						ui.Icon(c, appui.IconVideo).FontSize(19).TextColor(t.Accent)
+					}
 				})
-				ui.Text(c, e.URL).FontSize(11).TextColor(t.TextMuted)
+				ui.Column(c).Grow(1).Gap(3).Children(func() {
+					ui.Row(c).FillWidth().Children(func() {
+						ui.Text(c, e.Title).FontSize(13).Bold().Grow(1)
+						statusPill(c, historyDownloadState(e.State))
+					})
+					ui.Text(c, e.URL).FontSize(11).TextColor(t.TextMuted).MaxWidth(700)
+					if e.OutputPath != "" {
+						ui.Text(c, filepath.Base(e.OutputPath)).FontSize(11).TextColor(t.TextMuted)
+					}
+					if e.Error != "" {
+						ui.Text(c, e.Error).FontSize(11).TextColor(t.Danger).MaxWidth(700)
+					}
+				})
 				if e.OutputPath != "" {
-					ui.Text(c, e.OutputPath).FontSize(11).TextColor(t.TextMuted)
+					path := e.OutputPath
+					if ui.Button(c.Key("hist-show-"+e.ID), "Open folder").Clicked() {
+						go mygo.Shell.ShowItemInFolder(path)
+					}
 				}
-				if e.Error != "" {
-					ui.Text(c, e.Error).FontSize(11).TextColor(t.Danger)
+				if e.URL != "" && ui.Button(c.Key("hist-redo-"+e.ID), "Download again").Clicked() {
+					a.manager.Enqueue(models.DownloadRequest{URL: e.URL, Title: e.Title, Mode: historyMode(e.Mode), OutputDir: a.settings.DownloadDir, Container: e.Container, AudioFormat: e.AudioFmt})
+					a.page = PageDownloads
+					a.showToast("Queued: " + e.Title)
+				}
+				if ui.Button(c.Key("hist-delete-"+e.ID), "Delete").Clicked() {
+					if err := a.history.Delete(e.ID); err != nil {
+						a.showToast("Could not delete history entry: " + err.Error())
+					} else {
+						a.historyLoaded = false
+					}
 				}
 			})
-		}).Grow(1).Gap(6)
+		}).Grow(1).Gap(8)
 	})
 }
 
@@ -1091,6 +1415,13 @@ func (a *App) settingsPage(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Grow(1).Gap(14).Children(func() {
 		ui.Text(c, "Settings").FontSize(15).Bold()
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Theme").FontSize(13).Width(130)
+			mode := a.settings.ThemeMode
+			if ui.Select(c, &mode, []string{"system", "dark", "light"}).Changed() {
+				a.settings.ThemeMode = mode
+			}
+		})
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Download folder").FontSize(13).Width(130)
 			ui.TextInput(c, &a.settings.DownloadDir).Grow(1)
@@ -1107,6 +1438,14 @@ func (a *App) settingsPage(c *ui.Context) {
 			}
 			ui.Text(c, fmt.Sprintf("%d", a.settings.MaxConcurrent)).FontSize(13).TextColor(t.TextMuted).Width(24)
 		})
+		fragments := float64(a.settings.ConcurrentFragments)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Concurrent fragments").FontSize(13).Width(130)
+			if ui.Slider(c, &fragments, 1, 16).Changed() {
+				a.settings.ConcurrentFragments = int(fragments)
+			}
+			ui.Text(c, fmt.Sprintf("%d", a.settings.ConcurrentFragments)).FontSize(13).TextColor(t.TextMuted).Width(24)
+		})
 		ui.Checkbox(c, &a.settings.EmbedThumbnail, "Embed thumbnail")
 		ui.Checkbox(c, &a.settings.EmbedMetadata, "Embed metadata & chapters")
 		ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
@@ -1121,10 +1460,29 @@ func (a *App) settingsPage(c *ui.Context) {
 			ui.Text(c, "Cookies browser").FontSize(13).Width(130)
 			ui.TextInput(c, &a.settings.CookiesBrowser).Placeholder("chrome, firefox, edge…").Grow(1)
 		})
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Rate limit (KB/s)").FontSize(13).Width(130)
+			ui.TextInput(c, &a.settingsRateLimit).Placeholder("0 = unlimited").Grow(1)
+		})
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Subtitle languages").FontSize(13).Width(130)
+			ui.TextInput(c, &a.settingsSubtitleLangs).Placeholder("all or en, es, ar").Grow(1)
+		})
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Custom headers").FontSize(13).Width(130)
+			ui.TextInput(c, &a.settingsHeaders).Placeholder("Header: value, one per line").Grow(1)
+		})
 		if ui.PrimaryButton(c, "Save settings").Clicked() {
-			_ = a.settingsRepo.Save(a.settings)
-			a.showToast("Settings saved")
+			a.saveSettings()
 		}
+		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c, "Export settings").Clicked() {
+				go a.exportSettings()
+			}
+			if ui.Button(c, "Import settings").Clicked() {
+				go a.importSettings()
+			}
+		})
 		ff := a.ffmpeg.Path()
 		if ff == "" {
 			ff = "not found"
@@ -1138,6 +1496,114 @@ func (a *App) settingsPage(c *ui.Context) {
 		ui.Text(c, "FFmpeg: "+ff).FontSize(12).TextColor(t.TextMuted)
 		ui.Text(c, "yt-dlp: "+yt).FontSize(12).TextColor(t.TextMuted)
 	})
+}
+
+func (a *App) saveSettings() {
+	a.settings.CustomHeaders = parseHeaders(a.settingsHeaders)
+	a.settings.SubtitleLangs = parseList(a.settingsSubtitleLangs)
+	if len(a.settings.SubtitleLangs) == 0 {
+		a.settings.SubtitleLangs = []string{"all"}
+	}
+	if limit, err := strconv.Atoi(strings.TrimSpace(a.settingsRateLimit)); err == nil && limit >= 0 {
+		a.settings.RateLimitKbps = limit
+	} else {
+		a.settingsRateLimit = strconv.Itoa(a.settings.RateLimitKbps)
+	}
+	if err := a.settingsRepo.Save(a.settings); err != nil {
+		a.showToast("Could not save settings: " + err.Error())
+		return
+	}
+	a.showToast("Settings saved")
+}
+
+func parseList(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == ';' })
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func parseHeaders(raw string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(raw, "\n") {
+		name, value, ok := strings.Cut(line, ":")
+		if ok && strings.TrimSpace(name) != "" && strings.TrimSpace(value) != "" {
+			out[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		}
+	}
+	return out
+}
+
+func (a *App) exportSettings() {
+	a.saveSettings()
+	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.win, Title: "Export settings", DefaultPath: "video_downloader_settings.json", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
+	if err != nil || path == "" {
+		return
+	}
+	data, err := json.MarshalIndent(a.settings, "", "  ")
+	if err != nil {
+		a.showToast("Could not export settings: " + err.Error())
+		return
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		a.showToast("Could not export settings: " + err.Error())
+		return
+	}
+	a.showToast("Settings exported")
+}
+
+func (a *App) importSettings() {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "Import settings", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
+	if err != nil || len(paths) == 0 {
+		return
+	}
+	data, err := os.ReadFile(paths[0])
+	if err != nil {
+		a.showToast("Could not read settings: " + err.Error())
+		return
+	}
+	var settings config.AppSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		a.showToast("Invalid settings file")
+		return
+	}
+	var headerLines []string
+	for key, value := range settings.CustomHeaders {
+		headerLines = append(headerLines, key+": "+value)
+	}
+	sort.Strings(headerLines)
+	validated, err := validateSettingsDraft(refinedSettingsDraft{
+		settings:       settings,
+		maxConcurrent:  strconv.Itoa(settings.MaxConcurrent),
+		concurrentFrag: strconv.Itoa(settings.ConcurrentFragments),
+		rateLimit:      strconv.Itoa(settings.RateLimitKbps),
+		headers:        strings.Join(headerLines, "\n"),
+		subtitleLangs:  strings.Join(settings.SubtitleLangs, ", "),
+	})
+	if err != nil {
+		a.showToast("Invalid settings: " + err.Error())
+		return
+	}
+	a.settings = validated
+	if a.settings.CustomHeaders == nil {
+		a.settings.CustomHeaders = map[string]string{}
+	}
+	a.settingsHeaders = ""
+	for key, value := range a.settings.CustomHeaders {
+		a.settingsHeaders += key + ": " + value + "\n"
+	}
+	a.settingsSubtitleLangs = strings.Join(a.settings.SubtitleLangs, ", ")
+	a.settingsRateLimit = strconv.Itoa(a.settings.RateLimitKbps)
+	_ = a.settingsRepo.Save(a.settings)
+	if a.manager != nil {
+		a.manager.SetMaxWorkers(a.settings.MaxConcurrent)
+	}
+	a.invalidate()
+	a.showToast("Settings imported")
 }
 
 func (a *App) aboutPage(c *ui.Context) {
@@ -1155,7 +1621,7 @@ func (a *App) pickConvertFile() {
 		Parent: a.win,
 		Title:  "Choose media file",
 		Filters: []mygo.FileFilter{
-			{Name: "Media", Extensions: []string{"mp4", "mkv", "webm", "avi", "mov", "m4a", "mp3", "flac", "wav", "opus", "aac"}},
+			{Name: "Media", Extensions: []string{"mp4", "mkv", "webm", "avi", "mov", "flv", "ts", "m4v", "m4a", "mp3", "flac", "wav", "opus", "aac", "ogg", "wma"}},
 			{Name: "All files", Extensions: []string{"*"}},
 		},
 	})

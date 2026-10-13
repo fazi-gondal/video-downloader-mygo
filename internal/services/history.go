@@ -119,4 +119,18 @@ func (h *HistoryService) Clear() error {
 	return h.save(nil)
 }
 
+// Delete removes one history record without changing the rest of the file.
+func (h *HistoryService) Delete(id string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	entries := h.load()
+	filtered := entries[:0]
+	for _, entry := range entries {
+		if entry.ID != id {
+			filtered = append(filtered, entry)
+		}
+	}
+	return h.save(filtered)
+}
+
 func (h *HistoryService) Close() error { return nil }
