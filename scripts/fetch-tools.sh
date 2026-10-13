@@ -210,7 +210,7 @@ main() {
     host) install_platform "$(host_plat)" ;;
     all)
       for p in windows-amd64 windows-arm64 linux-amd64 linux-arm64 darwin-amd64; do
-        install_platform "$p" || echo "WARN: $p failed"
+        install_platform "$p"
       done
       echo "Note: darwin-arm64 ffmpeg is not auto-fetched; install via brew on Mac runners or host your own build."
       ;;
