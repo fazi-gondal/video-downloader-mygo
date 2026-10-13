@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -94,6 +96,11 @@ type App struct {
 	toastMsg    string
 	toastUntil  time.Time
 	sidebarOpen [2]bool
+
+	thumbnailMu       sync.Mutex
+	thumbnails        map[string]*ui.Bitmap
+	thumbnailLoading  map[string]bool
+	thumbnailFailures map[string]bool
 }
 
 func New() *App {
@@ -120,6 +127,9 @@ func New() *App {
 		formatsOpen:        false,
 		selectedVideoLabel: "Auto (best for resolution)",
 		selectedAudioLabel: "Auto (Opus / best)",
+		thumbnails:        map[string]*ui.Bitmap{},
+		thumbnailLoading:  map[string]bool{},
+		thumbnailFailures: map[string]bool{},
 	}
 	if settings.MultiAudio {
 		a.audioTracksMode = audioTracksAll
@@ -211,19 +221,38 @@ func (a *App) pumpConversionEvents() {
 func (a *App) View(c *ui.Context) {
 	// Apply the reference app's palette without replacing mygo's native
 	// controls. The initial theme tells us whether the OS is currently dark.
-	c.SetTheme(appui.NativeTheme(c.Theme().Dark))
+	dark := c.Theme().Dark
+	switch a.settings.ThemeMode {
+	case "dark":
+		dark = true
+	case "light":
+		dark = false
+	}
+	c.SetTheme(appui.NativeTheme(dark))
 	t := c.Theme()
+	a.tasksMu.Lock()
+	activeDownloads := 0
+	for _, task := range a.tasks {
+		if !task.State.IsTerminal() {
+			activeDownloads++
+		}
+	}
+	a.tasksMu.Unlock()
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		ui.Sidebar(c, &a.page, func() {
 			ui.SidebarSection(c, "Library", &a.sidebarOpen[0], func() {
-				ui.SidebarItem(c, PageDashboard, nil, "Home")
-				ui.SidebarItem(c, PageDownloads, nil, "Downloads")
-				ui.SidebarItem(c, PageConverter, nil, "Converter")
-				ui.SidebarItem(c, PageHistory, nil, "History")
+				ui.SidebarItem(c, PageDashboard, appui.IconHome, "Home")
+				ui.SidebarItem(c, PageDownloads, appui.IconDownload, "Downloads").Children(func() {
+					if activeDownloads > 0 {
+						ui.Badge(c, fmt.Sprintf("%d", activeDownloads))
+					}
+				})
+				ui.SidebarItem(c, PageConverter, appui.IconConverter, "Converter")
+				ui.SidebarItem(c, PageHistory, appui.IconHistory, "History")
 			})
 			ui.SidebarSection(c, "App", &a.sidebarOpen[1], func() {
-				ui.SidebarItem(c, PageSettings, nil, "Settings")
-				ui.SidebarItem(c, PageAbout, nil, "About")
+				ui.SidebarItem(c, PageSettings, appui.IconSettings, "Settings")
+				ui.SidebarItem(c, PageAbout, appui.IconAbout, "About")
 			})
 		}).Width(212)
 		ui.Column(c).Grow(1).FillHeight().Background(t.Background).Children(func() {
