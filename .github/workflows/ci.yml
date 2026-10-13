@@ -13,7 +13,13 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: Verify module graph
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
       - name: Test
+        env:
+          CGO_ENABLED: "1"
         run: |
           go test -race ./... -count=1
       - name: Vet
