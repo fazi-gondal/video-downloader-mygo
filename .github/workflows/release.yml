@@ -18,7 +18,7 @@ jobs:
   draft-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check tag matches mygo.json version
         run: |
           ver="$(jq -r .version mygo.json)"
@@ -55,9 +55,9 @@ jobs:
             fetch: host
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -78,8 +78,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          CGO_ENABLED: "0"
         run: |
-          CGO_ENABLED=0 go tool mygo build -platform "${{ matrix.platform }}"
+          go tool mygo build -platform "${{ matrix.platform }}"
           echo "Artifacts:"
           find build -type f | head -50
 
@@ -87,13 +88,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Upload everything mygo produced for this platform
-          shopt -s nullglob
-          files=(build/*/*)
-          if [ ${#files[@]} -eq 0 ]; then
-            files=(build/**/*)
-          fi
-          # Prefer archives / installers over raw dirs
+          # Upload packaged installers, archives, Debian packages and the
+          # Linux installer script. Do not upload the raw build directory.
           assets=()
           while IFS= read -r -d '' f; do
             case "$f" in
@@ -101,14 +97,9 @@ jobs:
             esac
           done < <(find build -type f -print0)
 
-          if [ ${#assets[@]} -eq 0 ]; then
-            # fallback: zip each platform output dir
-            for d in build/*/; do
-              [ -d "$d" ] || continue
-              name="$(basename "$d")"
-              (cd build && zip -r "${name}.zip" "$name")
-              assets+=("build/${name}.zip")
-            done
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "ERROR: no release assets found under build/" >&2
+            exit 1
           fi
 
           echo "Uploading: ${assets[*]}"

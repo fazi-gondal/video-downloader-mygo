@@ -1,0 +1,32 @@
+# Changelog
+
+All notable user-visible changes are recorded here. Release tags use the version in `mygo.json` with a `v` prefix.
+
+## [Unreleased]
+
+### Added
+
+- Native MyGo home, downloads, converter, history, settings, and about screen refinements.
+- Sidebar icons, media thumbnails, status pills, empty states, history filters, and converter queue layout.
+- Responsive three-column audio and subtitle selectors with bounded scrolling and label truncation.
+- Automatic MKV presentation for multiple audio tracks or embedded subtitles.
+- Estimated final download size based on stream metadata and duration.
+- Download progress metrics for bytes, approximate totals, speed, and ETA.
+- Windows/Linux CI packaging smoke checks and pinned MyGo CLI usage.
+
+### Changed
+
+- Release packaging uses `go tool mygo` from the pinned module tool instead of an unpinned global CLI.
+- Runtime helper resolution supports both packaged flattened resources and development platform directories.
+- Linux release uploads include the generated `install.sh` artifact.
+
+### Fixed
+
+- Subtitle HTTP 429 responses no longer fail a valid media download when only subtitle retrieval fails.
+- Multiple subtitle embedding uses SRT conversion and MKV remuxing for player compatibility.
+- Audio/subtitle selector cells no longer expand outside the right side of the window.
+
+## [2.0.0]
+
+- Initial native MyGo application structure and core downloader/converter services.
+- URL analysis, playlists, format selection, download queue, conversion queue, settings, and JSON history.

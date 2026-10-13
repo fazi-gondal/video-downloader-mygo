@@ -1,93 +1,192 @@
-# Building & packaging
+# Build, package, and release
 
-Native-UI MyGo app — no Bun/frontend required.
+This repository is a native-UI MyGo application. It has no Bun, Vite, or web frontend build. The MyGo CLI is pinned in `go.mod` and must be invoked with `go tool mygo` so local and CI packaging use the same version as the application library.
 
-## Develop
+## Prerequisites
+
+- Go 1.27.1, as declared in `go.mod`.
+- Git.
+- MyGo v0.4.8 through the pinned Go tool in `go.mod`.
+- FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
+- Bash, curl, unzip, and tar/xz when using `scripts/fetch-tools.sh`.
+- On Windows, Git Bash or WSL is required to run the Bash helper script. The Go application itself runs natively from PowerShell or Command Prompt.
+
+MyGo does not require cgo for normal native builds. The CI and release workflows set `CGO_ENABLED=0` for reproducible packaging.
+
+## Development
+
+From the repository root:
 
 ```bash
-go get github.com/egoist/mygo@latest
-go mod tidy
-
-# option A: plain Go
+go mod download
 go run .
-
-# option B: MyGo CLI (live rebuild on Go changes)
-go run github.com/egoist/mygo/cmd/mygo@latest dev
-# or after: go install github.com/egoist/mygo/cmd/mygo@latest
-mygo dev
 ```
 
-## Production build (this machine)
+MyGo development mode rebuilds the native app when Go files change:
 
 ```bash
-go run github.com/egoist/mygo/cmd/mygo@latest build
-# → build/<os>-<arch>/
+go tool mygo dev
 ```
 
-## Cross-compile targets
+Do not use `go get github.com/egoist/mygo@latest` as a routine setup command. It can rewrite the module graph away from the version pinned by this project.
+
+## Verification commands
 
 ```bash
-# Windows installer (amd64) — run on any OS; NSIS packaging needs Windows or wine for full installer
-mygo build -platform windows/amd64
-
-# macOS universal (needs Mac for signing/DMG)
-mygo build -platform darwin/universal
-
-# Linux
-mygo build -platform linux/amd64,linux/arm64
+gofmt -w <changed-go-files>
+go test ./... -count=1
+go vet ./...
+go build ./...
+git diff --check
 ```
 
-Outputs land in `build/` (see `mygo.json` → `out`).
+Run `go test -race ./...` when a C compiler is available. Race testing is optional for local Windows environments without GCC; it is not required for the production MyGo build because production packaging uses `CGO_ENABLED=0`.
 
-Typical artifacts:
-- **Windows**: `Video Downloader Setup <ver> amd64.exe` (NSIS) + portable dir
-- **macOS**: `.app` + `.dmg`
-- **Linux**: directory + optional `.deb` when configured
+## Download bundled helper tools
 
-## Icon
-
-Put a **1024×1024 PNG** at `resources/icon.png`. MyGo embeds it into the OS packages.
-
-## Runtime dependencies
-
-Ship or document:
-- `yt-dlp` on PATH (or bundle a binary next to the app and set PATH in a launcher)
-- `ffmpeg` / `ffprobe` on PATH for merges and the Converter page
-
-## Optional: pin CLI as a Go tool
+The application can use system tools, but release packages are intended to include platform-specific yt-dlp and FFmpeg binaries. Run the helper with Bash:
 
 ```bash
-go get -tool github.com/egoist/mygo/cmd/mygo@latest
-go tool mygo build
+# Current host platform.
+bash scripts/fetch-tools.sh
+
+# One explicit target.
+bash scripts/fetch-tools.sh linux-amd64
+
+# All supported helper directories used by release packaging.
+bash scripts/fetch-tools.sh all
 ```
 
-## Signing (optional)
+The script writes to:
 
-- **macOS**: set `macos.signingIdentity` in `mygo.json` or `mygo build -sign "Developer ID Application: …"`
-- **Windows**: set `windows.certificate` to a `.pfx` path; password via `MYGO_WINDOWS_CERTIFICATE_PASSWORD`
+```text
+resources/<platform>/bin/
+```
 
-## Bundled yt-dlp & FFmpeg
+Supported target names currently include `windows-amd64`, `windows-arm64`, `linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64` where an upstream asset exists. The macOS arm64 FFmpeg URL is intentionally empty in the script and falls back to a system/Homebrew FFmpeg.
+
+Optional environment variables:
 
 ```bash
-# Download tools for this OS into resources/<plat>/bin/
-./scripts/fetch-tools.sh
-
-# Or every platform (release packaging)
-./scripts/fetch-tools.sh all
+YTDLP_TAG=2026.08.19 FFMPEG_RELEASE=latest \
+  bash scripts/fetch-tools.sh linux-amd64
 ```
 
-Resolution order at runtime (`internal/tools`):
+The default yt-dlp version and SHA-256 checksums are recorded in the script.
+The FFmpeg rolling release is accepted only when its recorded checksum still
+matches; update the release name and checksum together when intentionally
+upgrading it. Do not commit the downloaded files: `resources/*/bin/*` is
+ignored because FFmpeg binaries are large.
 
-1. `resources/…/bin/yt-dlp` (or `.exe`) next to the packaged app  
-2. system `PATH`
+## Local production builds
 
-Platform folders follow MyGo conventions (`windows-amd64`, `linux-amd64`, …).  
-`mygo build` only packs the folder matching the target.
-
-GitHub Actions (`.github/workflows/release.yml`) runs `fetch-tools.sh` before each platform build and uploads installers/archives to a **draft** release on `v*` tags.
+Build the default target:
 
 ```bash
-# bump version in mygo.json first, then:
-git tag v2.0.0
-git push origin v2.0.0
+CGO_ENABLED=0 go tool mygo build
 ```
+
+Build explicit targets:
+
+```bash
+CGO_ENABLED=0 go tool mygo build -platform windows/amd64
+CGO_ENABLED=0 go tool mygo build -platform linux/amd64
+CGO_ENABLED=0 go tool mygo build -platform linux/arm64
+CGO_ENABLED=0 go tool mygo build -platform darwin/arm64
+```
+
+MyGo can cross-compile native UI targets without cgo. macOS signing and disk-image creation require a macOS environment and its signing tools. Windows installer creation from Linux requires NSIS; the release workflow installs it on the Windows build row.
+
+Outputs are written below `build/`, as configured by `mygo.json`:
+
+- Windows: executable and `Video Downloader Setup <version> <arch>.exe`.
+- Linux: executable, `.deb`, `.tar.gz`, and `install.sh`.
+- macOS: `.app` and `.dmg` when built on macOS.
+
+## Resource resolution
+
+`internal/tools` checks, in order:
+
+1. Packaged `resources/bin/<tool>`.
+2. Packaged `resources/<tool>`.
+3. Development `resources/<os>-<arch>/bin/<tool>`.
+4. System `PATH`.
+
+The platform directories are flattened/selected by MyGo during packaging. During `go run`, the platform subdirectory remains in the repository, which is why the development lookup exists.
+
+## Application metadata
+
+`mygo.json` currently defines:
+
+- Application name: `Video Downloader`.
+- Identifier: `com.fazigondal.videodownloader`.
+- Version: `2.0.0`.
+- Output directory: `build`.
+- Linux maintainer metadata.
+
+When publishing a release, the Git tag must match the version: `mygo.json` version `2.0.0` requires tag `v2.0.0`.
+
+## Signing
+
+Signing is optional for local development and not configured by default.
+
+### macOS
+
+Set a Developer ID identity in `mygo.json` or pass the MyGo signing flag:
+
+```bash
+CGO_ENABLED=0 go tool mygo build -sign "Developer ID Application: …"
+```
+
+See the MyGo [GitHub Actions guide](https://mygo.egoist.dev/docs/github-actions) for notarization credentials and keychain setup.
+
+### Windows
+
+Configure a `.pfx` certificate through the MyGo Windows configuration and provide the certificate password through `MYGO_WINDOWS_CERTIFICATE_PASSWORD`. Unsigned installers may trigger SmartScreen warnings.
+
+## GitHub Actions
+
+### CI
+
+`.github/workflows/ci.yml` runs on pushes to `main`/`master` and pull requests. It uses the Go version from `go.mod`, tests the committed dependency graph, runs vet, and performs a Linux MyGo packaging smoke build.
+
+### Release
+
+`.github/workflows/release.yml` runs on `v*` tags. It:
+
+1. Checks that the tag matches `mygo.json`.
+2. Creates a draft GitHub Release.
+3. Fetches helper tools for each platform row.
+4. Builds with `go tool mygo` and `CGO_ENABLED=0`.
+5. Uploads Windows installers, Linux packages/archives/install script, and macOS artifacts to the draft.
+
+Required workflow permission:
+
+```yaml
+permissions:
+  contents: write
+```
+
+Optional update/signing secrets are described in the MyGo documentation and the comments at the top of the release workflow.
+
+## Icon and resources
+
+Place a shared 1024×1024 PNG at `resources/icon.png`. Platform-specific helper binaries belong in `resources/<platform>/bin`. See [resources/README.md](resources/README.md) for the complete layout.
+
+## Common build failures
+
+### `mygo: command not found`
+
+Use `go tool mygo ...`; do not depend on a user-specific Go bin directory being on `PATH`.
+
+### Installer is not generated
+
+Windows installer creation needs NSIS. The release workflow installs NSIS on Ubuntu for the Windows target. A plain cross-build may still produce the executable without a complete installer if NSIS is unavailable.
+
+### FFmpeg or yt-dlp is missing
+
+Run the helper script using Bash, check `resources/<platform>/bin`, or install the tools on `PATH`. Restart the app after changing bundled resources.
+
+### Linux executable does not start
+
+Install the MyGo Linux runtime libraries for the distribution. Prefer the `.deb` package when available.

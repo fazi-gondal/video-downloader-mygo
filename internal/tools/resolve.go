@@ -54,12 +54,7 @@ func lookIn(dir, name string) string {
 	}
 	// During development the checked-in resources retain their platform
 	// directory. MyGo flattens the matching directory in packaged apps, so
-	// keep the flat lookup above and add this fallback for go run/test.
-	platformDir := filepath.Join(dir, runtime.GOOS+"-"+runtime.GOARCH)
-	candidates = append(candidates,
-		filepath.Join(platformDir, "bin", exeName(name)),
-		filepath.Join(platformDir, "bin", name),
-	)
+	// try the flat layout first and the platform layout second.
 	for _, p := range candidates {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
 			return p
