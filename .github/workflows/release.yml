@@ -10,7 +10,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -72,19 +71,15 @@ jobs:
 
       - name: Fetch yt-dlp + ffmpeg into resources
         run: |
-          chmod +x scripts/fetch-tools.sh
-          ./scripts/fetch-tools.sh "${{ matrix.fetch }}"
+          bash scripts/fetch-tools.sh "${{ matrix.fetch }}"
           find resources -type f | head -40
-
-      - name: Install MyGo CLI
-        run: go install github.com/egoist/mygo/cmd/mygo@latest
 
       - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
         run: |
-          mygo build -platform "${{ matrix.platform }}"
+          CGO_ENABLED=0 go tool mygo build -platform "${{ matrix.platform }}"
           echo "Artifacts:"
           find build -type f | head -50
 
@@ -102,7 +97,7 @@ jobs:
           assets=()
           while IFS= read -r -d '' f; do
             case "$f" in
-              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage) assets+=("$f") ;;
+              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage|*/install.sh|install.sh) assets+=("$f") ;;
             esac
           done < <(find build -type f -print0)
 

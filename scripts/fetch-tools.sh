@@ -56,7 +56,7 @@ ytdlp_url() {
 
 ffmpeg_archive_url() {
   local plat="$1"
-  local base="https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest"
+  local base="https://github.com/yt-dlp/FFmpeg-Builds/releases/download/${FFMPEG_RELEASE}"
   case "$plat" in
     windows-amd64) echo "$base/ffmpeg-master-latest-win64-gpl.zip" ;;
     windows-arm64) echo "$base/ffmpeg-master-latest-winarm64-gpl.zip" ;;

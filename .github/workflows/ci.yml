@@ -13,8 +13,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Vet / build
+      - name: Test
         run: |
-          go get github.com/egoist/mygo@latest
-          go mod tidy
-          go build -o /tmp/video-downloader .
+          go test ./... -count=1
+      - name: Vet
+        run: go vet ./...
+      - name: Build native app
+        env:
+          CGO_ENABLED: "0"
+        run: go tool mygo build -platform linux/amd64 -skip-build-command
