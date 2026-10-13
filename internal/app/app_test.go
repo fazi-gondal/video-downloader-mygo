@@ -2,7 +2,9 @@ package app
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
@@ -81,5 +83,124 @@ func TestBuildRequestPreservesSubtitleCodesForYTDLP(t *testing.T) {
 	want := []string{"de", "hi"}
 	if !reflect.DeepEqual(req.SubtitleLangs, want) {
 		t.Fatalf("subtitle language codes = %#v, want %#v", req.SubtitleLangs, want)
+	}
+}
+
+func TestContainerSelectionLocksToMKVAndRestoresPreference(t *testing.T) {
+	a := &App{
+		container:          "webm",
+		preferredContainer: "webm",
+		audioTracksMode:    audioTracksCustom,
+		selectedAudio:      map[string]*bool{"en": boolPtr(true), "de": boolPtr(true)},
+		subtitleMode:       subtitleModeNone,
+		selectedSubtitle:   map[string]*bool{},
+	}
+
+	a.syncContainerSelection()
+	if a.container != "mkv" {
+		t.Fatalf("locked container = %q, want mkv", a.container)
+	}
+	if req := a.buildRequest("https://example.test/video", "Example", "", "", 0); req.Container != "mkv" {
+		t.Fatalf("locked request container = %q, want mkv", req.Container)
+	}
+	a.audioTracksMode = audioTracksNone
+	a.syncContainerSelection()
+	if a.container != "webm" {
+		t.Fatalf("restored container = %q, want webm", a.container)
+	}
+
+	a.subtitleMode = subtitleModeCustom
+	a.selectedSubtitle["en"] = boolPtr(true)
+	a.syncContainerSelection()
+	if a.container != "mkv" {
+		t.Fatalf("subtitle-locked container = %q, want mkv", a.container)
+	}
+	a.subtitleMode = subtitleModeNone
+	a.syncContainerSelection()
+	if a.container != "webm" {
+		t.Fatalf("container after clearing subtitle = %q, want webm", a.container)
+	}
+}
+
+func TestEstimatedFinalSizeUsesSelectedFormatsAndResolutionFallback(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Duration: 60,
+			Formats: []models.FormatInfo{
+				{ID: "video", IsVideo: true, Resolution: "1920x1080", VBR: 800},
+				{ID: "audio", IsAudio: true, ABR: 128},
+			},
+		},
+		mode:                models.ModeVideoAudio,
+		maxHeight:           1080,
+		audioTracksMode:     audioTracksNone,
+		selectedVideoFormat: "",
+		selectedAudioFormat: "audio",
+		subtitleMode:        subtitleModeNone,
+		selectedAudio:       map[string]*bool{},
+		selectedSubtitle:    map[string]*bool{},
+	}
+
+	got, approximate := a.estimatedFinalSize()
+	// (800 + 128) kbps for one minute, converted to bytes.
+	if got != 6_960_000 {
+		t.Fatalf("estimated size = %d, want %d", got, int64(6_960_000))
+	}
+	if !approximate {
+		t.Fatal("bitrate-based estimate should be marked approximate")
+	}
+}
+
+func TestEstimatedFinalSizeUsesExactAndApproximateFileSizes(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Duration: 10,
+			Formats: []models.FormatInfo{
+				{ID: "video", IsVideo: true, Filesize: 1000},
+				{ID: "audio", IsAudio: true, FilesizeApprox: 500},
+			},
+		},
+		mode:                models.ModeVideoAudio,
+		selectedVideoFormat: "video",
+		selectedAudioFormat: "audio",
+		audioTracksMode:     audioTracksNone,
+		subtitleMode:        subtitleModeNone,
+		selectedAudio:       map[string]*bool{},
+		selectedSubtitle:    map[string]*bool{},
+	}
+
+	got, approximate := a.estimatedFinalSize()
+	if got != 1500 || !approximate {
+		t.Fatalf("estimated exact/approx size = (%d, %t), want (1500, true)", got, approximate)
+	}
+}
+
+func TestDownloadMetricsShowsEstimatedTotalSpeedAndETA(t *testing.T) {
+	metrics := downloadMetrics(models.ProgressInfo{
+		DownloadedBytes: 1024,
+		TotalBytes:      4096,
+		TotalIsEstimate: true,
+		SpeedBps:        2048,
+		ETA:             5 * time.Second,
+	})
+	for _, want := range []string{"25.0%", "1.0 KB / ~4.0 KB", "2.0 KB/s", "ETA 0:05"} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics %q does not contain %q", metrics, want)
+		}
+	}
+}
+
+func TestProgressFractionUsesBytesOrPercentAndProcessingIsIndeterminate(t *testing.T) {
+	if got, ok := progressFraction(models.ProgressInfo{DownloadedBytes: 50, TotalBytes: 100}); !ok || got != 0.5 {
+		t.Fatalf("byte progress = (%v, %t), want (0.5, true)", got, ok)
+	}
+	if got, ok := progressFraction(models.ProgressInfo{Percent: 25}); !ok || got != 0.25 {
+		t.Fatalf("percent progress = (%v, %t), want (0.25, true)", got, ok)
+	}
+	if _, ok := progressFraction(models.ProgressInfo{}); ok {
+		t.Fatal("empty progress should be indeterminate")
+	}
+	if _, ok := taskProgressFraction(models.StateProcessing, models.ProgressInfo{Percent: 50}); ok {
+		t.Fatal("processing progress should be indeterminate")
 	}
 }

@@ -62,6 +62,7 @@ type App struct {
 	mode                models.DownloadMode
 	maxHeight           int
 	container           string
+	preferredContainer  string
 	audioFormat         string
 	audioTracksMode     string
 	selectedAudio       map[string]*bool
@@ -124,6 +125,7 @@ func New() *App {
 		mode:               models.ModeVideoAudio,
 		maxHeight:          1080,
 		container:          "mp4",
+		preferredContainer: "mp4",
 		audioFormat:        "mp3",
 		audioTracksMode:    audioTracksNone,
 		subtitleMode:       subtitleModeNone,
@@ -636,6 +638,7 @@ func (a *App) rebuildFormatOptions() {
 
 func (a *App) configPanel(c *ui.Context) {
 	t := c.Theme()
+	a.syncContainerSelection()
 	ui.Column(c).FillWidth().Background(t.Surface).Padding(14).Radius(10).Gap(10).Children(func() {
 		ui.Text(c, "Download options").FontSize(13).Bold()
 		ui.Row(c).Gap(8).Children(func() {
@@ -670,8 +673,10 @@ func (a *App) configPanel(c *ui.Context) {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Container").FontSize(12).TextColor(t.TextMuted).Width(90)
 				ct := a.container
-				if ui.Select(c, &ct, []string{"mp4", "mkv", "webm"}).Changed() {
+				containerLocked := a.containerSelectionLocked()
+				if ui.Select(c, &ct, []string{"mp4", "mkv", "webm"}).Disabled(containerLocked).Changed() && !containerLocked {
 					a.container = ct
+					a.preferredContainer = ct
 				}
 			})
 		}
@@ -691,6 +696,10 @@ func (a *App) configPanel(c *ui.Context) {
 			a.subtitleControls(c)
 			ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
 		}
+		a.syncContainerSelection()
+		if estimate := a.estimatedSizeText(); estimate != "" {
+			ui.Text(c, estimate).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
+		}
 		if ui.PrimaryButton(c, "Start download").Clicked() {
 			if a.currentMedia != nil {
 				a.startDownload()
@@ -703,7 +712,7 @@ func (a *App) configPanel(c *ui.Context) {
 
 func (a *App) audioTracksControls(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Gap(6).Children(func() {
+	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Text(c, "Audio tracks").FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Gap(8).Children(func() {
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksNone, "None (default)")
@@ -711,25 +720,28 @@ func (a *App) audioTracksControls(c *ui.Context) {
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksCustom, "Custom")
 		})
 		if a.audioTracksMode == audioTracksCustom {
-			ui.Grid(c).Columns(3).Gap(4).Padding(0, 0, 0, 12).Children(func() {
-				for _, tr := range a.currentMedia.AudioTracks {
-					id := tr.ID
-					on := checkboxState(a.selectedAudio, id)
-					label := languageDisplayName(tr.Language)
-					if label == "" {
-						label = "Unknown language"
+			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Children(func() {
+				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).Gap(4).Children(func() {
+					for _, tr := range a.currentMedia.AudioTracks {
+						id := tr.ID
+						on := checkboxState(a.selectedAudio, id)
+						label := languageDisplayName(tr.Language)
+						if label == "" {
+							label = "Unknown language"
+						}
+						if tr.Language != "" && label != tr.Language {
+							label += " (" + tr.Language + ")"
+						}
+						if tr.Note != "" {
+							label += " · " + tr.Note
+						}
+						ui.Row(c.Key("aud-tile-"+id)).FillWidth().MinWidth(0).Padding(3, 4).
+							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
+							ui.Checkbox(c.Key("aud-"+id), on, "").Shrink(0)
+							ui.Text(c, label).FontSize(11).Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
+						})
 					}
-					if tr.Language != "" && label != tr.Language {
-						label += " (" + tr.Language + ")"
-					}
-					if tr.Note != "" {
-						label += " · " + tr.Note
-					}
-					ui.Row(c.Key("aud-tile-"+id)).FillWidth().Padding(5, 6).Gap(4).
-						AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(8).Children(func() {
-						ui.Checkbox(c.Key("aud-"+id), on, label)
-					})
-				}
+				})
 			})
 		}
 	})
@@ -737,7 +749,7 @@ func (a *App) audioTracksControls(c *ui.Context) {
 
 func (a *App) subtitleControls(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Gap(6).Children(func() {
+	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Text(c, "Subtitles").FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Gap(8).Children(func() {
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeNone, "None")
@@ -750,15 +762,18 @@ func (a *App) subtitleControls(c *ui.Context) {
 				ui.Text(c, "No subtitle languages found").FontSize(11).TextColor(t.TextMuted)
 				return
 			}
-			ui.Grid(c).Columns(3).Gap(4).Padding(0, 0, 0, 12).Children(func() {
-				for _, lang := range langs {
-					on := checkboxState(a.selectedSubtitle, lang)
-					label := languageDisplayName(lang)
-					ui.Row(c.Key("sub-tile-"+lang)).FillWidth().Padding(5, 6).Gap(4).
-						AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(8).Children(func() {
-						ui.Checkbox(c.Key("sub-"+lang), on, label)
-					})
-				}
+			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Children(func() {
+				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).Gap(4).Children(func() {
+					for _, lang := range langs {
+						on := checkboxState(a.selectedSubtitle, lang)
+						label := languageDisplayName(lang)
+						ui.Row(c.Key("sub-tile-"+lang)).FillWidth().MinWidth(0).Padding(3, 4).
+							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
+							ui.Checkbox(c.Key("sub-"+lang), on, "").Shrink(0)
+							ui.Text(c, label).FontSize(11).Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
+						})
+					}
+				})
 			})
 		}
 	})
@@ -835,18 +850,20 @@ func (a *App) playlistPanel(c *ui.Context) {
 }
 
 func (a *App) configPage(c *ui.Context) {
-	ui.Column(c).Grow(1).Gap(12).Children(func() {
-		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "← Back").Clicked() {
-				a.page = PageDashboard
+	ui.Scroll(c).Grow(1).Children(func() {
+		ui.Column(c).FillWidth().Gap(12).Children(func() {
+			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+				if ui.Button(c, "← Back").Clicked() {
+					a.page = PageDashboard
+				}
+				ui.Text(c, "Download configuration").FontSize(18).Bold()
+			})
+			if a.currentMedia != nil {
+				a.mediaCard(c)
 			}
-			ui.Text(c, "Download configuration").FontSize(18).Bold()
+			a.configPanel(c)
+			a.formatPicker(c)
 		})
-		if a.currentMedia != nil {
-			a.mediaCard(c)
-		}
-		a.configPanel(c)
-		a.formatPicker(c)
 	})
 }
 
@@ -946,7 +963,238 @@ func (a *App) startPlaylistDownloads() {
 	a.showToast(fmt.Sprintf("Queued %d videos", n))
 }
 
+func (a *App) containerSelectionLocked() bool {
+	if a.audioTracksMode == audioTracksAll {
+		return true
+	}
+	if a.audioTracksMode == audioTracksCustom && countSelected(a.selectedAudio) > 1 {
+		return true
+	}
+	if a.subtitleMode == subtitleModeAll {
+		return true
+	}
+	return a.subtitleMode == subtitleModeCustom && countSelected(a.selectedSubtitle) > 0
+}
+
+func (a *App) syncContainerSelection() {
+	if a.preferredContainer == "" {
+		a.preferredContainer = a.container
+		if a.preferredContainer == "" {
+			a.preferredContainer = "mp4"
+		}
+	}
+	if a.containerSelectionLocked() {
+		a.container = "mkv"
+		return
+	}
+	if a.container == "mkv" && a.preferredContainer != "mkv" {
+		a.container = a.preferredContainer
+	}
+}
+
+func countSelected(states map[string]*bool) int {
+	n := 0
+	for _, state := range states {
+		if state != nil && *state {
+			n++
+		}
+	}
+	return n
+}
+
+func (a *App) estimatedSizeText() string {
+	if a.currentMedia == nil {
+		return ""
+	}
+	size, approximate := a.estimatedFinalSize()
+	if size <= 0 {
+		return ""
+	}
+	marker := ""
+	if approximate {
+		marker = "~"
+	}
+	return "Estimated final size: " + marker + formatBytes(size)
+}
+
+func (a *App) estimatedFinalSize() (int64, bool) {
+	m := a.currentMedia
+	if m == nil {
+		return 0, false
+	}
+	var total int64
+	approximate := false
+	addFormat := func(format *models.FormatInfo) {
+		if format == nil {
+			return
+		}
+		size, estimated := estimateFormatSize(*format, m.Duration)
+		total += size
+		approximate = approximate || estimated
+	}
+
+	if a.mode != models.ModeAudioOnly {
+		video := findFormat(m.Formats, a.selectedVideoFormat)
+		if video == nil {
+			video = bestVideoFormat(m.Formats, a.maxHeight)
+		}
+		addFormat(video)
+	}
+	if a.subtitleMode == subtitleModeAll || (a.subtitleMode == subtitleModeCustom && countSelected(a.selectedSubtitle) > 0) {
+		// Subtitle files and muxing overhead are not represented in FormatInfo.
+		approximate = true
+	}
+	if a.mode == models.ModeVideoOnly {
+		return total, approximate
+	}
+
+	var audioFormats []*models.FormatInfo
+	switch a.audioTracksMode {
+	case audioTracksAll:
+		for i := range m.AudioTracks {
+			if format := findFormat(m.Formats, m.AudioTracks[i].ID); format != nil {
+				audioFormats = append(audioFormats, format)
+			} else if m.AudioTracks[i].Bitrate > 0 {
+				size := int64(m.AudioTracks[i].Bitrate * 1000 / 8 * m.Duration)
+				total += size
+				approximate = true
+			}
+		}
+	case audioTracksCustom:
+		for id, selected := range a.selectedAudio {
+			if selected == nil || !*selected {
+				continue
+			}
+			if format := findFormat(m.Formats, id); format != nil {
+				audioFormats = append(audioFormats, format)
+			} else if track := findAudioTrack(m.AudioTracks, id); track != nil && track.Bitrate > 0 {
+				total += int64(track.Bitrate * 1000 / 8 * m.Duration)
+				approximate = true
+			}
+		}
+	default:
+		format := findFormat(m.Formats, a.selectedAudioFormat)
+		if format == nil {
+			format = bestAudioFormat(m.Formats)
+		}
+		audioFormats = append(audioFormats, format)
+	}
+	for _, format := range audioFormats {
+		addFormat(format)
+	}
+	return total, approximate
+}
+
+func findFormat(formats []models.FormatInfo, id string) *models.FormatInfo {
+	if id == "" {
+		return nil
+	}
+	for i := range formats {
+		if formats[i].ID == id {
+			return &formats[i]
+		}
+	}
+	return nil
+}
+
+func findAudioTrack(tracks []models.AudioTrack, id string) *models.AudioTrack {
+	for i := range tracks {
+		if tracks[i].ID == id {
+			return &tracks[i]
+		}
+	}
+	return nil
+}
+
+func bestVideoFormat(formats []models.FormatInfo, maxHeight int) *models.FormatInfo {
+	var best *models.FormatInfo
+	for i := range formats {
+		format := &formats[i]
+		if !format.IsVideo {
+			continue
+		}
+		height := formatHeight(*format)
+		if maxHeight > 0 && height > maxHeight {
+			continue
+		}
+		if best == nil || height > formatHeight(*best) ||
+			(height == formatHeight(*best) && format.TBR > best.TBR) {
+			best = format
+		}
+	}
+	return best
+}
+
+func bestAudioFormat(formats []models.FormatInfo) *models.FormatInfo {
+	var best *models.FormatInfo
+	for i := range formats {
+		format := &formats[i]
+		if !format.IsAudio || format.IsVideo {
+			continue
+		}
+		if best == nil || audioBitrate(*format) > audioBitrate(*best) {
+			best = format
+		}
+	}
+	return best
+}
+
+func estimateFormatSize(format models.FormatInfo, duration float64) (int64, bool) {
+	if format.Filesize > 0 {
+		return format.Filesize, false
+	}
+	if format.FilesizeApprox > 0 {
+		return format.FilesizeApprox, true
+	}
+	if duration <= 0 {
+		return 0, true
+	}
+	bitrate := format.TBR
+	if format.IsVideo && format.VBR > 0 {
+		bitrate = format.VBR
+	}
+	if format.IsAudio && !format.IsVideo && format.ABR > 0 {
+		bitrate = format.ABR
+	}
+	if bitrate <= 0 {
+		bitrate = format.VBR + format.ABR
+	}
+	if bitrate <= 0 {
+		return 0, true
+	}
+	return int64(bitrate * 1000 / 8 * duration), true
+}
+
+func audioBitrate(format models.FormatInfo) float64 {
+	if format.ABR > 0 {
+		return format.ABR
+	}
+	if format.TBR > 0 {
+		return format.TBR
+	}
+	return format.VBR
+}
+
+func formatHeight(format models.FormatInfo) int {
+	if format.Height > 0 {
+		return format.Height
+	}
+	resolution := strings.ToLower(strings.TrimSpace(format.Resolution))
+	if idx := strings.LastIndex(resolution, "x"); idx >= 0 {
+		if height, err := strconv.Atoi(strings.TrimSpace(resolution[idx+1:])); err == nil {
+			return height
+		}
+	}
+	if idx := strings.Index(resolution, "p"); idx > 0 {
+		if height, err := strconv.Atoi(strings.TrimSpace(resolution[:idx])); err == nil {
+			return height
+		}
+	}
+	return 0
+}
+
 func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) models.DownloadRequest {
+	a.syncContainerSelection()
 	req := models.DownloadRequest{
 		URL: url, Title: title, Mode: a.mode, OutputDir: a.settings.DownloadDir,
 		Container: a.container, MaxHeight: a.maxHeight, AudioFormat: a.audioFormat,
@@ -1029,17 +1277,14 @@ func (a *App) downloadsPage(c *ui.Context) {
 						statusPill(c, task.State)
 					})
 					if task.State == models.StatePreparing || task.State == models.StateDownloading || task.State == models.StateProcessing {
-						pct := task.Progress.Percent / 100
-						if task.State == models.StatePreparing || task.State == models.StateProcessing || pct <= 0 {
-							pct = -1
+						pct := float64(-1)
+						if fraction, ok := taskProgressFraction(task.State, task.Progress); ok {
+							pct = fraction
 						}
 						ui.Progress(c, pct)
 						ui.Row(c).FillWidth().Children(func() {
 							ui.Text(c, downloadMetrics(task.Progress)).FontSize(11).TextColor(t.TextMuted)
 							ui.Spacer(c).Grow(1)
-							if task.Progress.SpeedBps > 0 {
-								ui.Text(c, formatSpeed(task.Progress.SpeedBps)).FontSize(11).TextColor(t.TextMuted)
-							}
 						})
 					}
 					if task.State == models.StateError && task.Error != "" {
@@ -1156,10 +1401,51 @@ func historyMode(mode string) models.DownloadMode {
 	return models.ModeVideoAudio
 }
 
+func progressFraction(p models.ProgressInfo) (float64, bool) {
+	if p.TotalBytes > 0 && p.DownloadedBytes >= 0 {
+		return clampProgress(float64(p.DownloadedBytes) / float64(p.TotalBytes)), true
+	}
+	if p.Percent > 0 {
+		return clampProgress(p.Percent / 100), true
+	}
+	return 0, false
+}
+
+func taskProgressFraction(state models.DownloadState, p models.ProgressInfo) (float64, bool) {
+	if state == models.StateProcessing {
+		return 0, false
+	}
+	return progressFraction(p)
+}
+
+func progressPercent(p models.ProgressInfo) float64 {
+	if fraction, ok := progressFraction(p); ok {
+		return fraction * 100
+	}
+	return 0
+}
+
+func clampProgress(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
+}
+
 func downloadMetrics(p models.ProgressInfo) string {
-	parts := []string{fmt.Sprintf("%.1f%%", p.Percent)}
+	parts := make([]string, 0, 4)
+	if _, ok := progressFraction(p); ok {
+		parts = append(parts, fmt.Sprintf("%.1f%%", progressPercent(p)))
+	}
 	if p.TotalBytes > 0 {
-		parts = append(parts, formatBytes(p.DownloadedBytes)+" / "+formatBytes(p.TotalBytes))
+		total := formatBytes(p.TotalBytes)
+		if p.TotalIsEstimate {
+			total = "~" + total
+		}
+		parts = append(parts, formatBytes(p.DownloadedBytes)+" / "+total)
 	} else {
 		parts = append(parts, formatBytes(p.DownloadedBytes))
 	}
