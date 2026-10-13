@@ -152,15 +152,16 @@ func TestBuildDownloadArgsAudioSelectionModes(t *testing.T) {
 
 func TestBuildDownloadArgsSubtitleSelectionModes(t *testing.T) {
 	tests := []struct {
-		name      string
-		selection models.SubtitleSelectionMode
-		write     bool
-		langs     []string
-		wantWrite bool
-		wantLangs string
-		wantSleep bool
-		wantRetry bool
-		wantClean bool
+		name       string
+		selection  models.SubtitleSelectionMode
+		write      bool
+		langs      []string
+		wantWrite  bool
+		wantLangs  string
+		wantSleep  bool
+		wantRetry  bool
+		wantClean  bool
+		wantIgnore bool
 	}{
 		{
 			name:      "none disables legacy subtitle switch",
@@ -168,23 +169,25 @@ func TestBuildDownloadArgsSubtitleSelectionModes(t *testing.T) {
 			write:     true,
 		},
 		{
-			name:      "all writes every language",
-			selection: models.SubtitleSelectionAll,
-			wantWrite: true,
-			wantLangs: "all,-live_chat",
-			wantSleep: true,
-			wantRetry: true,
-			wantClean: true,
+			name:       "all writes every language",
+			selection:  models.SubtitleSelectionAll,
+			wantWrite:  true,
+			wantLangs:  "all,-live_chat",
+			wantSleep:  true,
+			wantRetry:  true,
+			wantClean:  true,
+			wantIgnore: true,
 		},
 		{
-			name:      "custom writes selected languages",
-			selection: models.SubtitleSelectionCustom,
-			langs:     []string{"en", "de"},
-			wantWrite: true,
-			wantLangs: "en,de",
-			wantSleep: true,
-			wantRetry: true,
-			wantClean: true,
+			name:       "custom writes selected languages",
+			selection:  models.SubtitleSelectionCustom,
+			langs:      []string{"en", "de"},
+			wantWrite:  true,
+			wantLangs:  "en,de",
+			wantSleep:  true,
+			wantRetry:  true,
+			wantClean:  true,
+			wantIgnore: true,
 		},
 	}
 
@@ -222,6 +225,9 @@ func TestBuildDownloadArgsSubtitleSelectionModes(t *testing.T) {
 			}
 			if tt.wantClean && argumentValue(args, "--compat-options") != "no-keep-subs" {
 				t.Fatalf("subtitle cleanup option value = %q, want %q", argumentValue(args, "--compat-options"), "no-keep-subs")
+			}
+			if got := hasArgument(args, "--ignore-errors"); got != tt.wantIgnore {
+				t.Fatalf("subtitle error handling = %t, want %t", got, tt.wantIgnore)
 			}
 		})
 	}
@@ -263,7 +269,7 @@ func TestBuildDownloadArgsEmptyCustomSubtitleSelectionDisablesSubtitleOptions(t 
 	}
 
 	args := testYtDlpService().buildDownloadArgs(req)
-	for _, name := range []string{"--write-subs", "--write-auto-subs", "--embed-subs", "--compat-options", "--sleep-subtitles", "--retry-sleep", "--sub-langs"} {
+	for _, name := range []string{"--write-subs", "--write-auto-subs", "--embed-subs", "--compat-options", "--sleep-subtitles", "--retry-sleep", "--ignore-errors", "--sub-langs"} {
 		if hasArgument(args, name) {
 			t.Fatalf("empty custom subtitle selection unexpectedly includes %s", name)
 		}
@@ -279,7 +285,7 @@ func TestBuildDownloadArgsAudioOnlyDisablesSubtitleOptions(t *testing.T) {
 	}
 
 	args := testYtDlpService().buildDownloadArgs(req)
-	for _, name := range []string{"--write-subs", "--write-auto-subs", "--embed-subs", "--compat-options", "--sleep-subtitles", "--retry-sleep", "--sub-langs"} {
+	for _, name := range []string{"--write-subs", "--write-auto-subs", "--embed-subs", "--compat-options", "--sleep-subtitles", "--retry-sleep", "--ignore-errors", "--sub-langs"} {
 		if hasArgument(args, name) {
 			t.Fatalf("audio-only download unexpectedly includes %s", name)
 		}

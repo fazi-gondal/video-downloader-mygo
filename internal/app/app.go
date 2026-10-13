@@ -819,6 +819,9 @@ func (a *App) downloadsPage(c *ui.Context) {
 			if task.State == models.StateError && task.Error != "" {
 				ui.Text(c, task.Error).FontSize(11).TextColor(t.Danger)
 			}
+			if task.ErrorDetail != "" {
+				ui.Text(c, task.ErrorDetail).FontSize(11).TextColor(t.Warning)
+			}
 			ui.Row(c).Gap(6).Children(func() {
 				if !task.State.IsTerminal() {
 					if ui.Button(c.Key("cancel-"+task.ID), "Cancel").Clicked() {

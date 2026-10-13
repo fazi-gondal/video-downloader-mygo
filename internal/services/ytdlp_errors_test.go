@@ -89,3 +89,52 @@ func TestYtDlpErrorMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestYtDlpSubtitleErrorClassification(t *testing.T) {
+	tests := []struct {
+		name          string
+		stderr        string
+		onlySubtitles bool
+		wantWarning   bool
+	}{
+		{
+			name:          "blocked subtitle language is tolerated",
+			stderr:        "ERROR: [youtube] ur: Unable to download video subtitles for 'ur': HTTP Error 429: Too Many Requests",
+			onlySubtitles: true,
+			wantWarning:   true,
+		},
+		{
+			name:          "yt-dlp ignored subtitle error remains visible",
+			stderr:        "WARNING: [youtube] ur: Unable to download video subtitles for 'ur': HTTP Error 429: Too Many Requests",
+			onlySubtitles: true,
+			wantWarning:   true,
+		},
+		{
+			name:        "ignored media failure remains fatal",
+			stderr:      "WARNING: [youtube] Unable to download video data: HTTP Error 403: Forbidden",
+			wantWarning: false,
+		},
+		{
+			name: "subtitle and media failures are not tolerated together",
+			stderr: "ERROR: [youtube] ur: Unable to download video subtitles for 'ur': HTTP Error 429: Too Many Requests\n" +
+				"ERROR: [youtube] Unable to download video data: HTTP Error 403: Forbidden",
+			wantWarning: true,
+		},
+		{
+			name:   "media failure is not classified as a subtitle failure",
+			stderr: "ERROR: [youtube] Unable to download video data: HTTP Error 429: Too Many Requests",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ytDlpOnlySubtitleErrors(tt.stderr); got != tt.onlySubtitles {
+				t.Fatalf("ytDlpOnlySubtitleErrors() = %t, want %t", got, tt.onlySubtitles)
+			}
+			warning := ytDlpSubtitleWarning(tt.stderr)
+			if (warning != "") != tt.wantWarning {
+				t.Fatalf("ytDlpSubtitleWarning() = %q, want warning %t", warning, tt.wantWarning)
+			}
+		})
+	}
+}

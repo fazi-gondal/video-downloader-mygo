@@ -98,6 +98,7 @@ func (s *YtDlpService) fetchFormatsArgs(url string) []string {
 func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, onProgress func(models.ProgressInfo)) (string, error) {
 	req := task.Request
 	args := s.buildDownloadArgs(req)
+	subtitleErrorsIgnored := subtitleDownloadEnabled(req, s.settings())
 
 	// Progress template that we can parse.
 	args = append(args,
@@ -149,15 +150,27 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		}
 	}
 
-	// drain stderr for error messages
+	// Drain stderr for error messages. yt-dlp is allowed to continue past
+	// subtitle failures, but only subtitle failures; media and post-processing
+	// errors must still fail the task below.
 	errBuf := new(bytes.Buffer)
 	_, _ = errBuf.ReadFrom(stderr)
+	stderrText := errBuf.String()
 
-	if err := cmd.Wait(); err != nil {
+	waitErr := cmd.Wait()
+	if waitErr != nil {
 		if task.Cancelled() {
 			return "", context.Canceled
 		}
-		return "", fmt.Errorf("%s", ytDlpErrorMessage(errBuf.String(), err))
+		if !subtitleErrorsIgnored || !ytDlpOnlySubtitleErrors(stderrText) {
+			return "", fmt.Errorf("%s", ytDlpErrorMessage(stderrText, waitErr))
+		}
+	}
+	if subtitleErrorsIgnored {
+		if nonSubtitleErrors := ytDlpNonSubtitleErrorLines(stderrText); len(nonSubtitleErrors) > 0 {
+			return "", fmt.Errorf("%s", ytDlpErrorMessage(stderrText, waitErr))
+		}
+		task.ErrorDetail = ytDlpSubtitleWarning(stderrText)
 	}
 
 	if lastPath == "" {
@@ -165,6 +178,14 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		lastPath = newestFile(req.OutputDir)
 	}
 	return lastPath, nil
+}
+
+func subtitleDownloadEnabled(req models.DownloadRequest, settings config.AppSettings) bool {
+	if req.Mode == models.ModeAudioOnly {
+		return false
+	}
+	selection, _ := subtitleSelection(req, settings)
+	return selection != models.SubtitleSelectionNone
 }
 
 func (s *YtDlpService) baseArgs() []string {
@@ -250,6 +271,10 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 				"--compat-options", "no-keep-subs",
 				"--sleep-subtitles", "5",
 				"--retry-sleep", "http:exp=5:60",
+				// Subtitle servers can reject one language while the selected
+				// media streams remain downloadable. The service validates stderr
+				// after yt-dlp exits so this does not mask media failures.
+				"--ignore-errors",
 			)
 			if subtitleMode == models.SubtitleSelectionAll {
 				args = append(args, "--sub-langs", "all,-live_chat")

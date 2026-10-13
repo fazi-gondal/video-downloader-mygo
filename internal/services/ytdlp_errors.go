@@ -42,10 +42,78 @@ func ytDlpFatalErrorLines(stderr string) []string {
 func ytDlpSubtitleRateLimit(fatalLines []string) bool {
 	for _, line := range fatalLines {
 		lower := strings.ToLower(line)
-		if strings.Contains(lower, "unable to download subtitles") &&
+		if isYtDlpSubtitleError(lower) &&
 			(strings.Contains(lower, "http error 429") || strings.Contains(lower, "http 429")) {
 			return true
 		}
 	}
 	return false
+}
+
+func ytDlpSubtitleErrorLines(stderr string) []string {
+	var subtitleLines []string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && isYtDlpSubtitleError(strings.ToLower(line)) {
+			subtitleLines = append(subtitleLines, line)
+		}
+	}
+	return subtitleLines
+}
+
+func ytDlpNonSubtitleErrorLines(stderr string) []string {
+	var nonSubtitleLines []string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if !ytDlpFailureDiagnostic(line) {
+			continue
+		}
+		if !isYtDlpSubtitleError(strings.ToLower(line)) {
+			nonSubtitleLines = append(nonSubtitleLines, line)
+		}
+	}
+	return nonSubtitleLines
+}
+
+func ytDlpOnlySubtitleErrors(stderr string) bool {
+	var subtitleLines []string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if ytDlpFailureDiagnostic(line) && isYtDlpSubtitleError(strings.ToLower(line)) {
+			subtitleLines = append(subtitleLines, line)
+		}
+	}
+	return len(subtitleLines) > 0 && len(ytDlpNonSubtitleErrorLines(stderr)) == 0
+}
+
+func ytDlpFailureDiagnostic(line string) bool {
+	upper := strings.ToUpper(line)
+	if strings.HasPrefix(upper, "ERROR:") {
+		return true
+	}
+	if !strings.HasPrefix(upper, "WARNING:") {
+		return false
+	}
+	lower := strings.ToLower(line)
+	return strings.Contains(lower, "unable to download") ||
+		strings.Contains(lower, "download failed") ||
+		strings.Contains(lower, "post-process") ||
+		strings.Contains(lower, "merging formats")
+}
+
+func ytDlpSubtitleWarning(stderr string) string {
+	subtitleLines := ytDlpSubtitleErrorLines(stderr)
+	if len(subtitleLines) == 0 {
+		return ""
+	}
+
+	message := "Video/audio download completed, but one or more subtitles could not be downloaded. Retry later or select fewer subtitle languages."
+	if ytDlpSubtitleRateLimit(subtitleLines) {
+		message = subtitleRateLimitExplanation
+	}
+	return message + "\n\n" + strings.Join(subtitleLines, "\n")
+}
+
+func isYtDlpSubtitleError(lowerLine string) bool {
+	return strings.Contains(lowerLine, "unable to download") && strings.Contains(lowerLine, "subtitle")
 }
