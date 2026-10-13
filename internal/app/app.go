@@ -585,9 +585,6 @@ func (a *App) subtitleControls(c *ui.Context) {
 				for _, lang := range langs {
 					on := checkboxState(a.selectedSubtitle, lang)
 					label := languageDisplayName(lang)
-					if label != lang {
-						label += " (" + lang + ")"
-					}
 					ui.Checkbox(c.Key("sub-"+lang), on, label)
 				}
 			})
@@ -1173,6 +1170,34 @@ func checkboxState(states map[string]*bool, key string) *bool {
 	return state
 }
 
+// languageNames is presentation-only. Subtitle selections continue to use
+// the original yt-dlp language code as their map key and request value.
+var languageNames = map[string]string{
+	"af": "Afrikaans", "am": "Amharic", "ar": "Arabic", "az": "Azerbaijani",
+	"be": "Belarusian", "bg": "Bulgarian", "bn": "Bengali", "bs": "Bosnian",
+	"ca": "Catalan", "cs": "Czech", "cy": "Welsh", "da": "Danish",
+	"de": "German", "el": "Greek", "en": "English", "eo": "Esperanto",
+	"es": "Spanish", "et": "Estonian", "eu": "Basque", "fa": "Persian",
+	"fi": "Finnish", "fil": "Filipino", "fr": "French", "ga": "Irish",
+	"gl": "Galician", "gu": "Gujarati", "he": "Hebrew", "hi": "Hindi",
+	"hr": "Croatian", "hu": "Hungarian", "hy": "Armenian", "id": "Indonesian",
+	"is": "Icelandic", "it": "Italian", "ja": "Japanese", "jv": "Javanese",
+	"ka": "Georgian", "kk": "Kazakh", "km": "Khmer", "kn": "Kannada",
+	"ko": "Korean", "ky": "Kyrgyz", "lo": "Lao", "lt": "Lithuanian",
+	"lv": "Latvian", "mk": "Macedonian", "ml": "Malayalam", "mn": "Mongolian",
+	"mr": "Marathi", "ms": "Malay", "my": "Burmese", "nb": "Norwegian Bokmål",
+	"ne": "Nepali", "nl": "Dutch", "nn": "Norwegian Nynorsk", "no": "Norwegian",
+	"pa": "Punjabi", "pl": "Polish", "ps": "Pashto", "pt": "Portuguese",
+	"ro": "Romanian", "ru": "Russian", "si": "Sinhala", "sk": "Slovak",
+	"sl": "Slovenian", "sq": "Albanian", "sr": "Serbian", "sv": "Swedish",
+	"sw": "Swahili", "ta": "Tamil", "te": "Telugu", "tg": "Tajik",
+	"th": "Thai", "tk": "Turkmen", "tl": "Tagalog", "tr": "Turkish",
+	"uk": "Ukrainian", "ur": "Urdu", "uz": "Uzbek", "vi": "Vietnamese",
+	"zh": "Chinese", "zu": "Zulu",
+	// yt-dlp and older metadata sometimes use these legacy ISO 639 aliases.
+	"in": "Indonesian", "iw": "Hebrew", "jw": "Javanese",
+}
+
 func languageDisplayName(language string) string {
 	if language == "" {
 		return ""
@@ -1181,22 +1206,13 @@ func languageDisplayName(language string) string {
 		return r == '-' || r == '_'
 	})
 	if len(parts) == 0 {
-		return language
+		return "Unknown language"
 	}
 	base := strings.ToLower(parts[0])
-	names := map[string]string{
-		"ar": "Arabic", "bn": "Bengali", "de": "German", "en": "English",
-		"es": "Spanish", "fa": "Persian", "fr": "French", "gu": "Gujarati",
-		"hi": "Hindi", "id": "Indonesian", "it": "Italian", "ja": "Japanese",
-		"ko": "Korean", "mr": "Marathi", "ne": "Nepali", "nl": "Dutch",
-		"pa": "Punjabi", "pl": "Polish", "pt": "Portuguese", "ru": "Russian",
-		"ta": "Tamil", "te": "Telugu", "tr": "Turkish", "ur": "Urdu",
-		"vi": "Vietnamese", "zh": "Chinese",
-	}
-	if name, ok := names[base]; ok {
+	if name, ok := languageNames[base]; ok {
 		return name
 	}
-	return language
+	return "Unknown language"
 }
 
 func subtitleModeFromSettings(settings config.AppSettings) string {
@@ -1215,16 +1231,24 @@ func subtitleLanguages(m *models.MediaInfo) []string {
 	if m == nil {
 		return nil
 	}
-	seen := make(map[string]bool, len(m.Subtitles)+len(m.AutomaticCaptions))
-	for lang := range m.Subtitles {
-		if lang != "" {
+	// Return codes, not display labels: the codes are used unchanged when the
+	// download request is converted to --sub-langs. Prefer creator-provided
+	// subtitles so the picker does not expand into every auto-translation that
+	// a video service exposes. Fall back to automatic captions only when there
+	// are no creator-provided tracks.
+	seen := make(map[string]bool, len(m.Subtitles))
+	addAvailable := func(source map[string][]models.SubtitleTrack) {
+		for lang, tracks := range source {
+			lang = strings.TrimSpace(lang)
+			if lang == "" || strings.EqualFold(lang, "live_chat") || len(tracks) == 0 {
+				continue
+			}
 			seen[lang] = true
 		}
 	}
-	for lang := range m.AutomaticCaptions {
-		if lang != "" {
-			seen[lang] = true
-		}
+	addAvailable(m.Subtitles)
+	if len(seen) == 0 {
+		addAvailable(m.AutomaticCaptions)
 	}
 	langs := make([]string, 0, len(seen))
 	for lang := range seen {

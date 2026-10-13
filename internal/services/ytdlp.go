@@ -586,9 +586,16 @@ func parseSubs(raw any, dest map[string][]models.SubtitleTrack) {
 		return
 	}
 	for lang, list := range m {
+		lang = strings.TrimSpace(lang)
+		if lang == "" {
+			continue
+		}
 		arr, _ := list.([]any)
 		for _, item := range arr {
-			sm, _ := item.(map[string]any)
+			sm, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
 			st := models.SubtitleTrack{Lang: lang}
 			st.Name, _ = sm["name"].(string)
 			st.Ext, _ = sm["ext"].(string)

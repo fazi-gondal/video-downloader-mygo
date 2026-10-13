@@ -363,6 +363,40 @@ func TestParseMediaKeepsBestAudioFormatPerLanguage(t *testing.T) {
 	}
 }
 
+func TestParseMediaKeepsAvailableSubtitleLanguageCodes(t *testing.T) {
+	raw := map[string]any{
+		"subtitles": map[string]any{
+			" en ": []any{
+				map[string]any{"ext": "vtt", "url": "https://example.test/en"},
+			},
+			"de": []any{
+				map[string]any{"ext": "vtt", "url": "https://example.test/de"},
+			},
+			"empty": []any{},
+			"":      []any{map[string]any{"ext": "vtt"}},
+		},
+		"automatic_captions": map[string]any{
+			"hi": []any{
+				map[string]any{"ext": "vtt", "url": "https://example.test/hi"},
+			},
+		},
+	}
+
+	media := parseMedia(raw, "https://example.test/video")
+	if _, ok := media.Subtitles[" en "]; ok {
+		t.Fatal("subtitle language code retained surrounding whitespace")
+	}
+	if len(media.Subtitles["en"]) != 1 || media.Subtitles["en"][0].Lang != "en" {
+		t.Fatalf("parsed English subtitles = %#v, want one track retaining code en", media.Subtitles["en"])
+	}
+	if len(media.Subtitles["de"]) != 1 || media.Subtitles["de"][0].Lang != "de" {
+		t.Fatalf("parsed German subtitles = %#v, want one track retaining code de", media.Subtitles["de"])
+	}
+	if len(media.AutomaticCaptions["hi"]) != 1 || media.AutomaticCaptions["hi"][0].Lang != "hi" {
+		t.Fatalf("parsed Hindi captions = %#v, want one track retaining code hi", media.AutomaticCaptions["hi"])
+	}
+}
+
 func testYtDlpService() *YtDlpService {
 	return &YtDlpService{settings: func() config.AppSettings { return config.AppSettings{} }}
 }
