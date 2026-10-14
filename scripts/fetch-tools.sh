@@ -56,18 +56,69 @@ chmod_bin() {
 
 # --- yt-dlp (single-file binaries from GitHub releases) ---
 # https://github.com/yt-dlp/yt-dlp/releases
-ytdlp_url() {
+ytdlp_asset_name() {
   local plat="$1"
-  local base="https://github.com/yt-dlp/yt-dlp/releases/${YTDLP_TAG}/download"
   case "$plat" in
-    windows-amd64) echo "$base/yt-dlp.exe" ;;
-    windows-arm64) echo "$base/yt-dlp_arm64.exe" ;;
-    linux-amd64)   echo "$base/yt-dlp_linux" ;;
-    linux-arm64)   echo "$base/yt-dlp_linux_aarch64" ;;
-    darwin-amd64)  echo "$base/yt-dlp_macos" ;;
-    darwin-arm64)  echo "$base/yt-dlp_macos" ;; # universal-ish; arm works with macos build
+    windows-amd64) echo "yt-dlp.exe" ;;
+    windows-arm64) echo "yt-dlp_arm64.exe" ;;
+    linux-amd64)   echo "yt-dlp_linux" ;;
+    linux-arm64)   echo "yt-dlp_linux_aarch64" ;;
+    darwin-amd64)  echo "yt-dlp_macos" ;;
+    darwin-arm64)  echo "yt-dlp_macos" ;; # universal-ish; arm works with macos build
     *) echo ""; return 1 ;;
   esac
+}
+
+download_ytdlp() {
+  local plat="$1" dest="$2"
+  local asset
+  asset="$(ytdlp_asset_name "$plat" || true)"
+  if [ -z "$asset" ]; then
+    echo "  (skip yt-dlp — no asset defined for $plat)"
+    return 0
+  fi
+
+  local preferred_tag="${YTDLP_TAG:-2026.08.19}"
+  local tmp="${dest}.download"
+
+  download_asset() {
+    local tag="$1"
+    local url="https://github.com/yt-dlp/yt-dlp/releases/download/${tag}/${asset}"
+    echo "  Attempting to download ${url} ..."
+    curl -fL --retry 3 --retry-delay 5 -o "$tmp" "$url"
+  }
+
+  echo "  Downloading yt-dlp (preferred tag: ${preferred_tag})"
+  if download_asset "$preferred_tag"; then
+    echo "  Downloaded yt-dlp from tag ${preferred_tag}"
+    local expected_hash="${YTDLP_SHA256:-$(ytdlp_sha256 "$plat")}"
+    if [ -n "$expected_hash" ]; then
+      verify_sha256 "$tmp" "$expected_hash"
+    fi
+  else
+    echo "  Failed to download yt-dlp for tag ${preferred_tag}; trying latest release..."
+    local latest_tag=""
+    latest_tag="$(curl -sS https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest \
+                  | grep -m1 '"tag_name":' \
+                  | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+
+    if [ -z "$latest_tag" ]; then
+      echo "  ERROR: Could not determine latest tag from GitHub API" >&2
+      return 1
+    fi
+
+    echo "  Latest tag is ${latest_tag}; attempting download..."
+    if download_asset "$latest_tag"; then
+      echo "  Downloaded yt-dlp from latest release (${latest_tag})"
+      echo "  (Skipping hardcoded SHA-256 check because tag ${latest_tag} != pinned ${preferred_tag})"
+    else
+      echo "  ERROR: Failed to download yt-dlp from latest release ${latest_tag}" >&2
+      return 1
+    fi
+  fi
+
+  mv -f "$tmp" "$dest"
+  chmod_bin "$dest"
 }
 
 ytdlp_sha256() {
@@ -145,19 +196,9 @@ install_platform() {
   echo "==> $plat → $dir"
 
   # yt-dlp
-  local yu
-  yu="$(ytdlp_url "$plat" || true)"
-	if [ -n "$yu" ]; then
-		local yname="yt-dlp"
-		case "$plat" in windows-*) yname="yt-dlp.exe" ;; esac
-		local ytmp="$dir/.${yname}.download"
-		fetch "$yu" "$ytmp"
-		verify_sha256 "$ytmp" "${YTDLP_SHA256:-$(ytdlp_sha256 "$plat")}"
-		mv -f "$ytmp" "$dir/$yname"
-		chmod_bin "$dir/$yname"
-  else
-    echo "  (skip yt-dlp — no URL for $plat)"
-  fi
+  local yname="yt-dlp"
+  case "$plat" in windows-*) yname="yt-dlp.exe" ;; esac
+  download_ytdlp "$plat" "$dir/$yname"
 
   # ffmpeg
   case "$plat" in
