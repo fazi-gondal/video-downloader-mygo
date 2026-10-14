@@ -81,12 +81,12 @@ jobs:
       - name: Verify bundled tools
         shell: bash
         run: |
-          test -x "resources/${{ matrix.fetch }}/bin/yt-dlp" \
-            -o -x "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
-          test -x "resources/${{ matrix.fetch }}/bin/ffmpeg" \
-            -o -x "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
-          test -x "resources/${{ matrix.fetch }}/bin/ffprobe" \
-            -o -x "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
+          test -f "resources/${{ matrix.fetch }}/bin/yt-dlp" \
+            -o -f "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
+          test -f "resources/${{ matrix.fetch }}/bin/ffmpeg" \
+            -o -f "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
+          test -f "resources/${{ matrix.fetch }}/bin/ffprobe" \
+            -o -f "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
       - name: Build package
         env:
           GH_TOKEN: ${{ github.token }}

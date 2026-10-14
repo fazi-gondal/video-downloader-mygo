@@ -48,10 +48,7 @@ verify_sha256() {
 chmod_bin() {
   local f="$1"
   [ -f "$f" ] || return 0
-  case "$f" in
-    *.exe) ;;
-    *) chmod +x "$f" ;;
-  esac
+  chmod +x "$f"
 }
 
 # --- yt-dlp (single-file binaries from GitHub releases) ---
