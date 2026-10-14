@@ -218,7 +218,7 @@ install_platform() {
 
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  trap 'rm -rf "${tmp:-}"' RETURN
 
 	case "$fu" in
 		*.zip)
@@ -254,6 +254,8 @@ install_platform() {
     cp -f "$fp" "$dir/$fpname"
     chmod_bin "$dir/$fpname"
   fi
+  rm -rf "${tmp:-}"
+  trap - RETURN
   echo "  ok: $(ls -1 "$dir")"
 }
 

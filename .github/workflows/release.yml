@@ -90,7 +90,7 @@ jobs:
       - name: Build package
         env:
           GH_TOKEN: ${{ github.token }}
-          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          # MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
           CGO_ENABLED: "0"
         run: go tool mygo build -platform "${{ matrix.platform }}"
       - name: Upload package assets to draft release
