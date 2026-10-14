@@ -83,10 +83,9 @@ ytdlp_sha256() {
 }
 
 # --- ffmpeg static builds ---
-# Windows/Linux: BtbN/FFmpeg-Builds  https://github.com/BtbN/FFmpeg-Builds/releases
-# macOS: evermeet.cx style is x86-only; use osxexperts or homebrew-export —
-#   for CI we use https://github.com/eugeneware/ffmpeg-static style mirrors or
-#   https://github.com/yt-dlp/FFmpeg-Builds
+# Windows/Linux: yt-dlp/FFmpeg-Builds
+# macOS: Homebrew's verified ffmpeg bottle on a runner matching the target
+# architecture. The yt-dlp build repository does not publish macOS archives.
 #
 # Practical approach: yt-dlp's recommended static builds
 # https://github.com/yt-dlp/FFmpeg-Builds/releases
@@ -99,10 +98,7 @@ ffmpeg_archive_url() {
     windows-arm64) echo "$base/ffmpeg-master-latest-winarm64-gpl.zip" ;;
     linux-amd64)   echo "$base/ffmpeg-master-latest-linux64-gpl.tar.xz" ;;
     linux-arm64)   echo "$base/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" ;;
-    # macOS: no official yt-dlp FFmpeg-Builds for darwin in all tags; use evermeet for amd64
-    # and leave arm64 to PATH/homebrew on Mac runners, or skip bundling
-    darwin-amd64)  echo "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip" ;;
-    darwin-arm64)  echo "" ;; # prefer system/Homebrew on Apple silicon unless you host your own
+    darwin-amd64|darwin-arm64) echo "" ;; # installed from a verified Homebrew bottle
     *) echo ""; return 1 ;;
   esac
 }
@@ -110,12 +106,36 @@ ffmpeg_archive_url() {
 ffmpeg_sha256() {
 	local plat="$1"
 	case "$plat" in
-		windows-amd64) echo "549f730b6ca62f5c7d099241e37e6aaa8f66fc2fecb1dc3219802788e0ff4e43" ;;
-		windows-arm64) echo "71eaa76f74762f79b5b7e7a7680fc0572b42b8c5f103ffb34fce10e23820eb68" ;;
-		linux-amd64)   echo "d80181ebe334add8c17b17d73e5291241e6ea243dd8eaf524d58be1b6e34f770" ;;
-		linux-arm64)   echo "2a17294e25d01f3742eaed9d1ae3658e165341894d265793189cd7eccef6573c" ;;
-		*) echo "" ;;
-	esac
+        windows-amd64) echo "dfb89d02948f94b77a89c218e6abbb16032c19a329da972886f9029b82b229e0" ;;
+        windows-arm64) echo "4ad7d4e3e842cd6eeeee9ffac696e34c0b0b6768c209190c931027ec81325b8e" ;;
+        linux-amd64)   echo "9b1136f703bb207d7653a6504ae8dce135fec41ec9fb61eb9117d2fc2dd98d16" ;;
+        linux-arm64)   echo "298b31e41cc11627ddcccd815dc74dc04c99ebb3a45916e23bbda5ea80699a83" ;;
+        *) echo "" ;;
+    esac
+}
+
+install_macos_ffmpeg() {
+  local plat="$1"
+  local dir="$RES/$plat/bin"
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "  ERROR: brew is required to bundle FFmpeg for $plat" >&2
+    return 1
+  fi
+
+  # Homebrew verifies the bottle checksum before installing it. The runner
+  # must match the target architecture (macos-13 for amd64, macos-latest for
+  # arm64); otherwise an incompatible executable could be packaged silently.
+  brew install --formula ffmpeg
+  local prefix
+  prefix="$(brew --prefix ffmpeg)"
+  [ -x "$prefix/bin/ffmpeg" ] || { echo "  ERROR: brew ffmpeg missing" >&2; return 1; }
+  [ -x "$prefix/bin/ffprobe" ] || { echo "  ERROR: brew ffprobe missing" >&2; return 1; }
+  cp -f "$prefix/bin/ffmpeg" "$dir/ffmpeg"
+  cp -f "$prefix/bin/ffprobe" "$dir/ffprobe"
+  chmod +x "$dir/ffmpeg" "$dir/ffprobe"
+  echo "  ok: Homebrew FFmpeg $("$dir/ffmpeg" -version | awk 'NR==1 {print $3}')"
+  echo "  sha256: $(sha256 "$dir/ffmpeg")  ffmpeg"
+  echo "  sha256: $(sha256 "$dir/ffprobe")  ffprobe"
 }
 
 install_platform() {
@@ -140,6 +160,14 @@ install_platform() {
   fi
 
   # ffmpeg
+  case "$plat" in
+    darwin-amd64|darwin-arm64)
+      install_macos_ffmpeg "$plat"
+      echo "  ok: $(ls -1 "$dir")"
+      return 0
+      ;;
+  esac
+
   local fu
   fu="$(ffmpeg_archive_url "$plat" || true)"
   if [ -z "$fu" ]; then
@@ -209,10 +237,9 @@ main() {
   case "$target" in
     host) install_platform "$(host_plat)" ;;
     all)
-      for p in windows-amd64 windows-arm64 linux-amd64 linux-arm64 darwin-amd64; do
+      for p in windows-amd64 windows-arm64 linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
         install_platform "$p"
       done
-      echo "Note: darwin-arm64 ffmpeg is not auto-fetched; install via brew on Mac runners or host your own build."
       ;;
     *)
       install_platform "$target"

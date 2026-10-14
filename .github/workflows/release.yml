@@ -1,9 +1,5 @@
-# Multi-platform release for the native-UI MyGo app.
-# Trigger: push a version tag matching mygo.json (e.g. v2.0.0).
-#
-# Optional secrets (signing / auto-updates):
-#   MYGO_UPDATER_PRIVATE_KEY   contents of mygo-update.key
-#   MACOS_* / WINDOWS_*        see https://mygo.egoist.dev/docs/github-actions
+# Build and publish every native installer when the tag matches mygo.json.
+# See https://mygo.egoist.dev/docs/github-actions for signing and notarization.
 
 name: Release
 
@@ -14,16 +10,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   draft-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Check tag matches mygo.json version
-        run: |
-          ver="$(jq -r .version mygo.json)"
-          test "$GITHUB_REF_NAME" = "v${ver}" \
-            || (echo "Tag $GITHUB_REF_NAME != v${ver} from mygo.json" && exit 1)
+      - name: Check tag matches mygo.json
+        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version mygo.json)"
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -37,80 +35,95 @@ jobs:
     needs: draft-release
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Windows
+          - name: Windows amd64
             os: ubuntu-latest
             platform: windows/amd64
             fetch: windows-amd64
-          - name: Linux
+          - name: Windows arm64
+            os: ubuntu-latest
+            platform: windows/arm64
+            fetch: windows-arm64
+          - name: Linux amd64
             os: ubuntu-latest
             platform: linux/amd64
             fetch: linux-amd64
-          - name: macOS
+          - name: Linux arm64
+            os: ubuntu-latest
+            platform: linux/arm64
+            fetch: linux-arm64
+          # macOS helper binaries are installed by Homebrew on a runner with
+          # the same architecture as the package being produced.
+          - name: macOS amd64
+            os: macos-13
+            platform: darwin/amd64
+            fetch: darwin-amd64
+          - name: macOS arm64
             os: macos-latest
             platform: darwin/arm64
-            fetch: host
-
+            fetch: darwin-arm64
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-
-      - name: Install NSIS (Windows installers from Linux)
-        if: matrix.name == 'Windows'
-        run: sudo apt-get update && sudo apt-get install -y nsis unzip xz-utils
-
-      - name: Install extract tools (Linux row)
-        if: matrix.name == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y unzip xz-utils
-
-      - name: Fetch yt-dlp + ffmpeg into resources
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
         run: |
-          bash scripts/fetch-tools.sh "${{ matrix.fetch }}"
-          find resources -type f | head -40
-
-      - name: Build
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nsis unzip xz-utils
+      - name: Fetch verified bundled tools
+        run: bash scripts/fetch-tools.sh "${{ matrix.fetch }}"
+      - name: Verify bundled tools
+        shell: bash
+        run: |
+          test -x "resources/${{ matrix.fetch }}/bin/yt-dlp" \
+            -o -x "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
+          test -x "resources/${{ matrix.fetch }}/bin/ffmpeg" \
+            -o -x "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
+          test -x "resources/${{ matrix.fetch }}/bin/ffprobe" \
+            -o -x "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
+      - name: Build package
         env:
           GH_TOKEN: ${{ github.token }}
-          # MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
           CGO_ENABLED: "0"
-        run: |
-          go tool mygo build -platform "${{ matrix.platform }}"
-          echo "Artifacts:"
-          find build -type f | head -50
-
-      - name: Upload to draft release
+        run: go tool mygo build -platform "${{ matrix.platform }}"
+      - name: Upload package assets to draft release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          # Upload packaged installers, archives, Debian packages and the
-          # Linux installer script. Do not upload the raw build directory.
           assets=()
-          while IFS= read -r -d '' f; do
-            case "$f" in
-              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage|*/install.sh|install.sh) assets+=("$f") ;;
+          while IFS= read -r -d '' file; do
+            case "$file" in
+              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage|*/install.sh|install.sh)
+                assets+=("$file")
+                ;;
             esac
           done < <(find build -type f -print0)
 
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "ERROR: no release assets found under build/" >&2
+            find build -type f -print >&2
             exit 1
           fi
 
-          echo "Uploading: ${assets[*]}"
+          printf 'Uploading %s\n' "${assets[@]}"
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" --clobber
 
-  # Uncomment to auto-publish after all platforms succeed:
-  # publish:
-  #   needs: build
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - env:
-  #         GH_TOKEN: ${{ github.token }}
-  #       run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish release after every platform succeeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" \
+          --repo "$GITHUB_REPOSITORY" --draft=false

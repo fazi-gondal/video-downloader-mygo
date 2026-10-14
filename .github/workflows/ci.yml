@@ -5,9 +5,17 @@ on:
     branches: [main, master]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -17,11 +25,10 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
-      - name: Test
+      - name: Test with race detector
         env:
           CGO_ENABLED: "1"
-        run: |
-          go test -race ./... -count=1
+        run: go test -race ./... -count=1
       - name: Vet
         run: go vet ./...
       - name: Build native app
@@ -31,44 +38,81 @@ jobs:
 
   package:
     name: Package ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Windows
+          - name: Windows amd64
+            os: ubuntu-latest
             platform: windows/amd64
-            out: windows-amd64
             fetch: windows-amd64
-          - name: Linux
+            out: windows-amd64
+          - name: Windows arm64
+            os: ubuntu-latest
+            platform: windows/arm64
+            fetch: windows-arm64
+            out: windows-arm64
+          - name: Linux amd64
+            os: ubuntu-latest
             platform: linux/amd64
-            out: linux-amd64
             fetch: linux-amd64
+            out: linux-amd64
+          - name: Linux arm64
+            os: ubuntu-latest
+            platform: linux/arm64
+            fetch: linux-arm64
+            out: linux-arm64
+          - name: macOS amd64
+            os: macos-13
+            platform: darwin/amd64
+            fetch: darwin-amd64
+            out: darwin-amd64
+          - name: macOS arm64
+            os: macos-latest
+            platform: darwin/arm64
+            fetch: darwin-arm64
+            out: darwin-arm64
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Install packaging tools
+      - name: Install packaging tools on Linux
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y unzip xz-utils ${{ matrix.name == 'Windows' && 'nsis' || '' }}
+          sudo apt-get install -y --no-install-recommends nsis unzip xz-utils
       - name: Fetch bundled tools
         run: bash scripts/fetch-tools.sh "${{ matrix.fetch }}"
+      - name: Verify bundled tools
+        shell: bash
+        run: |
+          test -x "resources/${{ matrix.fetch }}/bin/yt-dlp" \
+            -o -x "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
+          test -x "resources/${{ matrix.fetch }}/bin/ffmpeg" \
+            -o -x "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
+          test -x "resources/${{ matrix.fetch }}/bin/ffprobe" \
+            -o -x "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
       - name: Build package
         env:
           CGO_ENABLED: "0"
-        run: go tool mygo build -platform "${{ matrix.platform }}" -skip-build-command
-      - name: Verify package contents
+        run: go tool mygo build -platform "${{ matrix.platform }}"
+      - name: Verify package output
         shell: bash
         run: |
-          test -n "$(find "build/${{ matrix.out }}" -type f -name 'yt-dlp*' -print -quit)"
-          test -n "$(find "build/${{ matrix.out }}" -type f -name 'ffmpeg*' -print -quit)"
-          if [ "${{ matrix.name }}" = "Windows" ]; then
-            test -f "build/windows-amd64/Video Downloader.exe"
-            test -n "$(find build/windows-amd64 -maxdepth 1 -type f -name '*Setup*.exe' -print -quit)"
-          else
-            test -n "$(find build/linux-amd64 -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
-            test -n "$(find build/linux-amd64 -maxdepth 1 -type f -name '*.deb' -print -quit)"
-            test -f build/linux-amd64/install.sh
-          fi
+          test -d "build/${{ matrix.out }}" || test -d build
+          case "${{ matrix.platform }}" in
+            windows/*)
+              test -n "$(find build -type f -name '*Setup*.exe' -print -quit)"
+              ;;
+            linux/*)
+              test -n "$(find build -type f -name '*.tar.gz' -print -quit)"
+              test -n "$(find build -type f -name '*.deb' -print -quit)"
+              test -n "$(find build -type f -name 'install.sh' -print -quit)"
+              ;;
+            darwin/*)
+              test -n "$(find build -type f -name '*.dmg' -print -quit)"
+              ;;
+          esac

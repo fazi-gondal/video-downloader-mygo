@@ -23,7 +23,17 @@ resources/
 │       ├── yt-dlp
 │       ├── ffmpeg
 │       └── ffprobe
-└── linux-arm64/
+├── linux-arm64/
+    └── bin/
+        ├── yt-dlp
+        ├── ffmpeg
+        └── ffprobe
+├── darwin-amd64/
+│   └── bin/
+│       ├── yt-dlp
+│       ├── ffmpeg
+│       └── ffprobe
+└── darwin-arm64/
     └── bin/
         ├── yt-dlp
         ├── ffmpeg
@@ -50,7 +60,8 @@ bash scripts/fetch-tools.sh linux-amd64
 The helper downloads:
 
 - yt-dlp release binaries from GitHub releases.
-- Static FFmpeg/FFprobe archives from `yt-dlp/FFmpeg-Builds`.
+- Static FFmpeg/FFprobe archives from `yt-dlp/FFmpeg-Builds` for Windows/Linux.
+- Architecture-matched FFmpeg/FFprobe from a verified Homebrew bottle for macOS.
 
 The helper requires `curl`, `unzip`, and `tar`/`xz` for the archive type. On Windows, run it from Git Bash or WSL; do not run this Bash script with Windows PowerShell directly.
 
@@ -70,7 +81,7 @@ YTDLP_TAG=2026.08.19 FFMPEG_RELEASE=latest \
   bash scripts/fetch-tools.sh linux-amd64
 ```
 
-The default values follow upstream moving release names. Use explicit release identifiers when reproducibility is required. The script currently does not maintain a checksum manifest; verify upstream assets before publishing a release.
+The Windows/Linux archive checksums are recorded in the script. The `latest` FFmpeg archive is accepted only while its recorded checksum matches; update the release name and checksum together when intentionally upgrading it. Homebrew verifies macOS bottle checksums as part of `brew install`.
 
 ## Runtime lookup order
 
@@ -95,7 +106,7 @@ On Windows, `.exe` is added automatically. On Unix-like systems, downloaded file
 
 MyGo selects platform-named resource directories during packaging. A Windows package receives Windows resources; a Linux package receives Linux resources. Do not copy every platform's binaries into one flat directory because that can cause the wrong executable to be shipped.
 
-The release workflow downloads the helpers immediately before packaging and uploads the resulting installers and archives. Local `go run` uses the platform-directory fallback, so local development can use the same layout without flattening it manually.
+The release workflow downloads the helpers immediately before packaging and uploads the resulting installers and archives. Local `go run` uses the platform-directory fallback, so local development can use the same layout without flattening it manually. macOS helper downloads must run on a runner or machine with the target architecture.
 
 ## Repository policy
 

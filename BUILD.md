@@ -63,7 +63,7 @@ The script writes to:
 resources/<platform>/bin/
 ```
 
-Supported target names currently include `windows-amd64`, `windows-arm64`, `linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64` where an upstream asset exists. The macOS arm64 FFmpeg URL is intentionally empty in the script and falls back to a system/Homebrew FFmpeg.
+Supported target names include `windows-amd64`, `windows-arm64`, `linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64`. Windows/Linux FFmpeg archives are verified against the recorded SHA-256 values. macOS uses a Homebrew bottle on a runner matching the target architecture (`macos-13` for amd64 and `macos-latest` for arm64); Homebrew verifies that bottle before installation.
 
 Optional environment variables:
 
@@ -156,9 +156,10 @@ Configure a `.pfx` certificate through the MyGo Windows configuration and provid
 
 1. Checks that the tag matches `mygo.json`.
 2. Creates a draft GitHub Release.
-3. Fetches helper tools for each platform row.
-4. Builds with `go tool mygo` and `CGO_ENABLED=0`.
-5. Uploads Windows installers, Linux packages/archives/install script, and macOS artifacts to the draft.
+3. Fetches verified helper tools for Windows/Linux and architecture-matched Homebrew FFmpeg for macOS.
+4. Builds Windows and Linux amd64/arm64 plus macOS amd64/arm64 with `go tool mygo` and `CGO_ENABLED=0`.
+5. Uploads Windows installers, Linux packages/archives/install script, and macOS disk images to the draft.
+6. Publishes the release only after every platform job succeeds.
 
 Required workflow permission:
 
