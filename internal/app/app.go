@@ -92,8 +92,8 @@ type App struct {
 	convKind   models.MediaKind
 	// convAudioBitrateKbps is used for lossy audio conversion targets.
 	convAudioBitrateKbps int
-	convJobs   []models.ConversionJobSnapshot
-	convJobsMu sync.Mutex
+	convJobs             []models.ConversionJobSnapshot
+	convJobsMu           sync.Mutex
 
 	historyEntries []services.HistoryEntry
 	historyLoaded  bool
@@ -124,32 +124,32 @@ func New() *App {
 	}
 	ffmpeg := services.NewFFmpegService()
 	a := &App{
-		settingsRepo:       repo,
-		settings:           settings,
-		ffmpeg:             ffmpeg,
-		page:               PageDashboard,
-		mode:               models.ModeVideoAudio,
-		maxHeight:          1080,
-		container:          "mp4",
-		preferredContainer: "mp4",
-		audioFormat:        "mp3",
-		audioTracksMode:    audioTracksNone,
-		subtitleMode:       subtitleModeNone,
-		convFormat:         "mp3",
-		convKind:           models.KindAudio,
+		settingsRepo:         repo,
+		settings:             settings,
+		ffmpeg:               ffmpeg,
+		page:                 PageDashboard,
+		mode:                 models.ModeVideoAudio,
+		maxHeight:            1080,
+		container:            "mp4",
+		preferredContainer:   "mp4",
+		audioFormat:          "mp3",
+		audioTracksMode:      audioTracksNone,
+		subtitleMode:         subtitleModeNone,
+		convFormat:           "mp3",
+		convKind:             models.KindAudio,
 		convAudioBitrateKbps: 320,
-		selectedEntries:    map[int]bool{},
-		selectedAudio:      map[string]*bool{},
-		selectedSubtitle:   map[string]*bool{},
-		sidebarOpen:        [2]bool{true, true},
-		formatsOpen:        false,
-		selectedVideoLabel: "Auto (best for resolution)",
-		selectedAudioLabel: "Auto (Opus / best)",
-		historyFilter:      "all",
-		settingsRateLimit:  strconv.Itoa(settings.RateLimitKbps),
-		thumbnails:         map[string]*ui.Bitmap{},
-		thumbnailLoading:   map[string]bool{},
-		thumbnailFailures:  map[string]bool{},
+		selectedEntries:      map[int]bool{},
+		selectedAudio:        map[string]*bool{},
+		selectedSubtitle:     map[string]*bool{},
+		sidebarOpen:          [2]bool{true, true},
+		formatsOpen:          false,
+		selectedVideoLabel:   "Auto (best for resolution)",
+		selectedAudioLabel:   "Auto (Opus / best)",
+		historyFilter:        "all",
+		settingsRateLimit:    strconv.Itoa(settings.RateLimitKbps),
+		thumbnails:           map[string]*ui.Bitmap{},
+		thumbnailLoading:     map[string]bool{},
+		thumbnailFailures:    map[string]bool{},
 	}
 	var headerLines []string
 	for key, value := range settings.CustomHeaders {
@@ -1998,7 +1998,7 @@ func (a *App) aboutPage(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 		ui.Text(c, "Video Downloader").FontSize(22).Bold()
-		ui.Text(c, "v2.0.0 · MyGo native UI").FontSize(13).TextColor(t.TextMuted)
+		ui.Text(c, "v2.1.0 · MyGo native UI").FontSize(13).TextColor(t.TextMuted)
 		ui.Text(c, "Rewritten from the Flet + Python original by Fazi Gondal").FontSize(13).TextColor(t.TextMuted)
 		ui.Text(c, "yt-dlp · FFmpeg · MyGo").FontSize(12).TextColor(t.TextMuted)
 	})

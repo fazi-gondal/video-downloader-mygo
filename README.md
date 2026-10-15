@@ -35,7 +35,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - URL analysis for individual videos and playlists through yt-dlp.
 - Video thumbnail loading with bounded, validated image decoding.
 - Human-readable media title, uploader, duration, extractor, audio-track, and subtitle information.
-- Playlist selection with select-all, select-none, per-entry selection, and batch progress.
+- Playlist selection with select-all, select-none, persistent per-entry checkboxes, and batch progress.
 - Lazy format loading so initial analysis can remain fast.
 
 ### Download configuration
