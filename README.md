@@ -107,7 +107,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 
 - Go **1.27.1** or a compatible Go 1.27 toolchain. The version is declared in `go.mod`.
 - Git.
-- MyGo CLI **v0.4.8**, pinned as a Go tool in `go.mod`.
+- MyGo CLI **v0.5.1**, pinned as a Go tool in `go.mod`.
 - A C compiler is not required for normal MyGo builds; CI sets `CGO_ENABLED=0`.
 
 ### Runtime requirements
@@ -397,7 +397,7 @@ The CI job uses the Go version from `go.mod`, does not modify dependencies, and 
 3. Create a matching tag, for example:
 
 ```bash
-git tag v2.0.0
+git tag v2.1.0
 ```
 
 The workflow checks that the tag matches `mygo.json`, downloads platform tools, uses the pinned MyGo CLI, builds Windows and Linux from Ubuntu, builds macOS from macOS, and uploads the generated artifacts to a draft GitHub release.

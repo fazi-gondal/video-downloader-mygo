@@ -6,7 +6,7 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 
 - Go 1.27.1, as declared in `go.mod`.
 - Git.
-- MyGo v0.4.8 through the pinned Go tool in `go.mod`.
+- MyGo v0.5.1 through the pinned Go tool in `go.mod`.
 - FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
 - A supported yt-dlp JavaScript runtime such as Deno on `PATH` for extractor
   workflows that require one; it is not bundled by the current release.
@@ -122,11 +122,11 @@ The platform directories are flattened/selected by MyGo during packaging. During
 
 - Application name: `Video Downloader`.
 - Identifier: `com.fazigondal.videodownloader`.
-- Version: `2.0.0`.
+- Version: `2.1.0`.
 - Output directory: `build`.
 - Linux maintainer metadata.
 
-When publishing a release, the Git tag must match the version: `mygo.json` version `2.0.0` requires tag `v2.0.0`.
+When publishing a release, the Git tag must match the version: `mygo.json` version `2.1.0` requires tag `v2.1.0`.
 
 ## Signing
 

@@ -5,7 +5,7 @@ Video Downloader for MyGo is a native Go desktop application for downloading and
 ## Stack
 
 - Go 1.27.1.
-- MyGo v0.4.8, pinned as `tool github.com/egoist/mygo/cmd/mygo` in `go.mod`.
+- MyGo v0.5.1, pinned as `tool github.com/egoist/mygo/cmd/mygo` in `go.mod`.
 - Native MyGo UI; no web frontend or Bun build.
 - yt-dlp for extraction/downloads.
 - FFmpeg and FFprobe for merge, remux, subtitle embedding, conversion, and probing.
