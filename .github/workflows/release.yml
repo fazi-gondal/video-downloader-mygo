@@ -56,12 +56,7 @@ jobs:
             os: ubuntu-latest
             platform: linux/arm64
             fetch: linux-arm64
-          # macOS helper binaries are installed by Homebrew on a runner with
-          # the same architecture as the package being produced.
-          - name: macOS amd64
-            os: macos-13
-            platform: darwin/amd64
-            fetch: darwin-amd64
+          # macOS helper binaries are installed by Homebrew on an Apple Silicon runner.
           - name: macOS arm64
             os: macos-latest
             platform: darwin/arm64
