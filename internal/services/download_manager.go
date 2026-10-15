@@ -187,6 +187,7 @@ func (m *DownloadManager) Cancel(id string) {
 	if task.StateValue() == models.StatePending {
 		task.SetState(models.StateCancelled)
 		m.emit(EventTaskState, task, nil)
+		m.emit(EventTaskFinished, task, nil)
 	}
 }
 
@@ -308,6 +309,7 @@ func (m *DownloadManager) Shutdown() {
 			if task.StateValue() == models.StatePending {
 				task.SetState(models.StateCancelled)
 				m.emit(EventTaskState, task, nil)
+				m.emit(EventTaskFinished, task, nil)
 			}
 		}
 		m.wg.Wait()
@@ -352,6 +354,7 @@ func (m *DownloadManager) worker() {
 				if !task.StateValue().IsTerminal() {
 					task.SetState(models.StateCancelled)
 					m.emit(EventTaskState, task, nil)
+					m.emit(EventTaskFinished, task, nil)
 				}
 				continue
 			}
@@ -360,6 +363,7 @@ func (m *DownloadManager) worker() {
 				if !task.StateValue().IsTerminal() {
 					task.SetState(models.StateCancelled)
 					m.emit(EventTaskState, task, nil)
+					m.emit(EventTaskFinished, task, nil)
 				}
 				continue
 			}

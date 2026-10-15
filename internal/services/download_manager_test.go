@@ -94,6 +94,40 @@ func TestDownloadManagerShutdownCancelsWorkAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestDownloadManagerCancelQueuedTaskEmitsFinished(t *testing.T) {
+	engine := &blockingDownloadEngine{started: make(chan struct{})}
+	manager := NewDownloadManager(&YtDlpService{}, 1)
+	manager.engine = engine
+	first, err := manager.EnqueueContext(context.Background(), models.DownloadRequest{URL: "running"})
+	if err != nil || first == nil {
+		t.Fatalf("first enqueue = (%v, %v)", first, err)
+	}
+	select {
+	case <-engine.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	queued, err := manager.EnqueueContext(context.Background(), models.DownloadRequest{URL: "queued"})
+	if err != nil || queued == nil {
+		t.Fatalf("queued enqueue = (%v, %v)", queued, err)
+	}
+	manager.Cancel(queued.ID)
+
+	foundFinished := false
+	deadline := time.After(time.Second)
+	for !foundFinished {
+		select {
+		case event := <-manager.Events():
+			if event.Kind == EventTaskFinished && event.Task != nil && event.Task.ID == queued.ID {
+				foundFinished = true
+			}
+		case <-deadline:
+			t.Fatal("queued cancellation did not emit a finished event")
+		}
+	}
+	manager.Shutdown()
+}
+
 func TestDownloadManagerResizesWorkerPool(t *testing.T) {
 	manager := NewDownloadManager(&YtDlpService{settings: func() config.AppSettings { return config.AppSettings{} }}, 1)
 	manager.engine = &blockingDownloadEngine{started: make(chan struct{})}
