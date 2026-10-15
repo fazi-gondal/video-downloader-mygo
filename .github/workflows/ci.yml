@@ -2,8 +2,8 @@ name: CI
 
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch:
+    branches: [main, master]
+  pull_request:
 
 permissions:
   contents: read
@@ -49,31 +49,31 @@ jobs:
             platform: windows/amd64
             fetch: windows-amd64
             out: windows-amd64
-          # - name: Windows arm64
-          #   os: ubuntu-latest
-          #   platform: windows/arm64
-          #   fetch: windows-arm64
-          #   out: windows-arm64
-          # - name: Linux amd64
-          #   os: ubuntu-latest
-          #   platform: linux/amd64
-          #   fetch: linux-amd64
-          #   out: linux-amd64
-          # - name: Linux arm64
-          #   os: ubuntu-latest
-          #   platform: linux/arm64
-          #   fetch: linux-arm64
-          #   out: linux-arm64
-          # - name: macOS amd64
-          #   os: macos-13
-          #   platform: darwin/amd64
-          #   fetch: darwin-amd64
-          #   out: darwin-amd64
-          # - name: macOS arm64
-          #   os: macos-latest
-          #   platform: darwin/arm64
-          #   fetch: darwin-arm64
-          #   out: darwin-arm64
+          - name: Windows arm64
+            os: ubuntu-latest
+            platform: windows/arm64
+            fetch: windows-arm64
+            out: windows-arm64
+          - name: Linux amd64
+            os: ubuntu-latest
+            platform: linux/amd64
+            fetch: linux-amd64
+            out: linux-amd64
+          - name: Linux arm64
+            os: ubuntu-latest
+            platform: linux/arm64
+            fetch: linux-arm64
+            out: linux-arm64
+          - name: macOS amd64
+            os: macos-13
+            platform: darwin/amd64
+            fetch: darwin-amd64
+            out: darwin-amd64
+          - name: macOS arm64
+            os: macos-latest
+            platform: darwin/arm64
+            fetch: darwin-arm64
+            out: darwin-arm64
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -89,12 +89,12 @@ jobs:
       - name: Verify bundled tools
         shell: bash
         run: |
-          test -f "resources/${{ matrix.fetch }}/bin/yt-dlp" \
-            -o -f "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
-          test -f "resources/${{ matrix.fetch }}/bin/ffmpeg" \
-            -o -f "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
-          test -f "resources/${{ matrix.fetch }}/bin/ffprobe" \
-            -o -f "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
+          test -x "resources/${{ matrix.fetch }}/bin/yt-dlp" \
+            -o -x "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
+          test -x "resources/${{ matrix.fetch }}/bin/ffmpeg" \
+            -o -x "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
+          test -x "resources/${{ matrix.fetch }}/bin/ffprobe" \
+            -o -x "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
       - name: Build package
         env:
           CGO_ENABLED: "0"

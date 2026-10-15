@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +27,47 @@ type YtDlpService struct {
 	ffmpegPath string
 	ytdlpPath  string
 	settings   func() config.AppSettings
+}
+
+const maxYtDlpDiagnosticBytes = 1 << 20
+
+type boundedDiagnosticBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *boundedDiagnosticBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+	if len(p) >= b.limit {
+		b.buf.Reset()
+		_, _ = b.buf.Write(p[len(p)-b.limit:])
+		b.truncated = true
+		return len(p), nil
+	}
+	if b.buf.Len()+len(p) > b.limit {
+		combined := make([]byte, 0, b.buf.Len()+len(p))
+		combined = append(combined, b.buf.Bytes()...)
+		combined = append(combined, p...)
+		combined = combined[len(combined)-b.limit:]
+		b.buf.Reset()
+		_, _ = b.buf.Write(combined)
+		b.truncated = true
+		return len(p), nil
+	}
+	_, _ = b.buf.Write(p)
+	return len(p), nil
+}
+
+func (b *boundedDiagnosticBuffer) String() string {
+	text := b.buf.String()
+	if b.truncated {
+		text += "\n[yt-dlp diagnostics truncated]"
+	}
+	return text
 }
 
 func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtDlpService {
@@ -97,11 +139,17 @@ func (s *YtDlpService) fetchFormatsArgs(url string) []string {
 // Download runs yt-dlp for a task and streams progress via the callback.
 // Returns the final output path.
 func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, onProgress func(models.ProgressInfo)) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	req := task.Request
 	args := s.downloadArgs(req)
-	subtitleErrorsIgnored := subtitleDownloadEnabled(req, s.settings())
+	settings := s.appSettings()
+	subtitleErrorsIgnored := subtitleDownloadEnabled(req, settings)
 
-	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, s.ytdlpPath, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -114,53 +162,98 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		return "", fmt.Errorf("start yt-dlp: %w", err)
 	}
 
-	var lastPath string
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		if task.Cancelled() {
+	// task cancellation is independent from the caller context, so bridge it
+	// into the command context and always reap the process below.
+	taskWatchDone := make(chan struct{})
+	taskWatchExited := make(chan struct{})
+	go func() {
+		defer close(taskWatchExited)
+		select {
+		case <-task.Done():
+			cancel()
 			_ = cmd.Process.Kill()
-			return "", context.Canceled
+		case <-taskWatchDone:
 		}
-		line := scanner.Text()
-		if strings.HasPrefix(line, "download:") {
-			p := parseProgressLine(strings.TrimPrefix(line, "download:"))
-			if onProgress != nil {
-				onProgress(p)
-			}
-		}
-		// yt-dlp prints the final path on some templates; capture Destination
-		if strings.Contains(line, "[download] Destination:") {
-			lastPath = strings.TrimSpace(strings.SplitN(line, "Destination:", 2)[1])
-		}
-		if strings.Contains(line, "Merging formats into") {
-			// extract quoted path
-			if i := strings.Index(line, "\""); i >= 0 {
-				if j := strings.LastIndex(line, "\""); j > i {
-					lastPath = line[i+1 : j]
+	}()
+
+	stdoutDone := make(chan struct {
+		path string
+		err  error
+	}, 1)
+	go func() {
+		var lastPath string
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "download:") {
+				p := parseProgressLine(strings.TrimPrefix(line, "download:"))
+				if onProgress != nil {
+					onProgress(p)
 				}
 			}
+			// yt-dlp prints the final path on some templates; capture Destination.
+			if strings.Contains(line, "[download] Destination:") {
+				lastPath = strings.TrimSpace(strings.SplitN(line, "Destination:", 2)[1])
+			}
+			if strings.Contains(line, "Merging formats into") {
+				if i := strings.Index(line, "\""); i >= 0 {
+					if j := strings.LastIndex(line, "\""); j > i {
+						lastPath = line[i+1 : j]
+					}
+				}
+			}
+			// after_move:filepath is emitted after subtitle embedding/remuxing and
+			// therefore points at the final playable file.
+			if info, statErr := os.Stat(line); line != "" && statErr == nil && !info.IsDir() {
+				lastPath = line
+			}
 		}
-		// after_move:filepath is emitted after subtitle embedding/remuxing and
-		// therefore points at the final playable file, including when a
-		// progressive source was remuxed from mp4/webm to mkv.
-		if info, statErr := os.Stat(line); line != "" && statErr == nil && !info.IsDir() {
-			lastPath = line
+		scanErr := scanner.Err()
+		if scanErr != nil {
+			cancel()
 		}
-	}
+		stdoutDone <- struct {
+			path string
+			err  error
+		}{lastPath, scanErr}
+	}()
 
-	// Drain stderr for error messages. yt-dlp is allowed to continue past
-	// subtitle failures, but only subtitle failures; media and post-processing
-	// errors must still fail the task below.
-	errBuf := new(bytes.Buffer)
-	_, _ = errBuf.ReadFrom(stderr)
-	stderrText := errBuf.String()
+	stderrDone := make(chan struct {
+		text string
+		err  error
+	}, 1)
+	go func() {
+		diagnostics := &boundedDiagnosticBuffer{limit: maxYtDlpDiagnosticBytes}
+		_, readErr := io.Copy(diagnostics, stderr)
+		stderrDone <- struct {
+			text string
+			err  error
+		}{diagnostics.String(), readErr}
+	}()
 
 	waitErr := cmd.Wait()
+	stdoutResult := <-stdoutDone
+	stderrResult := <-stderrDone
+	close(taskWatchDone)
+	cancel()
+	<-taskWatchExited
+
+	if task.Cancelled() {
+		return "", context.Canceled
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	if stdoutResult.err != nil {
+		return "", fmt.Errorf("read yt-dlp output: %w", stdoutResult.err)
+	}
+	if stderrResult.err != nil && waitErr == nil {
+		return "", fmt.Errorf("read yt-dlp diagnostics: %w", stderrResult.err)
+	}
+	lastPath := stdoutResult.path
+	stderrText := stderrResult.text
 	if waitErr != nil {
-		if task.Cancelled() {
-			return "", context.Canceled
-		}
 		if !subtitleErrorsIgnored || !ytDlpOnlySubtitleErrors(stderrText) {
 			return "", fmt.Errorf("%s", ytDlpErrorMessage(stderrText, waitErr))
 		}
@@ -203,7 +296,7 @@ func subtitleDownloadEnabled(req models.DownloadRequest, settings config.AppSett
 }
 
 func (s *YtDlpService) baseArgs() []string {
-	st := s.settings()
+	st := s.appSettings()
 	args := []string{
 		"--no-check-certificates",
 		"--prefer-free-formats",
@@ -238,7 +331,7 @@ func (s *YtDlpService) baseArgs() []string {
 
 func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	args := s.baseArgs()
-	st := s.settings()
+	st := s.appSettings()
 	subtitleMode, subtitleLangs := models.SubtitleSelectionNone, []string(nil)
 	if req.Mode != models.ModeAudioOnly {
 		subtitleMode, subtitleLangs = subtitleSelection(req, st)
@@ -326,6 +419,13 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		args = append(args, "--embed-metadata", "--embed-chapters")
 	}
 	return args
+}
+
+func (s *YtDlpService) appSettings() config.AppSettings {
+	if s.settings == nil {
+		return config.AppSettings{}
+	}
+	return s.settings()
 }
 
 func audioFormatSelector(req models.DownloadRequest) string {
@@ -496,12 +596,19 @@ func contains(values []string, want string) bool {
 }
 
 func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...)
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	diagnostics := &boundedDiagnosticBuffer{limit: maxYtDlpDiagnosticBytes}
+	cmd.Stderr = diagnostics
 	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		msg := strings.TrimSpace(diagnostics.String())
 		if msg == "" {
 			msg = err.Error()
 		}

@@ -1,11 +1,117 @@
 package services
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("GO_WANT_YTDLP_HELPER") == "1" {
+		if os.Getenv("GO_WANT_YTDLP_HELPER_BLOCK") == "1" {
+			fmt.Fprintln(os.Stdout, "download:0|1|1|NA|NA|0|0")
+			for {
+				fmt.Fprintln(os.Stderr, strings.Repeat("diagnostic ", 512))
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		fmt.Fprintln(os.Stdout, "download:1|1|1|NA|NA|1|1")
+		fmt.Fprintln(os.Stderr, strings.Repeat("diagnostic ", 512))
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func TestYtDlpHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_YTDLP_HELPER") != "1" {
+		return
+	}
+	t.Fatal("helper process must be handled by TestMain")
+}
+
+func TestBoundedDiagnosticBufferRetainsTailWithinLimit(t *testing.T) {
+	var diagnostics boundedDiagnosticBuffer
+	diagnostics.limit = 8
+	if _, err := diagnostics.Write([]byte("old output")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := diagnostics.Write([]byte("ERROR: final failure")); err != nil {
+		t.Fatal(err)
+	}
+	if len(diagnostics.String()) > diagnostics.limit+len("\n[yt-dlp diagnostics truncated]") {
+		t.Fatalf("bounded diagnostics length = %d, exceeds limit", len(diagnostics.String()))
+	}
+	if !strings.Contains(diagnostics.String(), "failure") {
+		t.Fatalf("bounded diagnostics = %q, want final diagnostic", diagnostics.String())
+	}
+}
+
+func testYtDlpHelperService(t *testing.T) *YtDlpService {
+	t.Helper()
+	return &YtDlpService{
+		ytdlpPath: os.Args[0],
+		settings:  func() config.AppSettings { return config.AppSettings{} },
+	}
+}
+
+func TestYtDlpDownloadDrainsStdoutAndStderrConcurrently(t *testing.T) {
+	service := testYtDlpHelperService(t)
+	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: t.TempDir()})
+	// The helper is selected by the environment inherited by the child process.
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+
+	path, err := service.Download(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("Download() error = %v", err)
+	}
+	if path != "" {
+		t.Fatalf("Download() path = %q, want empty fallback for helper", path)
+	}
+}
+
+func TestYtDlpDownloadCancellationReapsProcess(t *testing.T) {
+	service := testYtDlpHelperService(t)
+	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: t.TempDir()})
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_BLOCK", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_BLOCK")
+
+	done := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		_, err := service.Download(context.Background(), task, func(models.ProgressInfo) {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+		})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("helper process did not start")
+	}
+	task.Cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Download() cancellation error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Download() did not reap cancelled process")
+	}
+}
 
 func TestFetchFormatsArgsUsesYTDLPDefaults(t *testing.T) {
 	args := testYtDlpService().fetchFormatsArgs("https://example.test/video")

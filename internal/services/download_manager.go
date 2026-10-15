@@ -3,11 +3,14 @@ package services
 import (
 	"context"
 	"errors"
-	"log"
 	"sync"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
+
+// ErrDownloadManagerClosed is returned when a task is submitted after the
+// manager has begun shutting down.
+var ErrDownloadManagerClosed = errors.New("download manager is shut down")
 
 // Event kinds the UI listens to.
 type EventKind int
@@ -25,24 +28,35 @@ type TaskEvent struct {
 	Error error
 }
 
-// DownloadManager owns the worker pool and task map.
+type downloadEngine interface {
+	Download(context.Context, *models.DownloadTask, func(models.ProgressInfo)) (string, error)
+}
+
+// DownloadManager owns the bounded worker pool and task map.
 // It never touches UI objects; it only publishes events.
 type DownloadManager struct {
-	engine     *YtDlpService
-	maxWorkers int
-	tasks      map[string]*models.DownloadTask
-	mu         sync.Mutex
-	queue      chan *models.DownloadTask
-	events     chan TaskEvent
-	shutdown   chan struct{}
-	wg         sync.WaitGroup
-	started    bool
+	engine       downloadEngine
+	maxWorkers   int
+	workerCount  int
+	started      bool
+	stopped      bool
+	tasks        map[string]*models.DownloadTask
+	mu           sync.Mutex
+	queue        chan *models.DownloadTask
+	events       chan TaskEvent
+	shutdown     chan struct{}
+	resize       chan struct{}
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	shutdownOnce sync.Once
 }
 
 func NewDownloadManager(engine *YtDlpService, maxWorkers int) *DownloadManager {
 	if maxWorkers < 1 {
 		maxWorkers = 4
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &DownloadManager{
 		engine:     engine,
 		maxWorkers: maxWorkers,
@@ -50,50 +64,116 @@ func NewDownloadManager(engine *YtDlpService, maxWorkers int) *DownloadManager {
 		queue:      make(chan *models.DownloadTask, 256),
 		events:     make(chan TaskEvent, 64),
 		shutdown:   make(chan struct{}),
+		resize:     make(chan struct{}),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
-// Events returns the channel the UI should range over (on a background goroutine
-// that then posts to the main thread).
+// Events returns the channel the UI should range over (on a background
+// goroutine that then posts to the main thread).
 func (m *DownloadManager) Events() <-chan TaskEvent {
 	return m.events
 }
 
+// SetMaxWorkers changes the target pool size. Workers already running a
+// download finish that download before excess workers leave; idle workers
+// resize immediately. Tasks remain in the bounded queue throughout a resize.
 func (m *DownloadManager) SetMaxWorkers(n int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if n < 1 {
 		n = 1
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.maxWorkers = n
+	if m.started && !m.stopped {
+		m.startWorkersLocked()
+		m.signalResizeLocked()
+	}
 }
 
-func (m *DownloadManager) ensureWorkers() {
-	if m.started {
-		return
-	}
-	m.started = true
-	for i := 0; i < m.maxWorkers; i++ {
+// WorkerCount reports the current number of live workers. It is useful for
+// observability and makes SetMaxWorkers' eventual resize behavior explicit.
+func (m *DownloadManager) WorkerCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.workerCount
+}
+
+func (m *DownloadManager) startWorkersLocked() {
+	for m.workerCount < m.maxWorkers {
+		m.workerCount++
 		m.wg.Add(1)
 		go m.worker()
 	}
 }
 
+func (m *DownloadManager) signalResizeLocked() {
+	close(m.resize)
+	m.resize = make(chan struct{})
+}
+
+func (m *DownloadManager) ensureWorkers() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopped {
+		return false
+	}
+	if !m.started {
+		m.started = true
+	}
+	m.startWorkersLocked()
+	return true
+}
+
+// Enqueue submits a task using an unbounded caller context for compatibility
+// with existing UI callers. It waits for queue capacity instead of dropping a
+// task. New callers should use EnqueueContext to make backpressure explicit.
 func (m *DownloadManager) Enqueue(req models.DownloadRequest) *models.DownloadTask {
-	m.ensureWorkers()
+	task, _ := m.EnqueueContext(context.Background(), req)
+	return task
+}
+
+// EnqueueContext waits for bounded queue capacity or returns ctx.Err(). A
+// non-nil task is returned only after it has been accepted by the queue.
+func (m *DownloadManager) EnqueueContext(ctx context.Context, req models.DownloadRequest) (*models.DownloadTask, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !m.ensureWorkers() {
+		return nil, ErrDownloadManagerClosed
+	}
+
 	task := models.NewDownloadTask(req)
 	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return nil, ErrDownloadManagerClosed
+	}
 	m.tasks[task.ID] = task
 	m.mu.Unlock()
-	m.emit(EventTaskQueued, task, nil)
-	task.SetState(models.StatePending)
-	m.emit(EventTaskState, task, nil)
+
 	select {
 	case m.queue <- task:
-	default:
-		log.Println("download queue full, dropping", task.ID)
+		m.emit(EventTaskQueued, task, nil)
+		m.emit(EventTaskState, task, nil)
+		return task, nil
+	case <-ctx.Done():
+		m.removeUnaccepted(task)
+		return nil, ctx.Err()
+	case <-m.shutdown:
+		m.removeUnaccepted(task)
+		return nil, ErrDownloadManagerClosed
 	}
-	return task
+}
+
+func (m *DownloadManager) removeUnaccepted(task *models.DownloadTask) {
+	m.mu.Lock()
+	delete(m.tasks, task.ID)
+	m.mu.Unlock()
 }
 
 func (m *DownloadManager) Cancel(id string) {
@@ -110,23 +190,57 @@ func (m *DownloadManager) Cancel(id string) {
 	}
 }
 
+// Retry keeps the legacy API and waits for queue capacity. New callers that
+// need cancellation while waiting should use RetryContext.
 func (m *DownloadManager) Retry(id string) *models.DownloadTask {
+	task, _ := m.RetryContext(context.Background(), id)
+	return task
+}
+
+// RetryContext requeues a failed or cancelled task without dropping it when
+// the queue is full. A non-nil task is returned only after acceptance.
+func (m *DownloadManager) RetryContext(ctx context.Context, id string) (*models.DownloadTask, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !m.ensureWorkers() {
+		return nil, ErrDownloadManagerClosed
+	}
+
 	m.mu.Lock()
 	task := m.tasks[id]
-	m.mu.Unlock()
 	if task == nil {
-		return nil
+		m.mu.Unlock()
+		return nil, errors.New("download task not found")
 	}
 	if task.State != models.StateError && task.State != models.StateCancelled {
-		return nil
+		m.mu.Unlock()
+		return nil, errors.New("download task is not retryable")
 	}
+	previousState := task.State
+	previousError := task.Error
+	previousDetail := task.ErrorDetail
 	task.ResetForRetry()
-	m.emit(EventTaskState, task, nil)
+	m.mu.Unlock()
+
 	select {
 	case m.queue <- task:
-	default:
+		m.emit(EventTaskState, task, nil)
+		return task, nil
+	case <-ctx.Done():
+		task.Error = previousError
+		task.ErrorDetail = previousDetail
+		task.SetState(previousState)
+		return nil, ctx.Err()
+	case <-m.shutdown:
+		task.Error = previousError
+		task.ErrorDetail = previousDetail
+		task.SetState(previousState)
+		return nil, ErrDownloadManagerClosed
 	}
-	return task
 }
 
 func (m *DownloadManager) Get(id string) *models.DownloadTask {
@@ -158,24 +272,81 @@ func (m *DownloadManager) ClearFinished() {
 	}
 }
 
+// Shutdown is safe to call more than once. It cancels active downloads,
+// marks queued tasks cancelled, and waits for every worker to exit.
 func (m *DownloadManager) Shutdown() {
-	close(m.shutdown)
-	m.wg.Wait()
+	m.shutdownOnce.Do(func() {
+		m.mu.Lock()
+		m.stopped = true
+		close(m.shutdown)
+		close(m.resize)
+		tasks := make([]*models.DownloadTask, 0, len(m.tasks))
+		for _, task := range m.tasks {
+			tasks = append(tasks, task)
+		}
+		m.mu.Unlock()
+
+		m.cancel()
+		for _, task := range tasks {
+			if task.State.IsTerminal() {
+				continue
+			}
+			task.Cancel()
+			if task.State == models.StatePending {
+				task.SetState(models.StateCancelled)
+				m.emit(EventTaskState, task, nil)
+			}
+		}
+		m.wg.Wait()
+	})
 }
 
 func (m *DownloadManager) worker() {
-	defer m.wg.Done()
+	retired := false
+	defer func() {
+		if !retired {
+			m.mu.Lock()
+			m.workerCount--
+			m.mu.Unlock()
+		}
+		m.wg.Done()
+	}()
+
 	for {
+		if m.retireExcessWorker() {
+			retired = true
+			return
+		}
+		m.mu.Lock()
+		stopped := m.stopped
+		resize := m.resize
+		m.mu.Unlock()
+		if stopped {
+			return
+		}
+
 		select {
 		case <-m.shutdown:
 			return
+		case <-resize:
+			continue
 		case task := <-m.queue:
 			if task == nil {
 				continue
 			}
 			if task.Cancelled() {
-				task.SetState(models.StateCancelled)
-				m.emit(EventTaskState, task, nil)
+				if !task.State.IsTerminal() {
+					task.SetState(models.StateCancelled)
+					m.emit(EventTaskState, task, nil)
+				}
+				continue
+			}
+			if m.isStopped() {
+				task.Cancel()
+				if !task.State.IsTerminal() {
+					task.SetState(models.StateCancelled)
+					m.emit(EventTaskState, task, nil)
+				}
 				continue
 			}
 			m.runTask(task)
@@ -183,44 +354,67 @@ func (m *DownloadManager) worker() {
 	}
 }
 
+// retireExcessWorker removes exactly one worker from the live count while
+// holding the mutex. This prevents every worker from observing the same
+// excess count and exiting during a downsize.
+func (m *DownloadManager) retireExcessWorker() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.workerCount <= m.maxWorkers {
+		return false
+	}
+	m.workerCount--
+	return true
+}
+
+func (m *DownloadManager) isStopped() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopped
+}
+
 func (m *DownloadManager) runTask(task *models.DownloadTask) {
 	task.SetState(models.StatePreparing)
 	m.emit(EventTaskState, task, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.ctx)
 	defer cancel()
 	watchDone := make(chan struct{})
-	defer close(watchDone)
+	watchExited := make(chan struct{})
 	go func() {
+		defer close(watchExited)
 		select {
 		case <-task.Done():
 			cancel()
 		case <-watchDone:
 		}
 	}()
+	defer func() {
+		close(watchDone)
+		cancel()
+		<-watchExited
+	}()
 
 	task.SetState(models.StateDownloading)
 	m.emit(EventTaskState, task, nil)
 
+	if m.engine == nil {
+		m.finishTaskError(task, errors.New("yt-dlp service is unavailable"))
+		return
+	}
 	path, err := m.engine.Download(ctx, task, func(p models.ProgressInfo) {
 		task.SetProgress(p)
 		m.emit(EventTaskProgress, task, nil)
 	})
 
-	if err != nil {
-		cancelled := task.Cancelled() || errors.Is(err, context.Canceled)
+	if err != nil || task.Cancelled() || m.isStopped() {
+		cancelled := task.Cancelled() || errors.Is(err, context.Canceled) || m.isStopped()
 		if cancelled {
 			task.SetState(models.StateCancelled)
-		} else {
-			task.Error = err.Error()
-			task.SetState(models.StateError)
-		}
-		if cancelled {
 			m.emit(EventTaskState, task, nil)
 			m.emit(EventTaskFinished, task, nil)
 		} else {
-			m.emit(EventTaskState, task, err)
-			m.emit(EventTaskFinished, task, err)
+			m.finishTaskError(task, err)
 		}
 		return
 	}
@@ -231,10 +425,21 @@ func (m *DownloadManager) runTask(task *models.DownloadTask) {
 	m.emit(EventTaskFinished, task, nil)
 }
 
+func (m *DownloadManager) finishTaskError(task *models.DownloadTask, err error) {
+	if err == nil {
+		err = errors.New("download failed")
+	}
+	task.Error = err.Error()
+	task.SetState(models.StateError)
+	m.emit(EventTaskState, task, err)
+	m.emit(EventTaskFinished, task, err)
+}
+
 func (m *DownloadManager) emit(kind EventKind, task *models.DownloadTask, err error) {
 	select {
 	case m.events <- TaskEvent{Kind: kind, Task: task, Error: err}:
 	default:
-		// drop if UI is not consuming
+		// Drop only UI notifications when the UI is not consuming; accepted
+		// work itself is never dropped from the bounded task queue.
 	}
 }
