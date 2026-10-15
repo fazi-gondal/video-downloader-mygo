@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ func TestFetchThumbnailPNG(t *testing.T) {
 				_, _ = w.Write(data)
 			}))
 			defer server.Close()
-			bitmap, err := fetchThumbnail(t.Context(), server.Client(), server.URL)
+			bitmap, err := fetchThumbnail(t.Context(), thumbnailTestClient(server), thumbnailTestURL(server))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,6 +58,12 @@ func TestFetchThumbnailRejectsURL(t *testing.T) {
 		{"file", "file:///image.png"},
 		{"ftp", "ftp://example.com/image.png"},
 		{"data", "data:image/png;base64,abc"},
+		{"loopback", "http://127.0.0.1/image.png"},
+		{"private", "http://192.168.1.1/image.png"},
+		{"link local", "http://169.254.1.1/image.png"},
+		{"reserved", "http://192.0.2.1/image.png"},
+		{"localhost", "http://localhost/image.png"},
+		{"ipv6 loopback", "http://[::1]/image.png"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			bitmap, err := fetchThumbnail(t.Context(), nil, tt.url)
@@ -98,7 +105,7 @@ func TestFetchThumbnailRejectsResponse(t *testing.T) {
 				_, _ = w.Write(tt.body)
 			}))
 			defer server.Close()
-			bitmap, err := fetchThumbnail(t.Context(), server.Client(), server.URL)
+			bitmap, err := fetchThumbnail(t.Context(), thumbnailTestClient(server), thumbnailTestURL(server))
 			if bitmap != nil || err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("got bitmap %v, error %v; want %q", bitmap, err, tt.want)
 			}
@@ -117,9 +124,9 @@ func TestFetchThumbnailCancellation(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer server.Close()
-	client := server.Client()
+	client := thumbnailTestClient(server)
 	client.Timeout = 5 * time.Second
-	bitmap, err := fetchThumbnail(ctx, client, server.URL)
+	bitmap, err := fetchThumbnail(ctx, client, thumbnailTestURL(server))
 	if bitmap != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("got bitmap %v, error %v; want context.Canceled", bitmap, err)
 	}
@@ -131,12 +138,25 @@ func TestFetchThumbnailRedirectAndPrivacy(t *testing.T) {
 		http.Redirect(w, r, "file:///secret", http.StatusFound)
 	}))
 	defer server.Close()
-	bitmap, err := fetchThumbnail(t.Context(), server.Client(), server.URL+"?token=secret")
+	bitmap, err := fetchThumbnail(t.Context(), thumbnailTestClient(server), thumbnailTestURL(server)+"?token=secret")
 	if bitmap != nil || err == nil {
 		t.Fatalf("got bitmap %v, error %v; want failure", bitmap, err)
 	}
 	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), server.URL) {
 		t.Fatalf("error includes request details: %v", err)
+	}
+}
+
+func TestFetchThumbnailRejectsPrivateRedirect(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://127.0.0.1/secret", http.StatusFound)
+	}))
+	defer server.Close()
+
+	bitmap, err := fetchThumbnail(t.Context(), thumbnailTestClient(server), thumbnailTestURL(server))
+	if bitmap != nil || err == nil {
+		t.Fatalf("got bitmap %v, error %v; want blocked redirect", bitmap, err)
 	}
 }
 
@@ -149,4 +169,31 @@ func thumbnailTestPNG(t *testing.T, width, height int) []byte {
 		t.Fatal(err)
 	}
 	return encoded.Bytes()
+}
+
+func thumbnailTestURL(server *httptest.Server) string {
+	return "http://93.184.216.34/thumbnail.png"
+}
+
+func thumbnailTestClient(server *httptest.Server) *http.Client {
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		panic(err)
+	}
+	base := server.Client().Transport
+	return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		redirected := req.Clone(req.Context())
+		targetCopy := *target
+		targetCopy.Path = req.URL.Path
+		targetCopy.RawQuery = req.URL.RawQuery
+		redirected.URL = &targetCopy
+		redirected.Host = targetCopy.Host
+		return base.RoundTrip(redirected)
+	})}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

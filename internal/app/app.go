@@ -115,7 +115,10 @@ type App struct {
 
 func New() *App {
 	repo := config.NewSettingsRepository()
-	settings := repo.Load()
+	settings, err := repo.Load()
+	if err != nil {
+		log.Println("settings:", err)
+	}
 	ffmpeg := services.NewFFmpegService()
 	a := &App{
 		settingsRepo:       repo,
@@ -194,8 +197,11 @@ func (a *App) pumpDownloadEvents() {
 		a.tasksMu.Unlock()
 		if ev.Kind == services.EventTaskFinished {
 			if a.history != nil {
-				_ = a.history.Record(ev.Task)
-				a.historyLoaded = false
+				if err := a.history.Record(ev.Task); err != nil {
+					log.Println("history:", err)
+				} else {
+					a.historyLoaded = false
+				}
 			}
 			if a.playlistActive {
 				if ev.Task.State == models.StateCompleted {
@@ -1626,8 +1632,11 @@ func (a *App) historyPage(c *ui.Context) {
 				a.historyLoaded = false
 			}
 			if ui.Button(c, "Clear all").Clicked() {
-				_ = a.history.Clear()
-				a.historyLoaded = false
+				if err := a.history.Clear(); err != nil {
+					a.showToast("Could not clear history: " + err.Error())
+				} else {
+					a.historyLoaded = false
+				}
 			}
 		})
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
@@ -1884,7 +1893,10 @@ func (a *App) importSettings() {
 	}
 	a.settingsSubtitleLangs = strings.Join(a.settings.SubtitleLangs, ", ")
 	a.settingsRateLimit = strconv.Itoa(a.settings.RateLimitKbps)
-	_ = a.settingsRepo.Save(a.settings)
+	if err := a.settingsRepo.Save(a.settings); err != nil {
+		a.showToast("Could not save imported settings: " + err.Error())
+		return
+	}
 	if a.manager != nil {
 		a.manager.SetMaxWorkers(a.settings.MaxConcurrent)
 	}
