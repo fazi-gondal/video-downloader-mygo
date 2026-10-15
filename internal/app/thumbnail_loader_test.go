@@ -9,9 +9,9 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -171,29 +171,16 @@ func thumbnailTestPNG(t *testing.T, width, height int) []byte {
 	return encoded.Bytes()
 }
 
-func thumbnailTestURL(server *httptest.Server) string {
+func thumbnailTestURL(_ *httptest.Server) string {
 	return "http://93.184.216.34/thumbnail.png"
 }
 
 func thumbnailTestClient(server *httptest.Server) *http.Client {
-	target, err := url.Parse(server.URL)
-	if err != nil {
-		panic(err)
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	targetAddr := server.Listener.Addr().String()
+	dialer := &net.Dialer{}
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, targetAddr)
 	}
-	base := server.Client().Transport
-	return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		redirected := req.Clone(req.Context())
-		targetCopy := *target
-		targetCopy.Path = req.URL.Path
-		targetCopy.RawQuery = req.URL.RawQuery
-		redirected.URL = &targetCopy
-		redirected.Host = targetCopy.Host
-		return base.RoundTrip(redirected)
-	})}
-}
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
+	return &http.Client{Transport: transport}
 }
