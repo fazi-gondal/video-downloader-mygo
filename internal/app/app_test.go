@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
 
@@ -202,5 +204,18 @@ func TestProgressFractionUsesBytesOrPercentAndProcessingIsIndeterminate(t *testi
 	}
 	if _, ok := taskProgressFraction(models.StateProcessing, models.ProgressInfo{Percent: 50}); ok {
 		t.Fatal("processing progress should be indeterminate")
+	}
+}
+
+func TestPlaylistEntryCheckboxCommitsSelection(t *testing.T) {
+	a := &App{selectedEntries: map[int]bool{}}
+	tester := ui.NewTester(func(c *ui.Context) {
+		a.playlistEntryCheckbox(c, 0)
+	}, 240, 48)
+	if err := tester.Click("pe-0-check"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.selectedEntries[0] {
+		t.Fatal("playlist checkbox click did not persist the selected entry")
 	}
 }

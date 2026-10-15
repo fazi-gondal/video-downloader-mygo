@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
@@ -19,14 +21,23 @@ import (
 
 // FFmpegService locates ffmpeg/ffprobe and runs conversions.
 type FFmpegService struct {
-	ffmpeg  string
-	ffprobe string
+	ffmpeg     string
+	ffprobe    string
+	remuxMu    sync.Mutex
+	remuxCache map[string]remuxCacheEntry
+}
+
+type remuxCacheEntry struct {
+	size    int64
+	modTime time.Time
+	result  bool
 }
 
 func NewFFmpegService() *FFmpegService {
 	return &FFmpegService{
-		ffmpeg:  tools.FFmpeg(),
-		ffprobe: tools.FFprobe(),
+		ffmpeg:     tools.FFmpeg(),
+		ffprobe:    tools.FFprobe(),
+		remuxCache: make(map[string]remuxCacheEntry),
 	}
 }
 
@@ -43,9 +54,32 @@ func (s *FFmpegService) Path() string {
 // codec combinations remain re-encodes so the converter never promises a
 // lossless result that FFmpeg cannot produce.
 func (s *FFmpegService) CanRemux(source, target string) bool {
-	srcExt := strings.TrimPrefix(strings.ToLower(filepath.Ext(source)), ".")
-	targetExt := strings.TrimPrefix(strings.ToLower(target), ".")
-	return srcExt != "" && targetExt != "" && srcExt == targetExt
+	srcExt := normalizeFormat(filepath.Ext(source))
+	targetExt := normalizeFormat(target)
+	if !isSupportedVideoFormat(targetExt) || srcExt == "" {
+		return false
+	}
+	if srcExt == targetExt {
+		return true
+	}
+
+	info, err := os.Stat(source)
+	if err != nil || info.IsDir() {
+		return fallbackRemuxDecision(srcExt, targetExt)
+	}
+	cacheKey := source + "\x00" + targetExt
+	if result, ok := s.cachedRemuxDecision(cacheKey, info); ok {
+		return result
+	}
+
+	result := fallbackRemuxDecision(srcExt, targetExt)
+	if s.ffprobe != "" {
+		if streams, ok := s.probeCodecs(source); ok {
+			result = codecsFitContainer(streams, targetExt)
+		}
+	}
+	s.cacheRemuxDecision(cacheKey, info, result)
+	return result
 }
 
 // Convert runs a conversion job. onProgress receives 0–100.
@@ -66,27 +100,14 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 	if ext == "" {
 		ext = "mp4"
 	}
+	ext = normalizeFormat(ext)
 	out := uniqueOutputPath(src, ext)
 
-	args := []string{"-y", "-i", src, "-progress", "pipe:1", "-nostats"}
-
-	switch req.Kind {
-	case models.KindAudio:
-		args = append(args, audioCodecArgs(ext)...)
-		if req.AudioBitrateKbps > 0 {
-			args = append(args, "-b:a", strconv.Itoa(req.AudioBitrateKbps)+"k")
-		}
-		args = append(args, "-vn")
-	default:
-		if req.Mode == models.ConversionRemux {
-			args = append(args, "-c", "copy")
-		} else {
-			// sensible defaults
-			args = append(args, "-c:v", "libx264", "-preset", "medium", "-crf", "23")
-			args = append(args, "-c:a", "aac", "-b:a", "192k")
-		}
+	req.TargetFormat = ext
+	args, err := conversionArgs(req, out)
+	if err != nil {
+		return "", err
 	}
-	args = append(args, out)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -234,8 +255,75 @@ func (s *FFmpegService) probeDuration(ctx context.Context, path string) float64 
 	return d
 }
 
+const maxAudioBitrateKbps = 320
+
+var losslessAudioFormats = map[string]struct{}{
+	"flac": {},
+	"wav":  {},
+}
+
+var supportedAudioFormats = map[string]struct{}{
+	"aac":  {},
+	"flac": {},
+	"m4a":  {},
+	"mp3":  {},
+	"opus": {},
+	"wav":  {},
+}
+
+var supportedVideoFormats = map[string]struct{}{
+	"avi":  {},
+	"mkv":  {},
+	"mov":  {},
+	"mp4":  {},
+	"ts":   {},
+	"webm": {},
+}
+
+// conversionArgs returns the complete FFmpeg argument list for a conversion.
+// Keeping argument selection separate from process execution makes codec and
+// bitrate behavior testable without requiring media files or an FFmpeg binary.
+func conversionArgs(req models.ConversionRequest, output string) ([]string, error) {
+	ext := normalizeFormat(req.TargetFormat)
+	if ext == "" {
+		ext = "mp4"
+	}
+	args := []string{"-y", "-i", req.Source, "-progress", "pipe:1", "-nostats"}
+
+	switch req.Kind {
+	case models.KindAudio:
+		if !isSupportedAudioFormat(ext) {
+			return nil, fmt.Errorf("unsupported audio format %q", ext)
+		}
+		if req.AudioBitrateKbps < 0 {
+			return nil, fmt.Errorf("audio bitrate cannot be negative")
+		}
+		args = append(args, "-vn")
+		args = append(args, audioCodecArgs(ext)...)
+		if !isLosslessAudioFormat(ext) && req.AudioBitrateKbps > 0 {
+			if req.AudioBitrateKbps > maxAudioBitrateKbps {
+				return nil, fmt.Errorf("audio bitrate cannot exceed %d kbps", maxAudioBitrateKbps)
+			}
+			args = append(args, "-b:a", strconv.Itoa(req.AudioBitrateKbps)+"k")
+		}
+	case models.KindVideo, "":
+		if !isSupportedVideoFormat(ext) {
+			return nil, fmt.Errorf("unsupported video format %q", ext)
+		}
+		if req.Mode == models.ConversionRemux {
+			args = append(args, "-c", "copy")
+		} else {
+			args = append(args, videoCodecArgs(ext)...)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported media kind %q", req.Kind)
+	}
+
+	return append(args, output), nil
+}
+
 func audioCodecArgs(ext string) []string {
-	switch strings.ToLower(ext) {
+	switch normalizeFormat(ext) {
 	case "mp3":
 		return []string{"-c:a", "libmp3lame"}
 	case "m4a", "aac":
@@ -247,7 +335,183 @@ func audioCodecArgs(ext string) []string {
 	case "wav":
 		return []string{"-c:a", "pcm_s16le"}
 	default:
-		return []string{"-c:a", "aac"}
+		return nil
+	}
+}
+
+func videoCodecArgs(ext string) []string {
+	switch normalizeFormat(ext) {
+	case "webm":
+		// WebM does not accept H.264/AAC. VP9/Opus is broadly supported and
+		// the zero video bitrate selects constant-quality VP9 encoding.
+		return []string{
+			"-c:v", "libvpx-vp9",
+			"-crf", "32",
+			"-b:v", "0",
+			"-row-mt", "1",
+			"-threads", "0",
+			"-speed", "4",
+			"-c:a", "libopus",
+		}
+	case "avi":
+		return []string{
+			"-c:v", "mpeg4",
+			"-q:v", "4",
+			"-c:a", "libmp3lame",
+			"-q:a", "3",
+		}
+	case "mp4", "mkv", "mov", "ts":
+		return []string{
+			"-c:v", "libx264",
+			"-preset", "medium",
+			"-crf", "23",
+			"-c:a", "aac",
+			"-b:a", "192k",
+		}
+	default:
+		return nil
+	}
+}
+
+func normalizeFormat(format string) string {
+	format = strings.ToLower(strings.TrimSpace(format))
+	return strings.TrimPrefix(format, ".")
+}
+
+func isSupportedAudioFormat(format string) bool {
+	_, ok := supportedAudioFormats[normalizeFormat(format)]
+	return ok
+}
+
+func isSupportedVideoFormat(format string) bool {
+	_, ok := supportedVideoFormats[normalizeFormat(format)]
+	return ok
+}
+
+func isLosslessAudioFormat(format string) bool {
+	_, ok := losslessAudioFormats[normalizeFormat(format)]
+	return ok
+}
+
+var fallbackRemuxTargets = map[string]map[string]struct{}{
+	"avi":  {"avi": {}},
+	"mkv":  {"mkv": {}},
+	"mov":  {"mov": {}},
+	"mp4":  {"mkv": {}, "mp4": {}},
+	"ts":   {"ts": {}},
+	"webm": {"mkv": {}, "webm": {}},
+}
+
+func fallbackRemuxDecision(source, target string) bool {
+	targets := fallbackRemuxTargets[normalizeFormat(source)]
+	_, ok := targets[normalizeFormat(target)]
+	return ok
+}
+
+type probedStream struct {
+	CodecType string `json:"codec_type"`
+	CodecName string `json:"codec_name"`
+}
+
+type probeResult struct {
+	Streams []probedStream `json:"streams"`
+}
+
+func (s *FFmpegService) probeCodecs(path string) ([]probedStream, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(
+		ctx,
+		s.ffprobe,
+		"-v", "error",
+		"-show_entries", "stream=codec_type,codec_name",
+		"-of", "json",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	var result probeResult
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, false
+	}
+	return result.Streams, true
+}
+
+var containerVideoCodecs = map[string]map[string]struct{}{
+	"avi": {"mjpeg": {}, "mpeg4": {}, "msmpeg4v3": {}},
+	"mkv": {
+		"av1": {}, "dnxhd": {}, "dnxhr": {}, "h264": {}, "hevc": {},
+		"mpeg2video": {}, "mpeg4": {}, "mjpeg": {}, "prores": {},
+		"prores_ks": {}, "theora": {}, "vp8": {}, "vp9": {},
+	},
+	"mov": {
+		"av1": {}, "dnxhd": {}, "dnxhr": {}, "h264": {}, "hevc": {},
+		"mpeg4": {}, "mjpeg": {}, "prores": {}, "prores_ks": {},
+	},
+	"mp4":  {"av1": {}, "h264": {}, "hevc": {}, "mpeg4": {}},
+	"ts":   {"av1": {}, "h264": {}, "hevc": {}, "mpeg2video": {}, "mpeg4": {}},
+	"webm": {"av1": {}, "vp8": {}, "vp9": {}},
+}
+
+var containerAudioCodecs = map[string]map[string]struct{}{
+	"avi": {"ac3": {}, "mp3": {}, "pcm_s16le": {}},
+	"mkv": {
+		"aac": {}, "ac3": {}, "alac": {}, "dts": {}, "eac3": {},
+		"flac": {}, "mp3": {}, "opus": {}, "pcm_s16le": {}, "vorbis": {},
+	},
+	"mov": {
+		"aac": {}, "ac3": {}, "alac": {}, "mp3": {}, "opus": {},
+		"pcm_s16le": {}, "pcm_s24le": {}, "pcm_s32le": {},
+	},
+	"mp4":  {"aac": {}, "ac3": {}, "alac": {}, "mp3": {}, "opus": {}},
+	"ts":   {"aac": {}, "ac3": {}, "eac3": {}, "mp2": {}, "mp3": {}},
+	"webm": {"opus": {}, "vorbis": {}},
+}
+
+func codecsFitContainer(streams []probedStream, target string) bool {
+	videoCodecs, videoOK := containerVideoCodecs[normalizeFormat(target)]
+	audioCodecs, audioOK := containerAudioCodecs[normalizeFormat(target)]
+	if !videoOK || !audioOK {
+		return false
+	}
+	for _, stream := range streams {
+		codec := strings.ToLower(stream.CodecName)
+		switch stream.CodecType {
+		case "video":
+			if _, ok := videoCodecs[codec]; !ok {
+				return false
+			}
+		case "audio":
+			if _, ok := audioCodecs[codec]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (s *FFmpegService) cachedRemuxDecision(key string, info os.FileInfo) (bool, bool) {
+	s.remuxMu.Lock()
+	defer s.remuxMu.Unlock()
+	entry, ok := s.remuxCache[key]
+	if !ok || entry.size != info.Size() || !entry.modTime.Equal(info.ModTime()) {
+		return false, false
+	}
+	return entry.result, true
+}
+
+func (s *FFmpegService) cacheRemuxDecision(key string, info os.FileInfo, result bool) {
+	s.remuxMu.Lock()
+	defer s.remuxMu.Unlock()
+	if s.remuxCache == nil {
+		s.remuxCache = make(map[string]remuxCacheEntry)
+	}
+	s.remuxCache[key] = remuxCacheEntry{
+		size:    info.Size(),
+		modTime: info.ModTime(),
+		result:  result,
 	}
 }
 

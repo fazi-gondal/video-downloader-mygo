@@ -90,6 +90,8 @@ type App struct {
 	convSource string
 	convFormat string
 	convKind   models.MediaKind
+	// convAudioBitrateKbps is used for lossy audio conversion targets.
+	convAudioBitrateKbps int
 	convJobs   []models.ConversionJobSnapshot
 	convJobsMu sync.Mutex
 
@@ -135,6 +137,7 @@ func New() *App {
 		subtitleMode:       subtitleModeNone,
 		convFormat:         "mp3",
 		convKind:           models.KindAudio,
+		convAudioBitrateKbps: 320,
 		selectedEntries:    map[int]bool{},
 		selectedAudio:      map[string]*bool{},
 		selectedSubtitle:   map[string]*bool{},
@@ -903,10 +906,8 @@ func (a *App) playlistPanel(c *ui.Context) {
 		})
 		ui.List(c, &a.plListState, len(p.Entries), func(i int) {
 			ent := p.Entries[i]
-			on := a.selectedEntries[i]
 			ui.Row(c).FillWidth().Padding(4, 6).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Checkbox(c.Key(fmt.Sprintf("pe-%d", i)), &on, "")
-				a.selectedEntries[i] = on
+				a.playlistEntryCheckbox(c, i)
 				ui.Column(c).Grow(1).Children(func() {
 					ui.Text(c, ent.Title).FontSize(13)
 					if ent.Duration > 0 {
@@ -919,6 +920,13 @@ func (a *App) playlistPanel(c *ui.Context) {
 			a.page = PageConfig
 		}
 	})
+}
+
+func (a *App) playlistEntryCheckbox(c *ui.Context, index int) {
+	on := a.selectedEntries[index]
+	if ui.Checkbox(c.Key(fmt.Sprintf("pe-%d-check", index)), &on, "").Changed() {
+		a.selectedEntries[index] = on
+	}
 }
 
 func (a *App) configPage(c *ui.Context) {
@@ -1565,6 +1573,7 @@ func (a *App) converterPage(c *ui.Context) {
 					a.toggleBtn(c, "ck-a", "Audio", a.convKind == models.KindAudio, func() {
 						a.convKind = models.KindAudio
 						a.convFormat = "mp3"
+						a.convAudioBitrateKbps = 320
 					})
 					a.toggleBtn(c, "ck-v", "Video", a.convKind == models.KindVideo, func() {
 						a.convKind = models.KindVideo
@@ -1584,6 +1593,20 @@ func (a *App) converterPage(c *ui.Context) {
 						})
 					}
 				})
+				if a.convKind == models.KindAudio {
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "Audio bitrate").FontSize(12).TextColor(t.TextMuted).Width(90)
+						for _, bitrate := range []int{128, 192, 256, 320} {
+							bitrate := bitrate
+							a.toggleBtn(c, fmt.Sprintf("conv-bitrate-%d", bitrate), fmt.Sprintf("%d kbps", bitrate), a.convAudioBitrateKbps == bitrate, func() {
+								a.convAudioBitrateKbps = bitrate
+							})
+						}
+					})
+					if a.convFormat == "flac" || a.convFormat == "wav" {
+						ui.Text(c, "Lossless output ignores bitrate selection.").FontSize(11).TextColor(t.TextMuted)
+					}
+				}
 				if strings.TrimSpace(a.convSource) != "" {
 					remux := a.convKind == models.KindVideo && a.ffmpeg.CanRemux(a.convSource, a.convFormat)
 					label, color := "Re-encode", t.Warning
@@ -1605,7 +1628,7 @@ func (a *App) converterPage(c *ui.Context) {
 					if a.convKind == models.KindVideo && a.ffmpeg.CanRemux(src, a.convFormat) {
 						mode = models.ConversionRemux
 					}
-					if a.conv.Enqueue(models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, KeepOriginal: a.settings.KeepOriginals}) == nil {
+					if a.conv.Enqueue(models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, AudioBitrateKbps: a.convAudioBitrateKbps, KeepOriginal: a.settings.KeepOriginals}) == nil {
 						a.showToast("Could not queue conversion: conversion service is shut down")
 					}
 				}
