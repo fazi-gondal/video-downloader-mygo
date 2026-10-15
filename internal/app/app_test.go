@@ -212,7 +212,7 @@ func TestPlaylistEntryCheckboxCommitsSelection(t *testing.T) {
 	tester := ui.NewTester(func(c *ui.Context) {
 		a.playlistEntryCheckbox(c, 0)
 	}, 240, 48)
-	if err := tester.Click("pe-0-check"); err != nil {
+	if err := tester.Click("playlist-entry-0"); err != nil {
 		t.Fatal(err)
 	}
 	if !a.selectedEntries[0] {

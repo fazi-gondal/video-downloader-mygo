@@ -84,6 +84,9 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 
 - Drag-and-drop and native file picker input.
 - Audio extraction and video conversion targets.
+- Audio bitrate choices of 128, 192, 256, and 320 kbps for lossy MP3, M4A, AAC, and Opus output.
+- Lossless FLAC and WAV output intentionally ignores the bitrate selection.
+- Container-aware video codec defaults for MP4, MKV, WebM, AVI, MOV, and TS targets.
 - FFmpeg-backed conversion queue.
 - Lossless remux when source and target containers are compatible.
 - Re-encode fallback when a remux is not safe.
@@ -261,7 +264,7 @@ Runtime lookup order is:
 3. Select **Analyze**.
 4. Wait for yt-dlp to return the media metadata.
 
-For a single video, the result card shows its thumbnail, title, uploader, duration, extractor, available audio tracks, and available subtitles. For a playlist, select the entries to download.
+For a single video, the result card shows its thumbnail, title, uploader, duration, extractor, available audio tracks, and available subtitles. For a playlist, use **Select all**, **Select none**, or click individual checkboxes. Individual checkbox changes are committed immediately, so the tick remains visible when the list redraws.
 
 ### 2. Open download options
 
@@ -300,7 +303,7 @@ Subtitle HTTP 429 responses are treated as partial subtitle warnings when the me
 
 ### 5. Convert local media
 
-Open **Converter**, drop a media file onto the drop zone or select **Browse**, choose Audio or Video, select an output format, and select **Convert**. Compatible same-container video conversions use a lossless remux; other conversions use FFmpeg re-encoding.
+Open **Converter**, drop a media file onto the drop zone or select **Browse**, choose Audio or Video, select an output format, and select **Convert**. Lossy audio supports bitrates up to **320 kbps**, including MP3 conversion. FLAC and WAV are lossless and ignore bitrate. Video uses a lossless remux only when FFprobe confirms that the source codecs fit the target container; other conversions use container-appropriate FFmpeg re-encoding.
 
 ### 6. Review history and settings
 

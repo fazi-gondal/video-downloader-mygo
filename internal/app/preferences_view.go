@@ -270,7 +270,7 @@ func (a *App) refinedAboutPage(c *ui.Context) {
 				ui.Link(c, "Original reference", "https://github.com/fazi-gondal/Video-Downloader")
 				ui.Link(c, "Project repository", "https://github.com/fazi-gondal/video-downloader-mygo")
 				ui.Link(c, "Report an issue", "https://github.com/fazi-gondal/video-downloader-mygo/issues")
-				ui.Link(c, "MIT license", "https://github.com/fazi-gondal/Video-Downloader/blob/main/LICENSE")
+				ui.Link(c, "MIT license", "https://github.com/fazi-gondal/video-Downloader-mygo/blob/main/LICENSE")
 			})
 		})
 	})

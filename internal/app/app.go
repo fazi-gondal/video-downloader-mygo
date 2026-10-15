@@ -924,7 +924,8 @@ func (a *App) playlistPanel(c *ui.Context) {
 
 func (a *App) playlistEntryCheckbox(c *ui.Context, index int) {
 	on := a.selectedEntries[index]
-	if ui.Checkbox(c.Key(fmt.Sprintf("pe-%d-check", index)), &on, "").Changed() {
+	checkbox := ui.Checkbox(c.Key(fmt.Sprintf("pe-%d-check", index)), &on, "").Label(fmt.Sprintf("playlist-entry-%d", index))
+	if checkbox.Changed() {
 		a.selectedEntries[index] = on
 	}
 }

@@ -102,6 +102,14 @@ Tool names are:
 
 On Windows, `.exe` is added automatically. On Unix-like systems, downloaded files are marked executable by the helper script.
 
+## Conversion support
+
+The bundled FFmpeg and FFprobe binaries power the in-app Converter as well as
+download post-processing. Lossy audio targets expose 128, 192, 256, and 320
+kbps; FLAC and WAV remain lossless and do not receive a bitrate flag. Video
+conversion chooses codecs that match the target container and uses a remux
+only after FFprobe confirms that the source codecs are compatible.
+
 ## Packaging behavior
 
 MyGo selects platform-named resource directories during packaging. A Windows package receives Windows resources; a Linux package receives Linux resources. Do not copy every platform's binaries into one flat directory because that can cause the wrong executable to be shipped.
