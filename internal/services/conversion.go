@@ -53,7 +53,7 @@ func NewConversionService(ffmpeg *FFmpegService) *ConversionService {
 		ffmpeg:   ffmpeg,
 		queue:    make(chan *models.ConversionJob, 64),
 		jobs:     make(map[string]*models.ConversionJob),
-		events:   make(chan ConversionEvent, 32),
+		events:   make(chan ConversionEvent, 256),
 		ctx:      ctx,
 		cancel:   cancel,
 		shutdown: make(chan struct{}),
@@ -118,7 +118,7 @@ func (s *ConversionService) Cancel(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[id]
-	if job != nil && !job.State.IsTerminal() {
+	if job != nil && !job.StateValue().IsTerminal() {
 		job.Cancel()
 	}
 }
@@ -129,6 +129,17 @@ func (s *ConversionService) All() []*models.ConversionJob {
 	out := make([]*models.ConversionJob, 0, len(s.jobs))
 	for _, j := range s.jobs {
 		out = append(out, j)
+	}
+	return out
+}
+
+// Snapshots returns a consistent view of every conversion job for the UI.
+func (s *ConversionService) Snapshots() []models.ConversionJobSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]models.ConversionJobSnapshot, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		out = append(out, job.Snapshot())
 	}
 	return out
 }
@@ -163,7 +174,7 @@ func (s *ConversionService) Shutdown() {
 		s.mu.Lock()
 		deferred := make([]*models.ConversionJob, 0, len(s.jobs))
 		for _, job := range s.jobs {
-			if !job.State.IsTerminal() {
+			if !job.StateValue().IsTerminal() {
 				deferred = append(deferred, job)
 			}
 		}
@@ -172,6 +183,7 @@ func (s *ConversionService) Shutdown() {
 			s.finishCancelled(job)
 		}
 		s.mu.Unlock()
+		close(s.events)
 	})
 }
 
@@ -186,7 +198,7 @@ func (s *ConversionService) worker() {
 				continue
 			}
 			if s.isStopped() || job.Cancelled() {
-				if !job.State.IsTerminal() {
+				if !job.StateValue().IsTerminal() {
 					s.finishCancelled(job)
 				}
 				continue
@@ -203,7 +215,7 @@ func (s *ConversionService) isStopped() bool {
 }
 
 func (s *ConversionService) runJob(job *models.ConversionJob) {
-	job.State = models.ConvRunning
+	job.SetState(models.ConvRunning)
 	s.emit(ConvEventProgress, job, nil)
 
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -224,7 +236,7 @@ func (s *ConversionService) runJob(job *models.ConversionJob) {
 		err = errors.New("ffmpeg service is unavailable")
 	} else {
 		path, err = s.ffmpeg.Convert(ctx, job, func(pct float64) {
-			job.Percent = pct
+			job.SetProgress(pct)
 			s.emit(ConvEventProgress, job, nil)
 		})
 	}
@@ -237,32 +249,39 @@ func (s *ConversionService) runJob(job *models.ConversionJob) {
 			s.finishCancelled(job)
 		} else {
 			now := time.Now()
-			job.FinishedAt = &now
-			job.State = models.ConvError
-			job.Error = err.Error()
+			job.SetFinishedAt(now)
+			job.SetState(models.ConvError)
+			job.SetError(err.Error())
 			s.emit(ConvEventFinished, job, err)
 		}
 		return
 	}
 
-	job.OutputPath = path
-	job.Percent = 100
-	job.State = models.ConvCompleted
+	job.SetOutput(path)
+	job.SetProgress(100)
+	job.SetState(models.ConvCompleted)
 	now := time.Now()
-	job.FinishedAt = &now
+	job.SetFinishedAt(now)
 	s.emit(ConvEventFinished, job, nil)
 }
 
 func (s *ConversionService) finishCancelled(job *models.ConversionJob) {
-	job.State = models.ConvCancelled
+	job.SetState(models.ConvCancelled)
 	now := time.Now()
-	job.FinishedAt = &now
+	job.SetFinishedAt(now)
 	s.emit(ConvEventFinished, job, nil)
 }
 
 func (s *ConversionService) emit(kind ConversionEventKind, job *models.ConversionJob, err error) {
+	if kind == ConvEventProgress {
+		select {
+		case s.events <- ConversionEvent{Kind: kind, Job: job, Err: err}:
+		default:
+		}
+		return
+	}
 	select {
 	case s.events <- ConversionEvent{Kind: kind, Job: job, Err: err}:
-	default:
+	case <-s.shutdown:
 	}
 }

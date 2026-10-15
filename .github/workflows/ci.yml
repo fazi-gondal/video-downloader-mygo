@@ -89,12 +89,15 @@ jobs:
       - name: Verify bundled tools
         shell: bash
         run: |
-          test -x "resources/${{ matrix.fetch }}/bin/yt-dlp" \
-            -o -x "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
-          test -x "resources/${{ matrix.fetch }}/bin/ffmpeg" \
-            -o -x "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
-          test -x "resources/${{ matrix.fetch }}/bin/ffprobe" \
-            -o -x "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
+          if [[ "${{ matrix.fetch }}" == windows-* ]]; then
+            test -f "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
+            test -f "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
+            test -f "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
+          else
+            test -x "resources/${{ matrix.fetch }}/bin/yt-dlp"
+            test -x "resources/${{ matrix.fetch }}/bin/ffmpeg"
+            test -x "resources/${{ matrix.fetch }}/bin/ffprobe"
+          fi
       - name: Build package
         env:
           CGO_ENABLED: "0"

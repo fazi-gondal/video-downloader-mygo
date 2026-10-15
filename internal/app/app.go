@@ -41,6 +41,7 @@ const (
 )
 
 type App struct {
+	winMu        sync.RWMutex
 	win          *mygo.Window
 	settingsRepo *config.SettingsRepository
 	settings     config.AppSettings
@@ -84,12 +85,12 @@ type App struct {
 	playlistActive                               bool
 
 	tasksMu sync.Mutex
-	tasks   []*models.DownloadTask
+	tasks   []models.DownloadTaskSnapshot
 
 	convSource string
 	convFormat string
 	convKind   models.MediaKind
-	convJobs   []*models.ConversionJob
+	convJobs   []models.ConversionJobSnapshot
 	convJobsMu sync.Mutex
 
 	historyEntries []services.HistoryEntry
@@ -178,10 +179,41 @@ func New() *App {
 	return a
 }
 
-func (a *App) SetWindow(w *mygo.Window) { a.win = w }
+func (a *App) SetWindow(w *mygo.Window) {
+	a.winMu.Lock()
+	a.win = w
+	a.winMu.Unlock()
+}
+
+// Shutdown stops media workers before the application event loop exits. Both
+// services make this operation idempotent so it is safe to call from the
+// window lifecycle hook and from main's deferred cleanup.
+func (a *App) Shutdown() {
+	if a.manager != nil {
+		a.manager.Shutdown()
+	}
+	if a.conv != nil {
+		a.conv.Shutdown()
+	}
+}
+
+func (a *App) window() *mygo.Window {
+	a.winMu.RLock()
+	defer a.winMu.RUnlock()
+	return a.win
+}
+
+func (a *App) updateOnMain(fn func()) {
+	if win := a.window(); win != nil {
+		win.Update(fn)
+		return
+	}
+	fn()
+}
+
 func (a *App) invalidate() {
-	if a.win != nil {
-		a.win.Invalidate()
+	if win := a.window(); win != nil {
+		win.Invalidate()
 	}
 }
 func (a *App) showToast(msg string) {
@@ -192,55 +224,72 @@ func (a *App) showToast(msg string) {
 
 func (a *App) pumpDownloadEvents() {
 	for ev := range a.manager.Events() {
-		a.tasksMu.Lock()
-		a.tasks = a.manager.All()
-		a.tasksMu.Unlock()
-		if ev.Kind == services.EventTaskFinished {
-			if a.history != nil {
-				if err := a.history.Record(ev.Task); err != nil {
-					log.Println("history:", err)
-				} else {
-					a.historyLoaded = false
-				}
-			}
-			if a.playlistActive {
-				if ev.Task.State == models.StateCompleted {
-					a.playlistDone++
-				} else {
-					a.playlistFailed++
-				}
-				if a.playlistDone+a.playlistFailed >= a.playlistQueued {
-					a.playlistActive = false
-					a.showToast(fmt.Sprintf("Playlist done: %d ok, %d failed", a.playlistDone, a.playlistFailed))
-				}
-			}
-			if ev.Task.State == models.StateCancelled {
-				a.showToast("Download cancelled")
-			} else if ev.Error == nil {
-				a.showToast("Downloaded: " + ev.Task.Filename())
-			} else if !a.playlistActive {
-				a.showToast("Download failed")
+		if ev.Task == nil {
+			continue
+		}
+		task := ev.Task.Snapshot()
+		if ev.Kind == services.EventTaskFinished && a.history != nil {
+			if err := a.history.Record(ev.Task); err != nil {
+				log.Println("history:", err)
 			}
 		}
-		a.invalidate()
+		a.updateOnMain(func() {
+			a.tasksMu.Lock()
+			a.tasks = a.manager.Snapshots()
+			a.tasksMu.Unlock()
+			if ev.Kind == services.EventTaskFinished {
+				if a.history != nil {
+					a.historyLoaded = false
+				}
+				if a.playlistActive {
+					if task.State == models.StateCompleted {
+						a.playlistDone++
+					} else {
+						a.playlistFailed++
+					}
+					if a.playlistDone+a.playlistFailed >= a.playlistQueued {
+						a.playlistActive = false
+						a.showToast(fmt.Sprintf("Playlist done: %d ok, %d failed", a.playlistDone, a.playlistFailed))
+					}
+				}
+				if task.State == models.StateCancelled {
+					a.showToast("Download cancelled")
+				} else if ev.Error == nil {
+					name := filepath.Base(task.OutputPath)
+					if name == "." || name == "" {
+						name = task.Request.Title
+					}
+					a.showToast("Downloaded: " + name)
+				} else if !a.playlistActive {
+					a.showToast("Download failed")
+				}
+			}
+			a.invalidate()
+		})
 	}
 }
 
 func (a *App) pumpConversionEvents() {
 	for ev := range a.conv.Events() {
-		a.convJobsMu.Lock()
-		a.convJobs = a.conv.All()
-		a.convJobsMu.Unlock()
-		if ev.Kind == services.ConvEventFinished {
-			if ev.Job.State == models.ConvCancelled {
-				a.showToast("Conversion cancelled")
-			} else if ev.Err == nil {
-				a.showToast("Converted: " + filepath.Base(ev.Job.OutputPath))
-			} else {
-				a.showToast("Conversion failed")
-			}
+		if ev.Job == nil {
+			continue
 		}
-		a.invalidate()
+		job := ev.Job.Snapshot()
+		a.updateOnMain(func() {
+			a.convJobsMu.Lock()
+			a.convJobs = a.conv.Snapshots()
+			a.convJobsMu.Unlock()
+			if ev.Kind == services.ConvEventFinished {
+				if job.State == models.ConvCancelled {
+					a.showToast("Conversion cancelled")
+				} else if ev.Err == nil {
+					a.showToast("Converted: " + filepath.Base(job.OutputPath))
+				} else {
+					a.showToast("Conversion failed")
+				}
+			}
+			a.invalidate()
+		})
 	}
 }
 
@@ -419,7 +468,24 @@ func (a *App) dashboardSearch(c *ui.Context) {
 			btn.Disabled(true)
 		}
 		if btn.Clicked() && !a.analyzing {
-			go a.doAnalyze()
+			a.analyzing = true
+			a.analyzeError = ""
+			a.currentMedia = nil
+			a.currentPlaylist = nil
+			a.selectedEntries = map[int]bool{}
+			a.selectedAudio = map[string]*bool{}
+			a.selectedSubtitle = map[string]*bool{}
+			a.selectedVideoFormat = ""
+			a.selectedAudioFormat = ""
+			a.selectedVideoLabel = "Auto (best for resolution)"
+			a.selectedAudioLabel = "Auto (Opus / best)"
+			a.videoFmtLabels = nil
+			a.videoFmtIDs = nil
+			a.audioFmtLabels = nil
+			a.audioFmtIDs = nil
+			a.formatsOpen = false
+			a.invalidate()
+			go a.doAnalyze(strings.TrimSpace(a.urlInput))
 		}
 	})
 }
@@ -873,41 +939,28 @@ func (a *App) configPage(c *ui.Context) {
 	})
 }
 
-func (a *App) doAnalyze() {
-	a.analyzing = true
-	a.analyzeError = ""
-	a.currentMedia = nil
-	a.currentPlaylist = nil
-	a.selectedEntries = map[int]bool{}
-	a.selectedAudio = map[string]*bool{}
-	a.selectedSubtitle = map[string]*bool{}
-	a.selectedVideoFormat = ""
-	a.selectedAudioFormat = ""
-	a.selectedVideoLabel = "Auto (best for resolution)"
-	a.selectedAudioLabel = "Auto (Opus / best)"
-	a.videoFmtLabels = nil
-	a.videoFmtIDs = nil
-	a.audioFmtLabels = nil
-	a.audioFmtIDs = nil
-	a.formatsOpen = false
-	a.invalidate()
+func (a *App) doAnalyze(url string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	result, err := a.ytdlp.Analyze(ctx, a.urlInput)
+	result, err := a.ytdlp.Analyze(ctx, url)
 	if err != nil {
-		a.analyzing = false
-		a.analyzeError = err.Error()
-		a.invalidate()
+		a.updateOnMain(func() {
+			a.analyzing = false
+			a.analyzeError = err.Error()
+			a.invalidate()
+		})
 		return
 	}
-	switch v := result.(type) {
-	case *models.MediaInfo:
-		a.currentMedia = v
-	case *models.PlaylistInfo:
-		a.currentPlaylist = v
-	}
-	a.analyzing = false
-	a.invalidate()
+	a.updateOnMain(func() {
+		switch v := result.(type) {
+		case *models.MediaInfo:
+			a.currentMedia = v
+		case *models.PlaylistInfo:
+			a.currentPlaylist = v
+		}
+		a.analyzing = false
+		a.invalidate()
+	})
 }
 
 func (a *App) fetchFormats() {
@@ -921,16 +974,18 @@ func (a *App) fetchFormats() {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		full, err := a.ytdlp.FetchFormats(ctx, url)
-		if err != nil {
-			a.analyzeError = err.Error()
-		} else if a.currentMedia != nil && a.currentMedia.WebpageURL == url {
-			a.currentMedia.Formats = full.Formats
-			a.currentMedia.Subtitles = full.Subtitles
-			a.currentMedia.AudioTracks = full.AudioTracks
-			a.rebuildFormatOptions()
-		}
-		a.formatsLoading = false
-		a.invalidate()
+		a.updateOnMain(func() {
+			if err != nil {
+				a.analyzeError = err.Error()
+			} else if a.currentMedia != nil && a.currentMedia.WebpageURL == url {
+				a.currentMedia.Formats = full.Formats
+				a.currentMedia.Subtitles = full.Subtitles
+				a.currentMedia.AudioTracks = full.AudioTracks
+				a.rebuildFormatOptions()
+			}
+			a.formatsLoading = false
+			a.invalidate()
+		})
 	}()
 }
 
@@ -939,7 +994,10 @@ func (a *App) startDownload() {
 		return
 	}
 	req := a.buildRequest(a.currentMedia.WebpageURL, a.currentMedia.Title, a.currentMedia.Thumbnail, "", 0)
-	a.manager.Enqueue(req)
+	if task := a.manager.Enqueue(req); task == nil {
+		a.showToast("Could not queue download: download manager is shut down")
+		return
+	}
 	a.page = PageDownloads
 	a.showToast("Queued: " + a.currentMedia.Title)
 }
@@ -954,8 +1012,9 @@ func (a *App) startPlaylistDownloads() {
 			continue
 		}
 		req := a.buildRequest(ent.URL, ent.Title, ent.Thumbnail, a.currentPlaylist.Title, ent.Index)
-		a.manager.Enqueue(req)
-		n++
+		if a.manager.Enqueue(req) != nil {
+			n++
+		}
 	}
 	if n == 0 {
 		a.showToast("No videos selected")
@@ -1243,7 +1302,7 @@ func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) m
 func (a *App) downloadsPage(c *ui.Context) {
 	t := c.Theme()
 	a.tasksMu.Lock()
-	tasks := append([]*models.DownloadTask(nil), a.tasks...)
+	tasks := append([]models.DownloadTaskSnapshot(nil), a.tasks...)
 	a.tasksMu.Unlock()
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.After(tasks[j].CreatedAt) })
 	if len(tasks) == 0 {
@@ -1546,13 +1605,15 @@ func (a *App) converterPage(c *ui.Context) {
 					if a.convKind == models.KindVideo && a.ffmpeg.CanRemux(src, a.convFormat) {
 						mode = models.ConversionRemux
 					}
-					a.conv.Enqueue(models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, KeepOriginal: a.settings.KeepOriginals})
+					if a.conv.Enqueue(models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, KeepOriginal: a.settings.KeepOriginals}) == nil {
+						a.showToast("Could not queue conversion: conversion service is shut down")
+					}
 				}
 			})
 			ui.Column(c).Grow(5).Background(t.Surface).Border(1, t.Border).Padding(14).Radius(14).Gap(8).Children(func() {
 				ui.Text(c, "Conversion queue").FontSize(14).Bold()
 				a.convJobsMu.Lock()
-				jobs := append([]*models.ConversionJob(nil), a.convJobs...)
+				jobs := append([]models.ConversionJobSnapshot(nil), a.convJobs...)
 				a.convJobsMu.Unlock()
 				sort.Slice(jobs, func(i, j int) bool { return jobs[i].CreatedAt.After(jobs[j].CreatedAt) })
 				if len(jobs) == 0 {
@@ -1690,7 +1751,10 @@ func (a *App) historyPage(c *ui.Context) {
 					}
 				}
 				if e.URL != "" && ui.Button(c.Key("hist-redo-"+e.ID), "Download again").Clicked() {
-					a.manager.Enqueue(models.DownloadRequest{URL: e.URL, Title: e.Title, Mode: historyMode(e.Mode), OutputDir: a.settings.DownloadDir, Container: e.Container, AudioFormat: e.AudioFmt})
+					if a.manager.Enqueue(models.DownloadRequest{URL: e.URL, Title: e.Title, Mode: historyMode(e.Mode), OutputDir: a.settings.DownloadDir, Container: e.Container, AudioFormat: e.AudioFmt}) == nil {
+						a.showToast("Could not queue download: download manager is shut down")
+						return
+					}
 					a.page = PageDownloads
 					a.showToast("Queued: " + e.Title)
 				}
@@ -1772,7 +1836,9 @@ func (a *App) settingsPage(c *ui.Context) {
 		}
 		ui.Row(c).Gap(8).Children(func() {
 			if ui.Button(c, "Export settings").Clicked() {
-				go a.exportSettings()
+				a.saveSettings()
+				settings := a.settings
+				go a.exportSettings(settings)
 			}
 			if ui.Button(c, "Import settings").Clicked() {
 				go a.importSettings()
@@ -1833,37 +1899,36 @@ func parseHeaders(raw string) map[string]string {
 	return out
 }
 
-func (a *App) exportSettings() {
-	a.saveSettings()
-	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.win, Title: "Export settings", DefaultPath: "video_downloader_settings.json", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
+func (a *App) exportSettings(settings config.AppSettings) {
+	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.window(), Title: "Export settings", DefaultPath: "video_downloader_settings.json", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
 	if err != nil || path == "" {
 		return
 	}
-	data, err := json.MarshalIndent(a.settings, "", "  ")
+	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		a.showToast("Could not export settings: " + err.Error())
+		a.updateOnMain(func() { a.showToast("Could not export settings: " + err.Error()) })
 		return
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		a.showToast("Could not export settings: " + err.Error())
+		a.updateOnMain(func() { a.showToast("Could not export settings: " + err.Error()) })
 		return
 	}
-	a.showToast("Settings exported")
+	a.updateOnMain(func() { a.showToast("Settings exported") })
 }
 
 func (a *App) importSettings() {
-	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "Import settings", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.window(), Title: "Import settings", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
 	if err != nil || len(paths) == 0 {
 		return
 	}
 	data, err := os.ReadFile(paths[0])
 	if err != nil {
-		a.showToast("Could not read settings: " + err.Error())
+		a.updateOnMain(func() { a.showToast("Could not read settings: " + err.Error()) })
 		return
 	}
 	var settings config.AppSettings
 	if err := json.Unmarshal(data, &settings); err != nil {
-		a.showToast("Invalid settings file")
+		a.updateOnMain(func() { a.showToast("Invalid settings file") })
 		return
 	}
 	var headerLines []string
@@ -1880,28 +1945,30 @@ func (a *App) importSettings() {
 		subtitleLangs:  strings.Join(settings.SubtitleLangs, ", "),
 	})
 	if err != nil {
-		a.showToast("Invalid settings: " + err.Error())
+		a.updateOnMain(func() { a.showToast("Invalid settings: " + err.Error()) })
 		return
 	}
-	a.settings = validated
-	if a.settings.CustomHeaders == nil {
-		a.settings.CustomHeaders = map[string]string{}
-	}
-	a.settingsHeaders = ""
-	for key, value := range a.settings.CustomHeaders {
-		a.settingsHeaders += key + ": " + value + "\n"
-	}
-	a.settingsSubtitleLangs = strings.Join(a.settings.SubtitleLangs, ", ")
-	a.settingsRateLimit = strconv.Itoa(a.settings.RateLimitKbps)
-	if err := a.settingsRepo.Save(a.settings); err != nil {
-		a.showToast("Could not save imported settings: " + err.Error())
-		return
-	}
-	if a.manager != nil {
-		a.manager.SetMaxWorkers(a.settings.MaxConcurrent)
-	}
-	a.invalidate()
-	a.showToast("Settings imported")
+	a.updateOnMain(func() {
+		a.settings = validated
+		if a.settings.CustomHeaders == nil {
+			a.settings.CustomHeaders = map[string]string{}
+		}
+		a.settingsHeaders = ""
+		for key, value := range a.settings.CustomHeaders {
+			a.settingsHeaders += key + ": " + value + "\n"
+		}
+		a.settingsSubtitleLangs = strings.Join(a.settings.SubtitleLangs, ", ")
+		a.settingsRateLimit = strconv.Itoa(a.settings.RateLimitKbps)
+		if err := a.settingsRepo.Save(a.settings); err != nil {
+			a.showToast("Could not save imported settings: " + err.Error())
+			return
+		}
+		if a.manager != nil {
+			a.manager.SetMaxWorkers(a.settings.MaxConcurrent)
+		}
+		a.invalidate()
+		a.showToast("Settings imported")
+	})
 }
 
 func (a *App) aboutPage(c *ui.Context) {
@@ -1916,7 +1983,7 @@ func (a *App) aboutPage(c *ui.Context) {
 
 func (a *App) pickConvertFile() {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Parent: a.win,
+		Parent: a.window(),
 		Title:  "Choose media file",
 		Filters: []mygo.FileFilter{
 			{Name: "Media", Extensions: []string{"mp4", "mkv", "webm", "avi", "mov", "flv", "ts", "m4v", "m4a", "mp3", "flac", "wav", "opus", "aac", "ogg", "wma"}},
@@ -1930,13 +1997,15 @@ func (a *App) pickConvertFile() {
 	if len(paths) == 0 {
 		return // canceled
 	}
-	a.convSource = paths[0]
-	a.invalidate()
+	a.updateOnMain(func() {
+		a.convSource = paths[0]
+		a.invalidate()
+	})
 }
 
 func (a *App) pickDownloadDir() {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Parent:    a.win,
+		Parent:    a.window(),
 		Title:     "Choose download folder",
 		Directory: true,
 	})
@@ -1947,8 +2016,10 @@ func (a *App) pickDownloadDir() {
 	if len(paths) == 0 {
 		return
 	}
-	a.settings.DownloadDir = paths[0]
-	a.invalidate()
+	a.updateOnMain(func() {
+		a.settings.DownloadDir = paths[0]
+		a.invalidate()
+	})
 }
 
 func formatDuration(sec float64) string {

@@ -262,7 +262,7 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		if nonSubtitleErrors := ytDlpNonSubtitleErrorLines(stderrText); len(nonSubtitleErrors) > 0 {
 			return "", fmt.Errorf("%s", ytDlpErrorMessage(stderrText, waitErr))
 		}
-		task.ErrorDetail = ytDlpSubtitleWarning(stderrText)
+		task.SetErrorDetail(ytDlpSubtitleWarning(stderrText))
 	}
 
 	if lastPath == "" {
@@ -298,7 +298,6 @@ func subtitleDownloadEnabled(req models.DownloadRequest, settings config.AppSett
 func (s *YtDlpService) baseArgs() []string {
 	st := s.appSettings()
 	args := []string{
-		"--no-check-certificates",
 		"--prefer-free-formats",
 	}
 	if s.ffmpegPath != "" {

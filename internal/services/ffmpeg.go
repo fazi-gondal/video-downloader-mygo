@@ -2,7 +2,6 @@ package services
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -51,6 +50,9 @@ func (s *FFmpegService) CanRemux(source, target string) bool {
 
 // Convert runs a conversion job. onProgress receives 0–100.
 func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, onProgress func(float64)) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if s.ffmpeg == "" {
 		return "", fmt.Errorf("ffmpeg not found on PATH")
 	}
@@ -86,7 +88,25 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 	}
 	args = append(args, out)
 
-	cmd := exec.CommandContext(ctx, s.ffmpeg, args...)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	watchDone := make(chan struct{})
+	watchExited := make(chan struct{})
+	go func() {
+		defer close(watchExited)
+		select {
+		case <-job.Done():
+			cancel()
+		case <-watchDone:
+		}
+	}()
+	defer func() {
+		close(watchDone)
+		cancel()
+		<-watchExited
+	}()
+
+	cmd := exec.CommandContext(runCtx, s.ffmpeg, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -99,24 +119,21 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
-	var stderrBuffer bytes.Buffer
-	stderrDone := make(chan struct{})
+	stderrBuffer := &boundedDiagnosticBuffer{limit: maxYtDlpDiagnosticBytes}
+	stderrDone := make(chan error, 1)
 	go func() {
-		_, _ = io.Copy(&stderrBuffer, stderr)
-		close(stderrDone)
+		_, err := io.Copy(stderrBuffer, stderr)
+		stderrDone <- err
 	}()
 
 	// duration for percent (best-effort via ffprobe)
-	duration := s.probeDuration(src)
+	duration := s.probeDuration(runCtx, src)
 
 	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		if job.Cancelled() {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			<-stderrDone
-			_ = os.Remove(out)
-			return "", context.Canceled
+			cancel()
 		}
 		line := scanner.Text()
 		if strings.HasPrefix(line, "out_time_ms=") {
@@ -131,14 +148,23 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 		}
 	}
 
-	if scanErr := scanner.Err(); scanErr != nil {
+	scanErr := scanner.Err()
+	if scanErr != nil {
 		_ = cmd.Process.Kill()
 	}
 	waitErr := cmd.Wait()
-	<-stderrDone
+	stderrErr := <-stderrDone
+	if scanErr != nil {
+		_ = os.Remove(out)
+		return "", fmt.Errorf("read ffmpeg progress: %w", scanErr)
+	}
+	if stderrErr != nil && waitErr == nil {
+		_ = os.Remove(out)
+		return "", fmt.Errorf("read ffmpeg diagnostics: %w", stderrErr)
+	}
 	if waitErr != nil {
 		_ = os.Remove(out)
-		if job.Cancelled() {
+		if job.Cancelled() || runCtx.Err() != nil {
 			return "", context.Canceled
 		}
 		msg := strings.TrimSpace(stderrBuffer.String())
@@ -151,6 +177,13 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 			msg = lines[len(lines)-1]
 		}
 		return "", fmt.Errorf("%s", msg)
+	}
+	if info, err := os.Stat(out); err != nil || info.IsDir() || info.Size() == 0 {
+		_ = os.Remove(out)
+		if err != nil {
+			return "", fmt.Errorf("ffmpeg did not create output: %w", err)
+		}
+		return "", fmt.Errorf("ffmpeg created an empty output")
 	}
 	if onProgress != nil {
 		onProgress(100)
@@ -187,11 +220,11 @@ func fileMissing(path string) bool {
 	return os.IsNotExist(err)
 }
 
-func (s *FFmpegService) probeDuration(path string) float64 {
+func (s *FFmpegService) probeDuration(ctx context.Context, path string) float64 {
 	if s.ffprobe == "" {
 		return 0
 	}
-	cmd := exec.Command(s.ffprobe, "-v", "error", "-show_entries", "format=duration",
+	cmd := exec.CommandContext(ctx, s.ffprobe, "-v", "error", "-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1", path)
 	out, err := cmd.Output()
 	if err != nil {

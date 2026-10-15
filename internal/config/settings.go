@@ -49,19 +49,28 @@ func DefaultSettings() AppSettings {
 }
 
 type SettingsRepository struct {
-	mu   sync.Mutex
-	path string
+	mu      sync.Mutex
+	path    string
+	initErr error
 }
 
 func NewSettingsRepository() *SettingsRepository {
-	return &SettingsRepository{path: settingsPath()}
+	path, err := settingsPath()
+	return &SettingsRepository{path: path, initErr: err}
 }
 
-func settingsPath() string {
+func settingsPath() (string, error) {
 	var dir string
 	switch runtime.GOOS {
 	case "windows":
-		dir = filepath.Join(os.Getenv("LOCALAPPDATA"), "VideoDownloader")
+		base := os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			base, _ = os.UserConfigDir()
+		}
+		if base == "" {
+			base, _ = os.UserHomeDir()
+		}
+		dir = filepath.Join(base, "VideoDownloader")
 	case "darwin":
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, "Library", "Application Support", "VideoDownloader")
@@ -69,19 +78,34 @@ func settingsPath() string {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".config", "VideoDownloader")
 	}
-	_ = os.MkdirAll(dir, 0o700)
-	return filepath.Join(dir, "settings.json")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return filepath.Join(dir, "settings.json"), fmt.Errorf("create settings directory: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return filepath.Join(dir, "settings.json"), fmt.Errorf("secure settings directory: %w", err)
+		}
+	}
+	return filepath.Join(dir, "settings.json"), nil
 }
 
 func (r *SettingsRepository) Load() (AppSettings, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.initErr != nil {
+		return DefaultSettings(), r.initErr
+	}
 	data, err := os.ReadFile(r.path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return DefaultSettings(), nil
 		}
 		return DefaultSettings(), fmt.Errorf("read settings: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(r.path, 0o600); err != nil {
+			return DefaultSettings(), fmt.Errorf("secure settings permissions: %w", err)
+		}
 	}
 	var s AppSettings
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -107,12 +131,18 @@ func (r *SettingsRepository) Load() (AppSettings, error) {
 func (r *SettingsRepository) Save(s AppSettings) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.initErr != nil {
+		return r.initErr
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode settings: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(r.path), 0o700); err != nil {
 		return fmt.Errorf("create settings directory: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(filepath.Dir(r.path), 0o700)
 	}
 	return atomicWriteSettingsFile(r.path, data)
 }
@@ -146,8 +176,30 @@ func atomicWriteSettingsFile(path string, data []byte) error {
 		return fmt.Errorf("close settings temporary file: %w", err)
 	}
 	closed = true
+	if runtime.GOOS == "windows" {
+		return replaceWindowsSettingsFile(tmpPath, path)
+	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replace settings file: %w", err)
 	}
+	return nil
+}
+
+func replaceWindowsSettingsFile(tmpPath, path string) error {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return fmt.Errorf("replace settings file: destination is a directory")
+	}
+	backup := path + ".bak"
+	_ = os.Remove(backup)
+	if err := os.Rename(path, backup); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("stage existing settings file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		if restoreErr := os.Rename(backup, path); restoreErr != nil && !errors.Is(restoreErr, fs.ErrNotExist) {
+			return fmt.Errorf("replace settings file: %w (restore failed: %v)", err, restoreErr)
+		}
+		return fmt.Errorf("replace settings file: %w", err)
+	}
+	_ = os.Remove(backup)
 	return nil
 }

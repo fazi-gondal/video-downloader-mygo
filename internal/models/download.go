@@ -144,6 +144,22 @@ type DownloadTask struct {
 	mu       sync.Mutex
 }
 
+// DownloadTaskSnapshot is an immutable view of a task suitable for UI and
+// persistence code. Services mutate DownloadTask from worker goroutines, so
+// callers must not read its exported fields while work is in progress.
+type DownloadTaskSnapshot struct {
+	ID          string
+	Request     DownloadRequest
+	State       DownloadState
+	Progress    ProgressInfo
+	OutputPath  string
+	Error       string
+	ErrorDetail string
+	CreatedAt   time.Time
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+}
+
 func NewDownloadTask(req DownloadRequest) *DownloadTask {
 	n := idCounter.Add(1)
 	return &DownloadTask{
@@ -188,6 +204,48 @@ func (t *DownloadTask) Cancelled() bool {
 	}
 }
 
+// Snapshot returns a consistent copy of the task's mutable state.
+func (t *DownloadTask) Snapshot() DownloadTaskSnapshot {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return DownloadTaskSnapshot{
+		ID:          t.ID,
+		Request:     cloneDownloadRequest(t.Request),
+		State:       t.State,
+		Progress:    t.Progress,
+		OutputPath:  t.OutputPath,
+		Error:       t.Error,
+		ErrorDetail: t.ErrorDetail,
+		CreatedAt:   t.CreatedAt,
+		StartedAt:   cloneTime(t.StartedAt),
+		FinishedAt:  cloneTime(t.FinishedAt),
+	}
+}
+
+func (t *DownloadTask) StateValue() DownloadState {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.State
+}
+
+func (t *DownloadTask) SetError(message string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Error = message
+}
+
+func (t *DownloadTask) SetErrorDetail(message string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ErrorDetail = message
+}
+
+func (t *DownloadTask) SetOutputPath(path string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.OutputPath = path
+}
+
 // Done is closed when Cancel is called; safe for select across packages.
 func (t *DownloadTask) Done() <-chan struct{} {
 	return t.cancelCh
@@ -202,6 +260,7 @@ func (t *DownloadTask) ResetForRetry() {
 	t.ErrorDetail = ""
 	t.Progress = ProgressInfo{}
 	t.OutputPath = ""
+	t.StartedAt = nil
 	t.FinishedAt = nil
 	t.State = StatePending
 }
@@ -228,8 +287,23 @@ func (t *DownloadTask) SetProgress(p ProgressInfo) {
 }
 
 func (t *DownloadTask) Filename() string {
-	if t.OutputPath != "" {
-		return filepath.Base(t.OutputPath)
+	snapshot := t.Snapshot()
+	if snapshot.OutputPath != "" {
+		return filepath.Base(snapshot.OutputPath)
 	}
-	return t.Request.Title
+	return snapshot.Request.Title
+}
+
+func cloneDownloadRequest(req DownloadRequest) DownloadRequest {
+	req.SubtitleLangs = append([]string(nil), req.SubtitleLangs...)
+	req.SelectedAudioTrackIDs = append([]string(nil), req.SelectedAudioTrackIDs...)
+	return req
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }

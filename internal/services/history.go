@@ -39,13 +39,25 @@ func NewHistoryService() (*HistoryService, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create history directory: %w", err)
 	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("secure history directory: %w", err)
+		}
+	}
 	return &HistoryService{path: filepath.Join(dir, "history.json")}, nil
 }
 
 func historyDir() string {
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.Join(os.Getenv("LOCALAPPDATA"), "VideoDownloader")
+		base := os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			base, _ = os.UserConfigDir()
+		}
+		if base == "" {
+			base, _ = os.UserHomeDir()
+		}
+		return filepath.Join(base, "VideoDownloader")
 	case "darwin":
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, "Library", "Application Support", "VideoDownloader")
@@ -62,6 +74,11 @@ func (h *HistoryService) load() ([]HistoryEntry, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("read history: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(h.path, 0o600); err != nil {
+			return nil, fmt.Errorf("secure history permissions: %w", err)
+		}
 	}
 	var entries []HistoryEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
@@ -81,11 +98,15 @@ func (h *HistoryService) save(entries []HistoryEntry) error {
 	if err := os.MkdirAll(filepath.Dir(h.path), 0o700); err != nil {
 		return fmt.Errorf("create history directory: %w", err)
 	}
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(filepath.Dir(h.path), 0o700)
+	}
 	return atomicWriteHistoryFile(h.path, data)
 }
 
 func (h *HistoryService) Record(task *models.DownloadTask) error {
-	if !task.State.IsTerminal() {
+	snapshot := task.Snapshot()
+	if !snapshot.State.IsTerminal() {
 		return nil
 	}
 	h.mu.Lock()
@@ -94,16 +115,16 @@ func (h *HistoryService) Record(task *models.DownloadTask) error {
 	if err != nil {
 		return err
 	}
-	req := task.Request
+	req := snapshot.Request
 	finished := ""
-	if task.FinishedAt != nil {
-		finished = task.FinishedAt.Format(time.RFC3339)
+	if snapshot.FinishedAt != nil {
+		finished = snapshot.FinishedAt.Format(time.RFC3339)
 	}
 	e := HistoryEntry{
-		ID: task.ID, URL: req.URL, Title: req.Title, Mode: string(req.Mode),
+		ID: snapshot.ID, URL: req.URL, Title: req.Title, Mode: string(req.Mode),
 		Container: req.Container, AudioFmt: req.AudioFormat, OutputDir: req.OutputDir,
-		OutputPath: task.OutputPath, State: string(task.State), Error: task.Error,
-		CreatedAt: task.CreatedAt.Format(time.RFC3339), FinishedAt: finished,
+		OutputPath: snapshot.OutputPath, State: string(snapshot.State), Error: snapshot.Error,
+		CreatedAt: snapshot.CreatedAt.Format(time.RFC3339), FinishedAt: finished,
 	}
 	found := false
 	for i := range entries {
@@ -192,8 +213,30 @@ func atomicWriteHistoryFile(path string, data []byte) error {
 		return fmt.Errorf("close history temporary file: %w", err)
 	}
 	closed = true
+	if runtime.GOOS == "windows" {
+		return replaceWindowsHistoryFile(tmpPath, path)
+	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replace history file: %w", err)
 	}
+	return nil
+}
+
+func replaceWindowsHistoryFile(tmpPath, path string) error {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return fmt.Errorf("replace history file: destination is a directory")
+	}
+	backup := path + ".bak"
+	_ = os.Remove(backup)
+	if err := os.Rename(path, backup); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("stage existing history file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		if restoreErr := os.Rename(backup, path); restoreErr != nil && !errors.Is(restoreErr, fs.ErrNotExist) {
+			return fmt.Errorf("replace history file: %w (restore failed: %v)", err, restoreErr)
+		}
+		return fmt.Errorf("replace history file: %w", err)
+	}
+	_ = os.Remove(backup)
 	return nil
 }

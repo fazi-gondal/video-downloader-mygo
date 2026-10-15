@@ -58,7 +58,7 @@ chmod_bin() {
 # https://github.com/yt-dlp/yt-dlp/releases
 ytdlp_url() {
   local plat="$1"
-  local base="https://github.com/yt-dlp/yt-dlp/releases/${YTDLP_TAG}/download"
+  local base="https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_TAG}"
   case "$plat" in
     windows-amd64) echo "$base/yt-dlp.exe" ;;
     windows-arm64) echo "$base/yt-dlp_arm64.exe" ;;
@@ -106,10 +106,10 @@ ffmpeg_archive_url() {
 ffmpeg_sha256() {
 	local plat="$1"
 	case "$plat" in
-        windows-amd64) echo "dfb89d02948f94b77a89c218e6abbb16032c19a329da972886f9029b82b229e0" ;;
-        windows-arm64) echo "4ad7d4e3e842cd6eeeee9ffac696e34c0b0b6768c209190c931027ec81325b8e" ;;
-        linux-amd64)   echo "9b1136f703bb207d7653a6504ae8dce135fec41ec9fb61eb9117d2fc2dd98d16" ;;
-        linux-arm64)   echo "298b31e41cc11627ddcccd815dc74dc04c99ebb3a45916e23bbda5ea80699a83" ;;
+        windows-amd64) echo "0111401c68487bd1966637266809b97feb98f87fb688a6f3197e27dfb1567eac" ;;
+        windows-arm64) echo "4c8db10281c07ff49c870243fb6ec3a163ec91cea638d66dfa0b3cd1aae9dd31" ;;
+        linux-amd64)   echo "0473bd5d641a368f22e2e7037b4ee9421219be15d9dbd5f8108823c0db0944fe" ;;
+        linux-arm64)   echo "ac8128dc560774cf2e526340b73f224a5ba8eb631a4c220c4eef3be9a57e8a01" ;;
         *) echo "" ;;
     esac
 }
@@ -177,7 +177,7 @@ install_platform() {
 
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  trap 'rm -rf "${tmp:-}"' RETURN
 
 	case "$fu" in
 		*.zip)
@@ -214,6 +214,8 @@ install_platform() {
     chmod_bin "$dir/$fpname"
   fi
   echo "  ok: $(ls -1 "$dir")"
+  rm -rf "$tmp"
+  trap - RETURN
 }
 
 host_plat() {

@@ -44,28 +44,28 @@ jobs:
             os: ubuntu-latest
             platform: windows/amd64
             fetch: windows-amd64
-          # - name: Windows arm64
-          #   os: ubuntu-latest
-          #   platform: windows/arm64
-          #   fetch: windows-arm64
-          # - name: Linux amd64
-          #   os: ubuntu-latest
-          #   platform: linux/amd64
-          #   fetch: linux-amd64
-          # - name: Linux arm64
-          #   os: ubuntu-latest
-          #   platform: linux/arm64
-          #   fetch: linux-arm64
-          # # macOS helper binaries are installed by Homebrew on a runner with
-          # # the same architecture as the package being produced.
-          # - name: macOS amd64
-          #   os: macos-13
-          #   platform: darwin/amd64
-          #   fetch: darwin-amd64
-          # - name: macOS arm64
-          #   os: macos-latest
-          #   platform: darwin/arm64
-          #   fetch: darwin-arm64
+          - name: Windows arm64
+            os: ubuntu-latest
+            platform: windows/arm64
+            fetch: windows-arm64
+          - name: Linux amd64
+            os: ubuntu-latest
+            platform: linux/amd64
+            fetch: linux-amd64
+          - name: Linux arm64
+            os: ubuntu-latest
+            platform: linux/arm64
+            fetch: linux-arm64
+          # macOS helper binaries are installed by Homebrew on a runner with
+          # the same architecture as the package being produced.
+          - name: macOS amd64
+            os: macos-13
+            platform: darwin/amd64
+            fetch: darwin-amd64
+          - name: macOS arm64
+            os: macos-latest
+            platform: darwin/arm64
+            fetch: darwin-arm64
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -81,12 +81,15 @@ jobs:
       - name: Verify bundled tools
         shell: bash
         run: |
-          test -f "resources/${{ matrix.fetch }}/bin/yt-dlp" \
-            -o -f "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
-          test -f "resources/${{ matrix.fetch }}/bin/ffmpeg" \
-            -o -f "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
-          test -f "resources/${{ matrix.fetch }}/bin/ffprobe" \
-            -o -f "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
+          if [[ "${{ matrix.fetch }}" == windows-* ]]; then
+            test -f "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
+            test -f "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
+            test -f "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
+          else
+            test -x "resources/${{ matrix.fetch }}/bin/yt-dlp"
+            test -x "resources/${{ matrix.fetch }}/bin/ffmpeg"
+            test -x "resources/${{ matrix.fetch }}/bin/ffprobe"
+          fi
       - name: Build package
         env:
           GH_TOKEN: ${{ github.token }}

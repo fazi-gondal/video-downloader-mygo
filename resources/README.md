@@ -24,10 +24,10 @@ resources/
 │       ├── ffmpeg
 │       └── ffprobe
 ├── linux-arm64/
-    └── bin/
-        ├── yt-dlp
-        ├── ffmpeg
-        └── ffprobe
+│   └── bin/
+│       ├── yt-dlp
+│       ├── ffmpeg
+│       └── ffprobe
 ├── darwin-amd64/
 │   └── bin/
 │       ├── yt-dlp

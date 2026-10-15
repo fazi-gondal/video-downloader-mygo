@@ -8,6 +8,8 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 - Git.
 - MyGo v0.4.8 through the pinned Go tool in `go.mod`.
 - FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
+- A supported yt-dlp JavaScript runtime such as Deno on `PATH` for extractor
+  workflows that require one; it is not bundled by the current release.
 - Bash, curl, unzip, and tar/xz when using `scripts/fetch-tools.sh`.
 - On Windows, Git Bash or WSL is required to run the Bash helper script. The Go application itself runs natively from PowerShell or Command Prompt.
 

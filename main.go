@@ -11,6 +11,8 @@ import (
 
 func main() {
 	a := app.New()
+	mygo.App.OnWindowAllClosed(a.Shutdown)
+	defer a.Shutdown()
 
 	mygo.App.WhenReady(func() {
 		// Default title bar = native OS chrome (Windows caption buttons,

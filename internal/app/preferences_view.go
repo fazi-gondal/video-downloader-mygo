@@ -207,7 +207,8 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
 			if ui.Button(c, "Export settings").Clicked() {
-				go a.exportSettings()
+				settings := a.settings
+				go a.exportSettings(settings)
 			}
 			if ui.Button(c, "Import settings").Clicked() {
 				go a.importSettings()

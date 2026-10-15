@@ -440,6 +440,12 @@ func TestDownloadArgsPrintFinalPathAfterPostProcessing(t *testing.T) {
 	}
 }
 
+func TestBaseArgsKeepsTLSCertificateVerificationEnabled(t *testing.T) {
+	if hasArgument(testYtDlpService().baseArgs(), "--no-check-certificates") {
+		t.Fatal("yt-dlp arguments disable TLS certificate verification")
+	}
+}
+
 func TestBuildDownloadArgsEmptyCustomSubtitleSelectionDisablesSubtitleOptions(t *testing.T) {
 	req := models.DownloadRequest{
 		Mode:                  models.ModeVideoAudio,

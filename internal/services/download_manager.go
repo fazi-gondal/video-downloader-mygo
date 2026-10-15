@@ -62,7 +62,7 @@ func NewDownloadManager(engine *YtDlpService, maxWorkers int) *DownloadManager {
 		maxWorkers: maxWorkers,
 		tasks:      make(map[string]*models.DownloadTask),
 		queue:      make(chan *models.DownloadTask, 256),
-		events:     make(chan TaskEvent, 64),
+		events:     make(chan TaskEvent, 2048),
 		shutdown:   make(chan struct{}),
 		resize:     make(chan struct{}),
 		ctx:        ctx,
@@ -180,11 +180,11 @@ func (m *DownloadManager) Cancel(id string) {
 	m.mu.Lock()
 	task := m.tasks[id]
 	m.mu.Unlock()
-	if task == nil || task.State.IsTerminal() {
+	if task == nil || task.StateValue().IsTerminal() {
 		return
 	}
 	task.Cancel()
-	if task.State == models.StatePending {
+	if task.StateValue() == models.StatePending {
 		task.SetState(models.StateCancelled)
 		m.emit(EventTaskState, task, nil)
 	}
@@ -216,13 +216,15 @@ func (m *DownloadManager) RetryContext(ctx context.Context, id string) (*models.
 		m.mu.Unlock()
 		return nil, errors.New("download task not found")
 	}
-	if task.State != models.StateError && task.State != models.StateCancelled {
+	state := task.StateValue()
+	if state != models.StateError && state != models.StateCancelled {
 		m.mu.Unlock()
 		return nil, errors.New("download task is not retryable")
 	}
-	previousState := task.State
-	previousError := task.Error
-	previousDetail := task.ErrorDetail
+	previous := task.Snapshot()
+	previousState := previous.State
+	previousError := previous.Error
+	previousDetail := previous.ErrorDetail
 	task.ResetForRetry()
 	m.mu.Unlock()
 
@@ -231,13 +233,13 @@ func (m *DownloadManager) RetryContext(ctx context.Context, id string) (*models.
 		m.emit(EventTaskState, task, nil)
 		return task, nil
 	case <-ctx.Done():
-		task.Error = previousError
-		task.ErrorDetail = previousDetail
+		task.SetError(previousError)
+		task.SetErrorDetail(previousDetail)
 		task.SetState(previousState)
 		return nil, ctx.Err()
 	case <-m.shutdown:
-		task.Error = previousError
-		task.ErrorDetail = previousDetail
+		task.SetError(previousError)
+		task.SetErrorDetail(previousDetail)
 		task.SetState(previousState)
 		return nil, ErrDownloadManagerClosed
 	}
@@ -259,6 +261,17 @@ func (m *DownloadManager) All() []*models.DownloadTask {
 	return out
 }
 
+// Snapshots returns a consistent view of every task for UI/persistence code.
+func (m *DownloadManager) Snapshots() []models.DownloadTaskSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]models.DownloadTaskSnapshot, 0, len(m.tasks))
+	for _, task := range m.tasks {
+		out = append(out, task.Snapshot())
+	}
+	return out
+}
+
 // ClearFinished removes terminal tasks from the in-memory queue. History is
 // persisted separately, so clearing the downloads screen does not erase the
 // user's history.
@@ -266,7 +279,7 @@ func (m *DownloadManager) ClearFinished() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, task := range m.tasks {
-		if task.State.IsTerminal() {
+		if task.StateValue().IsTerminal() {
 			delete(m.tasks, id)
 		}
 	}
@@ -288,16 +301,17 @@ func (m *DownloadManager) Shutdown() {
 
 		m.cancel()
 		for _, task := range tasks {
-			if task.State.IsTerminal() {
+			if task.StateValue().IsTerminal() {
 				continue
 			}
 			task.Cancel()
-			if task.State == models.StatePending {
+			if task.StateValue() == models.StatePending {
 				task.SetState(models.StateCancelled)
 				m.emit(EventTaskState, task, nil)
 			}
 		}
 		m.wg.Wait()
+		close(m.events)
 	})
 }
 
@@ -335,7 +349,7 @@ func (m *DownloadManager) worker() {
 				continue
 			}
 			if task.Cancelled() {
-				if !task.State.IsTerminal() {
+				if !task.StateValue().IsTerminal() {
 					task.SetState(models.StateCancelled)
 					m.emit(EventTaskState, task, nil)
 				}
@@ -343,7 +357,7 @@ func (m *DownloadManager) worker() {
 			}
 			if m.isStopped() {
 				task.Cancel()
-				if !task.State.IsTerminal() {
+				if !task.StateValue().IsTerminal() {
 					task.SetState(models.StateCancelled)
 					m.emit(EventTaskState, task, nil)
 				}
@@ -419,7 +433,7 @@ func (m *DownloadManager) runTask(task *models.DownloadTask) {
 		return
 	}
 
-	task.OutputPath = path
+	task.SetOutputPath(path)
 	task.SetState(models.StateCompleted)
 	m.emit(EventTaskState, task, nil)
 	m.emit(EventTaskFinished, task, nil)
@@ -429,17 +443,25 @@ func (m *DownloadManager) finishTaskError(task *models.DownloadTask, err error) 
 	if err == nil {
 		err = errors.New("download failed")
 	}
-	task.Error = err.Error()
+	task.SetError(err.Error())
 	task.SetState(models.StateError)
 	m.emit(EventTaskState, task, err)
 	m.emit(EventTaskFinished, task, err)
 }
 
 func (m *DownloadManager) emit(kind EventKind, task *models.DownloadTask, err error) {
+	// Progress is intentionally lossy: it can be emitted many times per
+	// second. Queue/state/finished events are bounded by the task queue and
+	// must remain observable so history and the UI cannot miss a terminal job.
+	if kind == EventTaskProgress {
+		select {
+		case m.events <- TaskEvent{Kind: kind, Task: task, Error: err}:
+		default:
+		}
+		return
+	}
 	select {
 	case m.events <- TaskEvent{Kind: kind, Task: task, Error: err}:
-	default:
-		// Drop only UI notifications when the UI is not consuming; accepted
-		// work itself is never dropped from the bounded task queue.
+	case <-m.shutdown:
 	}
 }

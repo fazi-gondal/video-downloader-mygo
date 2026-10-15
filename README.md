@@ -141,7 +141,7 @@ The Linux archive may require GTK/WebKit runtime packages on minimal distributio
 
 ### macOS
 
-The current release matrix targets macOS arm64. Unsigned/ad-hoc builds may be blocked by Gatekeeper. FFmpeg bundling for Apple Silicon may require a separately installed system/Homebrew FFmpeg depending on the release configuration.
+The release matrix targets both macOS amd64 and arm64. The workflow bundles yt-dlp and an architecture-matched FFmpeg/FFprobe Homebrew bottle. Unsigned/ad-hoc builds may be blocked by Gatekeeper; configure Developer ID signing and notarization for public distribution.
 
 ## Run from source
 
@@ -213,6 +213,9 @@ resources/
     yt-dlp
     ffmpeg
     ffprobe
+  linux-arm64/bin/       # same three Unix executables
+  darwin-amd64/bin/      # yt-dlp plus Homebrew FFmpeg/FFprobe in releases
+  darwin-arm64/bin/      # yt-dlp plus Homebrew FFmpeg/FFprobe in releases
 ```
 
 The helper script supports these environment variables:
@@ -232,7 +235,15 @@ The script requires `curl`, `unzip`, and `tar`/`xz` as appropriate for the
 target archive. It verifies SHA-256 checksums before extracting only `yt-dlp`,
 `ffmpeg`, and `ffprobe` into the platform resource directory, and marks Unix
 executables as executable. Update the recorded checksum when intentionally
-upgrading a helper release.
+upgrading a helper release. macOS FFmpeg/FFprobe are installed from a
+architecture-matched Homebrew bottle; the release workflow runs those jobs on
+matching macOS runners.
+
+The release currently does not bundle a JavaScript runtime. yt-dlp may use a
+runtime such as Deno for some modern YouTube challenge flows; install a
+supported runtime on `PATH` when yt-dlp reports that one is required, or use a
+source build with the runtime available. This behavior should be verified
+against the target sites before promising complete extractor parity.
 
 Runtime lookup order is:
 
@@ -419,6 +430,7 @@ bash -n scripts/fetch-tools.sh
 Race tests may require a working C compiler on the host even though production MyGo builds use `CGO_ENABLED=0`:
 
 ```bash
+CGO_ENABLED=1 go test -race ./... -count=1
 ```
 
 ## Troubleshooting
@@ -467,7 +479,7 @@ Check these first:
 - [BUILD.md](BUILD.md): development, packaging, release, signing, and bundled-tool instructions.
 - [resources/README.md](resources/README.md): resource layout and helper-binary behavior.
 - [.github/workflows/ci.yml](.github/workflows/ci.yml): test and packaging smoke checks.
-- [.github/workflows/release.yml](.github/workflows/release.yml): tagged release workflow.
+- [.github/workflows/release.yml](.github/workflows/release.yml): tagged multi-platform release workflow.
 - [mygo.json](mygo.json): application identity, version, output, and Linux package metadata.
 - [go.mod](go.mod): Go version, dependencies, and pinned MyGo CLI tool.
 
