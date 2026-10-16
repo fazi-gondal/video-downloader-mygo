@@ -394,6 +394,13 @@ func (m *DownloadManager) isStopped() bool {
 func (m *DownloadManager) runTask(task *models.DownloadTask) {
 	task.SetState(models.StatePreparing)
 	m.emit(EventTaskState, task, nil)
+	if task.Request.ExpectedSizeBytes > 0 {
+		task.SetProgress(models.ProgressInfo{
+			TotalBytes:      task.Request.ExpectedSizeBytes,
+			TotalIsEstimate: task.Request.ExpectedSizeIsApproximate,
+		})
+		m.emit(EventTaskProgress, task, nil)
+	}
 
 	ctx, cancel := context.WithCancel(m.ctx)
 	defer cancel()
@@ -421,6 +428,24 @@ func (m *DownloadManager) runTask(task *models.DownloadTask) {
 		return
 	}
 	path, err := m.engine.Download(ctx, task, func(p models.ProgressInfo) {
+		if p.Status == "finished" {
+			if task.StateValue() != models.StateProcessing {
+				task.SetState(models.StateProcessing)
+				m.emit(EventTaskState, task, nil)
+			}
+		} else if p.Status == "downloading" && task.StateValue() == models.StateProcessing {
+			// yt-dlp can finish one requested stream before starting another.
+			// Return to downloading until the process itself exits.
+			task.SetState(models.StateDownloading)
+			m.emit(EventTaskState, task, nil)
+		}
+		if p.TotalBytes <= 0 && task.Request.ExpectedSizeBytes > 0 {
+			p.TotalBytes = task.Request.ExpectedSizeBytes
+			p.TotalIsEstimate = task.Request.ExpectedSizeIsApproximate
+			if p.TotalBytes > 0 && p.DownloadedBytes >= 0 {
+				p.Percent = float64(p.DownloadedBytes) / float64(p.TotalBytes) * 100
+			}
+		}
 		task.SetProgress(p)
 		m.emit(EventTaskProgress, task, nil)
 	})

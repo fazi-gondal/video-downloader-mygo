@@ -1269,12 +1269,14 @@ func formatHeight(format models.FormatInfo) int {
 
 func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) models.DownloadRequest {
 	a.syncContainerSelection()
+	expectedSize, expectedSizeApproximate := a.estimatedFinalSize()
 	req := models.DownloadRequest{
 		URL: url, Title: title, Mode: a.mode, OutputDir: a.settings.DownloadDir,
 		Container: a.container, MaxHeight: a.maxHeight, AudioFormat: a.audioFormat,
 		AudioBitrateKbps: 0, // 0 = best available (yt-dlp ba* / opus preferred)
 		EmbedThumbnail:   a.settings.EmbedThumbnail, EmbedMetadata: a.settings.EmbedMetadata,
 		PreferVP9: a.settings.PreferVP9Video, ThumbnailURL: thumb,
+		ExpectedSizeBytes: expectedSize, ExpectedSizeIsApproximate: expectedSizeApproximate,
 		PlaylistTitle: playlistTitle, PlaylistIndex: index,
 		VideoFormatID: a.selectedVideoFormat, AudioFormatID: a.selectedAudioFormat,
 		AudioSelectionMode:    models.AudioSelectionMode(a.audioTracksMode),
@@ -1521,13 +1523,17 @@ func downloadMetrics(p models.ProgressInfo) string {
 		}
 		parts = append(parts, formatBytes(p.DownloadedBytes)+" / "+total)
 	} else {
-		parts = append(parts, formatBytes(p.DownloadedBytes))
+		parts = append(parts, formatBytes(p.DownloadedBytes)+" / size unknown")
 	}
 	if p.SpeedBps > 0 {
 		parts = append(parts, formatSpeed(p.SpeedBps))
+	} else {
+		parts = append(parts, "speed calculating")
 	}
 	if p.ETA > 0 {
 		parts = append(parts, "ETA "+formatDuration(p.ETA.Seconds()))
+	} else {
+		parts = append(parts, "ETA calculating")
 	}
 	return strings.Join(parts, " · ")
 }

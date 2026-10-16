@@ -29,7 +29,10 @@ type YtDlpService struct {
 	settings   func() config.AppSettings
 }
 
-const maxYtDlpDiagnosticBytes = 1 << 20
+const (
+	maxYtDlpDiagnosticBytes = 1 << 20
+	progressEmitInterval    = 250 * time.Millisecond
+)
 
 type boundedDiagnosticBuffer struct {
 	buf       bytes.Buffer
@@ -182,14 +185,19 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 	}, 1)
 	go func() {
 		var lastPath string
+		var lastProgressAt time.Time
+		var lastProgressStatus string
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.HasPrefix(line, "download:") {
-				p := parseProgressLine(strings.TrimPrefix(line, "download:"))
-				if onProgress != nil {
+			if p, ok := parseProgressLine(line); ok && onProgress != nil {
+				now := time.Now()
+				statusChanged := p.Status != "" && p.Status != lastProgressStatus
+				if lastProgressAt.IsZero() || statusChanged || now.Sub(lastProgressAt) >= progressEmitInterval {
 					onProgress(p)
+					lastProgressAt = now
+					lastProgressStatus = p.Status
 				}
 			}
 			// yt-dlp prints the final path on some templates; capture Destination.
@@ -280,7 +288,10 @@ func (s *YtDlpService) downloadArgs(req models.DownloadRequest) []string {
 	args = append(args,
 		"--newline",
 		"--progress",
-		"--progress-template", "download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress.fragment_index)s|%(progress.fragment_count)s",
+		// The `download:` prefix selects yt-dlp's progress template type; it is
+		// not printed. Include a literal marker so stdout can be distinguished
+		// from diagnostics, paths, and other yt-dlp output.
+		"--progress-template", "download:PROGRESS|%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress.fragment_index)s|%(progress.fragment_count)s",
 		"--print", "after_move:filepath",
 		req.URL,
 	)
@@ -776,35 +787,85 @@ func parsePlaylist(raw map[string]any, originalURL string) *models.PlaylistInfo 
 	return p
 }
 
-var progressRe = regexp.MustCompile(`^([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)$`)
+const progressMarker = "PROGRESS|"
 
-func parseProgressLine(line string) models.ProgressInfo {
-	p := models.ProgressInfo{}
-	m := progressRe.FindStringSubmatch(line)
-	if m == nil {
-		return p
+// parseProgressLine parses the literal marker emitted by downloadArgs. The
+// `download:` part of --progress-template is a selector understood by yt-dlp,
+// not text that yt-dlp writes to stdout. The seven-field form is retained for
+// compatibility with older helper output; new output includes status first.
+func parseProgressLine(line string) (models.ProgressInfo, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, progressMarker) {
+		return models.ProgressInfo{}, false
 	}
-	p.DownloadedBytes, _ = strconv.ParseInt(m[1], 10, 64)
-	if m[2] != "" && m[2] != "NA" {
-		p.TotalBytes, _ = strconv.ParseInt(m[2], 10, 64)
-	} else if m[3] != "" && m[3] != "NA" {
-		p.TotalBytes, _ = strconv.ParseInt(m[3], 10, 64)
+	fields := strings.Split(strings.TrimPrefix(line, progressMarker), "|")
+	var status string
+	if len(fields) == 8 {
+		status = strings.TrimSpace(fields[0])
+		fields = fields[1:]
+	}
+	if len(fields) != 7 {
+		return models.ProgressInfo{}, false
+	}
+	p := models.ProgressInfo{Status: status}
+	p.DownloadedBytes = parseProgressInt64(fields[0])
+	if total := parseProgressInt64(fields[1]); total > 0 {
+		p.TotalBytes = total
+	} else if estimate := parseProgressInt64(fields[2]); estimate > 0 {
+		p.TotalBytes = estimate
 		p.TotalIsEstimate = true
 	}
-	if m[4] != "" && m[4] != "NA" {
-		p.SpeedBps, _ = strconv.ParseFloat(m[4], 64)
+	p.SpeedBps = parseProgressFloat(fields[3])
+	if seconds := parseProgressFloat(fields[4]); seconds >= 0 {
+		p.ETA = time.Duration(seconds * float64(time.Second))
 	}
-	if m[5] != "" && m[5] != "NA" {
-		if sec, err := strconv.ParseFloat(m[5], 64); err == nil {
-			p.ETA = time.Duration(sec) * time.Second
-		}
-	}
-	p.FragmentIndex, _ = strconv.Atoi(m[6])
-	p.FragmentCount, _ = strconv.Atoi(m[7])
-	if p.TotalBytes > 0 {
+	p.FragmentIndex = parseProgressInt(fields[5])
+	p.FragmentCount = parseProgressInt(fields[6])
+	if p.TotalBytes > 0 && p.DownloadedBytes >= 0 {
 		p.Percent = float64(p.DownloadedBytes) / float64(p.TotalBytes) * 100
 	}
-	return p
+	return p, true
+}
+
+func parseProgressInt64(value string) int64 {
+	value = strings.TrimSpace(value)
+	if isUnavailableProgressValue(value) {
+		return 0
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed < 0 {
+		return 0
+	}
+	return parsed
+}
+
+func parseProgressInt(value string) int {
+	parsed := parseProgressInt64(value)
+	if parsed > int64(^uint(0)>>1) {
+		return 0
+	}
+	return int(parsed)
+}
+
+func parseProgressFloat(value string) float64 {
+	value = strings.TrimSpace(value)
+	if isUnavailableProgressValue(value) {
+		return 0
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < 0 {
+		return 0
+	}
+	return parsed
+}
+
+func isUnavailableProgressValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "na", "none", "null", "n/a":
+		return true
+	default:
+		return false
+	}
 }
 
 func newestFile(dir string) string {

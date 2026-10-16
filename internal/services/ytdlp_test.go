@@ -16,13 +16,14 @@ import (
 func TestMain(m *testing.M) {
 	if os.Getenv("GO_WANT_YTDLP_HELPER") == "1" {
 		if os.Getenv("GO_WANT_YTDLP_HELPER_BLOCK") == "1" {
-			fmt.Fprintln(os.Stdout, "download:0|1|1|NA|NA|0|0")
+			fmt.Fprintln(os.Stdout, "PROGRESS|downloading|0|100|NA|NA|NA|0|1")
 			for {
 				fmt.Fprintln(os.Stderr, strings.Repeat("diagnostic ", 512))
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
-		fmt.Fprintln(os.Stdout, "download:1|1|1|NA|NA|1|1")
+		fmt.Fprintln(os.Stdout, "PROGRESS|downloading|40|100|NA|20|3.5|1|1")
+		fmt.Fprintln(os.Stdout, "PROGRESS|finished|100|100|NA|NA|NA|1|1")
 		fmt.Fprintln(os.Stderr, strings.Repeat("diagnostic ", 512))
 		os.Exit(0)
 	}
@@ -74,6 +75,73 @@ func TestYtDlpDownloadDrainsStdoutAndStderrConcurrently(t *testing.T) {
 	}
 	if path != "" {
 		t.Fatalf("Download() path = %q, want empty fallback for helper", path)
+	}
+}
+
+func TestYtDlpDownloadReportsProgressFromLiteralMarker(t *testing.T) {
+	service := testYtDlpHelperService(t)
+	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: t.TempDir()})
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+
+	var progress []models.ProgressInfo
+	if _, err := service.Download(context.Background(), task, func(p models.ProgressInfo) {
+		progress = append(progress, p)
+	}); err != nil {
+		t.Fatalf("Download() error = %v", err)
+	}
+	if len(progress) != 2 {
+		t.Fatalf("progress callbacks = %d, want 2", len(progress))
+	}
+	if got := progress[0]; got.Status != "downloading" || got.DownloadedBytes != 40 || got.TotalBytes != 100 || got.SpeedBps != 20 || got.ETA != 3500*time.Millisecond {
+		t.Fatalf("downloading progress = %+v, want parsed bytes/total/speed/ETA", got)
+	}
+	if got := progress[1]; got.Status != "finished" || got.Percent != 100 {
+		t.Fatalf("finished progress = %+v, want finished at 100%%", got)
+	}
+}
+
+func TestParseProgressLine(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want models.ProgressInfo
+		ok   bool
+	}{
+		{
+			name: "status and exact total",
+			line: "PROGRESS|downloading|512|2048|NA|1024.5|1.25|2|8",
+			want: models.ProgressInfo{
+				Status: "downloading", DownloadedBytes: 512, TotalBytes: 2048,
+				SpeedBps: 1024.5, ETA: 1250 * time.Millisecond, FragmentIndex: 2,
+				FragmentCount: 8, Percent: 25,
+			},
+			ok: true,
+		},
+		{
+			name: "estimate and unavailable values",
+			line: "PROGRESS|downloading|10|NA|100|NA|NA|0|0",
+			want: models.ProgressInfo{
+				Status: "downloading", DownloadedBytes: 10, TotalBytes: 100,
+				TotalIsEstimate: true, Percent: 10,
+			},
+			ok: true,
+		},
+		{name: "unmarked output", line: "download:10|100|100|NA|NA|0|1", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseProgressLine(tt.line)
+			if ok != tt.ok {
+				t.Fatalf("parseProgressLine ok = %t, want %t", ok, tt.ok)
+			}
+			if !tt.ok {
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("parseProgressLine = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -437,6 +505,17 @@ func TestDownloadArgsPrintFinalPathAfterPostProcessing(t *testing.T) {
 	}
 	if got := args[len(args)-1]; got != req.URL {
 		t.Fatalf("download URL = %q, want %q", got, req.URL)
+	}
+}
+
+func TestDownloadArgsProgressTemplateContainsLiteralMarker(t *testing.T) {
+	args := testYtDlpService().downloadArgs(models.DownloadRequest{URL: "https://example.test/video"})
+	template := argumentValue(args, "--progress-template")
+	if !strings.HasPrefix(template, "download:PROGRESS|") {
+		t.Fatalf("progress template = %q, want literal PROGRESS marker after selector", template)
+	}
+	if !strings.Contains(template, "%(progress.status)s") {
+		t.Fatalf("progress template = %q, want progress status", template)
 	}
 }
 

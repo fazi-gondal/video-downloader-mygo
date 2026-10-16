@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
 
@@ -189,6 +190,41 @@ func TestDownloadMetricsShowsEstimatedTotalSpeedAndETA(t *testing.T) {
 		if !strings.Contains(metrics, want) {
 			t.Fatalf("metrics %q does not contain %q", metrics, want)
 		}
+	}
+}
+
+func TestDownloadMetricsExplainsUnknownProgressFields(t *testing.T) {
+	metrics := downloadMetrics(models.ProgressInfo{DownloadedBytes: 1024})
+	for _, want := range []string{"1.0 KB / size unknown", "speed calculating", "ETA calculating"} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics %q does not contain %q", metrics, want)
+		}
+	}
+}
+
+func TestBuildRequestCarriesEstimatedSizeForDownloadFallback(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Duration: 60,
+			Formats: []models.FormatInfo{
+				{ID: "video", IsVideo: true, Filesize: 2_000_000},
+				{ID: "audio", IsAudio: true, FilesizeApprox: 500_000},
+			},
+		},
+		settings:            config.AppSettings{},
+		mode:                models.ModeVideoAudio,
+		container:           "mp4",
+		preferredContainer:  "mp4",
+		audioTracksMode:     audioTracksNone,
+		subtitleMode:        subtitleModeNone,
+		selectedVideoFormat: "video",
+		selectedAudioFormat: "audio",
+		selectedAudio:       map[string]*bool{},
+		selectedSubtitle:    map[string]*bool{},
+	}
+	req := a.buildRequest("https://example.test/video", "Example", "", "", 0)
+	if req.ExpectedSizeBytes != 2_500_000 || !req.ExpectedSizeIsApproximate {
+		t.Fatalf("expected download size = (%d, %t), want (2500000, true)", req.ExpectedSizeBytes, req.ExpectedSizeIsApproximate)
 	}
 }
 

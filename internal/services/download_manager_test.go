@@ -24,6 +24,53 @@ func (e *blockingDownloadEngine) Download(ctx context.Context, _ *models.Downloa
 	return "", ctx.Err()
 }
 
+type progressDownloadEngine struct {
+	processing chan bool
+}
+
+func (e progressDownloadEngine) Download(_ context.Context, task *models.DownloadTask, onProgress func(models.ProgressInfo)) (string, error) {
+	onProgress(models.ProgressInfo{
+		Status: "downloading", DownloadedBytes: 25, TotalBytes: 100, Percent: 25,
+	})
+	onProgress(models.ProgressInfo{
+		Status: "finished", DownloadedBytes: 100, TotalBytes: 100, Percent: 100,
+	})
+	e.processing <- task.StateValue() == models.StateProcessing
+	return "output.mp4", nil
+}
+
+func TestDownloadManagerTransitionsToProcessingAfterStreamFinishes(t *testing.T) {
+	manager := NewDownloadManager(&YtDlpService{}, 1)
+	engine := progressDownloadEngine{processing: make(chan bool, 1)}
+	manager.engine = engine
+	task, err := manager.EnqueueContext(context.Background(), models.DownloadRequest{URL: "https://example.test/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown()
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-manager.Events():
+			if event.Task == nil || event.Task.ID != task.ID {
+				continue
+			}
+			if event.Kind == EventTaskFinished {
+				if !<-engine.processing {
+					t.Fatal("manager did not enter processing state after stream finished")
+				}
+				if got := task.Snapshot().Progress.Percent; got != 100 {
+					t.Fatalf("final progress percent = %v, want 100", got)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for download to finish")
+		}
+	}
+}
+
 func TestDownloadManagerEnqueueContextNeverAcceptsAnUnqueuedTask(t *testing.T) {
 	engine := &blockingDownloadEngine{started: make(chan struct{})}
 	manager := NewDownloadManager(&YtDlpService{}, 1)

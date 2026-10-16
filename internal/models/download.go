@@ -109,7 +109,9 @@ type DownloadRequest struct {
 	PlaylistIndex int
 
 	// UI-only
-	ThumbnailURL string
+	ThumbnailURL              string
+	ExpectedSizeBytes         int64
+	ExpectedSizeIsApproximate bool
 }
 
 // ProgressInfo is a snapshot of download progress.
