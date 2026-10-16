@@ -492,6 +492,14 @@ func videoAudioSelector(req models.DownloadRequest) string {
 		return video + "+mergeall[vcodec=none]/" + fallback
 	}
 
+	// Preserve one-sided explicit format choices. The container preference below
+	// is only for automatic selection; otherwise a user-selected format could be
+	// silently replaced by the MP4 fallback expression.
+	if req.VideoFormatID != "" || req.AudioFormatID != "" {
+		a := bestAudioSelector(req)
+		return video + "+" + a + "/b"
+	}
+
 	// mp4 container: prefer H.264 + AAC (reliable merge into .mp4).
 	// Otherwise allow any best video + best audio, with a progressive fallback.
 	a := bestAudioSelector(req)
@@ -661,10 +669,16 @@ func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
 					Bitrate:  fi.ABR,
 					Note:     fi.Note,
 				}
+				if track.Bitrate <= 0 {
+					track.Bitrate = fi.TBR
+				}
 				// A rich extraction returns several technical formats for the
 				// same logical language. Keep the best one in the picker rather
 				// than showing every bitrate/codec variant as a separate track.
 				key := track.Language
+				if note := strings.TrimSpace(track.Note); note != "" {
+					key += "\x00" + note
+				}
 				if previous, exists := audioTrackIndexes[key]; exists {
 					if preferAudioTrack(track, m.AudioTracks[previous]) {
 						m.AudioTracks[previous] = track

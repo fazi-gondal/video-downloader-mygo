@@ -800,16 +800,7 @@ func (a *App) audioTracksControls(c *ui.Context) {
 					for _, tr := range a.currentMedia.AudioTracks {
 						id := tr.ID
 						on := checkboxState(a.selectedAudio, id)
-						label := languageDisplayName(tr.Language)
-						if label == "" {
-							label = "Unknown language"
-						}
-						if tr.Language != "" && label != tr.Language {
-							label += " (" + tr.Language + ")"
-						}
-						if tr.Note != "" {
-							label += " · " + tr.Note
-						}
+						label := a.audioTrackLabel(tr)
 						ui.Row(c.Key("aud-tile-"+id)).FillWidth().MinWidth(0).Padding(3, 4).
 							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
 							ui.Checkbox(c.Key("aud-"+id), on, "").Shrink(0)
@@ -820,6 +811,30 @@ func (a *App) audioTracksControls(c *ui.Context) {
 			})
 		}
 	})
+}
+
+func (a *App) audioTrackLabel(track models.AudioTrack) string {
+	label := languageDisplayName(track.Language)
+	if label == "" {
+		label = "Unknown language"
+	}
+	if track.Language != "" && label != track.Language {
+		label += " (" + track.Language + ")"
+	}
+	if track.Note != "" {
+		label += " · " + track.Note
+	}
+	if a.currentMedia != nil {
+		if format := findFormat(a.currentMedia.Formats, track.ID); format != nil {
+			if size, _ := estimateFormatSize(*format, a.currentMedia.Duration); size > 0 {
+				label += " · ~" + formatBytes(size)
+			}
+		} else if track.Bitrate > 0 && a.currentMedia.Duration > 0 {
+			size := int64(track.Bitrate * 1000 / 8 * a.currentMedia.Duration)
+			label += " · ~" + formatBytes(size)
+		}
+	}
+	return label
 }
 
 func (a *App) subtitleControls(c *ui.Context) {
@@ -1098,65 +1113,94 @@ func (a *App) estimatedFinalSize() (int64, bool) {
 	}
 	var total int64
 	approximate := false
+	seenFormats := make(map[string]bool)
 	addFormat := func(format *models.FormatInfo) {
 		if format == nil {
 			return
+		}
+		if format.ID != "" && seenFormats[format.ID] {
+			return
+		}
+		if format.ID != "" {
+			seenFormats[format.ID] = true
 		}
 		size, estimated := estimateFormatSize(*format, m.Duration)
 		total += size
 		approximate = approximate || estimated
 	}
+	addAudioTrack := func(track models.AudioTrack) {
+		if format := findFormat(m.Formats, track.ID); format != nil {
+			addFormat(format)
+			return
+		}
+		if track.Bitrate > 0 && m.Duration > 0 {
+			total += int64(track.Bitrate * 1000 / 8 * m.Duration)
+			approximate = true
+		}
+	}
 
 	if a.mode != models.ModeAudioOnly {
 		video := findFormat(m.Formats, a.selectedVideoFormat)
 		if video == nil {
-			video = bestVideoFormat(m.Formats, a.maxHeight)
+			video = bestVideoFormatForRequest(m.Formats, a.maxHeight, a.container, a.settings.PreferVP9Video)
 		}
 		addFormat(video)
-	}
-	if a.subtitleMode == subtitleModeAll || (a.subtitleMode == subtitleModeCustom && countSelected(a.selectedSubtitle) > 0) {
-		// Subtitle files and muxing overhead are not represented in FormatInfo.
-		approximate = true
-	}
-	if a.mode == models.ModeVideoOnly {
-		return total, approximate
-	}
+		if a.mode == models.ModeVideoOnly {
+			return total, markFinalSizeApproximate(a, approximate)
+		}
 
-	var audioFormats []*models.FormatInfo
-	switch a.audioTracksMode {
-	case audioTracksAll:
-		for i := range m.AudioTracks {
-			if format := findFormat(m.Formats, m.AudioTracks[i].ID); format != nil {
-				audioFormats = append(audioFormats, format)
-			} else if m.AudioTracks[i].Bitrate > 0 {
-				size := int64(m.AudioTracks[i].Bitrate * 1000 / 8 * m.Duration)
-				total += size
-				approximate = true
+		// An automatic muxed fallback already contains audio. Do not add the
+		// default audio stream a second time. Explicit format choices are
+		// different: yt-dlp intentionally appends the selected audio stream.
+		useEmbeddedAudio := a.selectedVideoFormat == "" && formatIsMuxed(video) &&
+			a.audioTracksMode == audioTracksNone && a.selectedAudioFormat == ""
+		if !useEmbeddedAudio {
+			switch a.audioTracksMode {
+			case audioTracksAll:
+				for _, track := range m.AudioTracks {
+					addAudioTrack(track)
+				}
+			case audioTracksCustom:
+				selected := 0
+				for id, on := range a.selectedAudio {
+					if on == nil || !*on {
+						continue
+					}
+					selected++
+					if track := findAudioTrack(m.AudioTracks, id); track != nil {
+						addAudioTrack(*track)
+					} else if format := findFormat(m.Formats, id); format != nil {
+						addFormat(format)
+					}
+				}
+				if selected == 0 {
+					addFormat(bestAudioFormatForRequest(m.Formats, a.container, a.settings.PreferVP9Video))
+				}
+			default:
+				format := findFormat(m.Formats, a.selectedAudioFormat)
+				if format == nil {
+					format = bestAudioFormatForRequest(m.Formats, a.container, a.settings.PreferVP9Video)
+				}
+				addFormat(format)
 			}
 		}
-	case audioTracksCustom:
-		for id, selected := range a.selectedAudio {
-			if selected == nil || !*selected {
-				continue
-			}
-			if format := findFormat(m.Formats, id); format != nil {
-				audioFormats = append(audioFormats, format)
-			} else if track := findAudioTrack(m.AudioTracks, id); track != nil && track.Bitrate > 0 {
-				total += int64(track.Bitrate * 1000 / 8 * m.Duration)
-				approximate = true
-			}
-		}
-	default:
+	}
+	if a.mode == models.ModeAudioOnly {
 		format := findFormat(m.Formats, a.selectedAudioFormat)
 		if format == nil {
-			format = bestAudioFormat(m.Formats)
+			format = bestAudioFormatForRequest(m.Formats, a.container, a.settings.PreferVP9Video)
 		}
-		audioFormats = append(audioFormats, format)
-	}
-	for _, format := range audioFormats {
 		addFormat(format)
 	}
-	return total, approximate
+	return total, markFinalSizeApproximate(a, approximate)
+}
+
+func markFinalSizeApproximate(a *App, approximate bool) bool {
+	if a.mode == models.ModeVideoAudio || a.subtitleMode != subtitleModeNone ||
+		a.settings.EmbedMetadata || a.settings.EmbedThumbnail {
+		return true
+	}
+	return approximate
 }
 
 func findFormat(formats []models.FormatInfo, id string) *models.FormatInfo {
@@ -1180,8 +1224,8 @@ func findAudioTrack(tracks []models.AudioTrack, id string) *models.AudioTrack {
 	return nil
 }
 
-func bestVideoFormat(formats []models.FormatInfo, maxHeight int) *models.FormatInfo {
-	var best *models.FormatInfo
+func bestVideoFormatForRequest(formats []models.FormatInfo, maxHeight int, container string, preferVP9 bool) *models.FormatInfo {
+	candidates := make([]*models.FormatInfo, 0, len(formats))
 	for i := range formats {
 		format := &formats[i]
 		if !format.IsVideo {
@@ -1191,22 +1235,104 @@ func bestVideoFormat(formats []models.FormatInfo, maxHeight int) *models.FormatI
 		if maxHeight > 0 && height > maxHeight {
 			continue
 		}
-		if best == nil || height > formatHeight(*best) ||
-			(height == formatHeight(*best) && format.TBR > best.TBR) {
+		candidates = append(candidates, format)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Prefer a video-only stream whenever it exists. A muxed format is a
+	// fallback, not an independent video payload whose audio can be counted
+	// again below.
+	videoOnly := filterFormats(candidates, func(format *models.FormatInfo) bool {
+		return !formatIsMuxed(format)
+	})
+	if len(videoOnly) > 0 {
+		candidates = videoOnly
+	}
+
+	container = strings.ToLower(strings.TrimSpace(container))
+	if container == "mp4" && !preferVP9 {
+		mp4 := filterFormats(candidates, func(format *models.FormatInfo) bool {
+			return strings.EqualFold(format.Ext, "mp4")
+		})
+		if len(mp4) > 0 {
+			candidates = mp4
+		}
+	}
+	if preferVP9 {
+		vp9 := filterFormats(candidates, func(format *models.FormatInfo) bool {
+			return strings.Contains(strings.ToLower(format.VCodec), "vp9")
+		})
+		if len(vp9) > 0 {
+			candidates = vp9
+		}
+	}
+
+	best := candidates[0]
+	for _, format := range candidates[1:] {
+		if formatHeight(*format) > formatHeight(*best) ||
+			(formatHeight(*format) == formatHeight(*best) && format.TBR > best.TBR) {
 			best = format
 		}
 	}
 	return best
 }
 
-func bestAudioFormat(formats []models.FormatInfo) *models.FormatInfo {
-	var best *models.FormatInfo
-	for i := range formats {
-		format := &formats[i]
-		if !format.IsAudio || format.IsVideo {
-			continue
+func filterFormats(formats []*models.FormatInfo, keep func(*models.FormatInfo) bool) []*models.FormatInfo {
+	filtered := make([]*models.FormatInfo, 0, len(formats))
+	for _, format := range formats {
+		if keep(format) {
+			filtered = append(filtered, format)
 		}
-		if best == nil || audioBitrate(*format) > audioBitrate(*best) {
+	}
+	return filtered
+}
+
+func formatIsMuxed(format *models.FormatInfo) bool {
+	return format != nil && format.IsVideo && format.IsAudio
+}
+
+func formatIsAudioOnly(format *models.FormatInfo) bool {
+	return format != nil && format.IsAudio && !format.IsVideo
+}
+
+func formatIsVideoOnly(format *models.FormatInfo) bool {
+	return format != nil && format.IsVideo && !format.IsAudio
+}
+
+func bestAudioFormatForRequest(formats []models.FormatInfo, container string, preferVP9 bool) *models.FormatInfo {
+	candidates := make([]*models.FormatInfo, 0, len(formats))
+	for i := range formats {
+		if formatIsAudioOnly(&formats[i]) {
+			candidates = append(candidates, &formats[i])
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	container = strings.ToLower(strings.TrimSpace(container))
+	preferredExt := ""
+	preferredCodec := ""
+	if container == "mp4" && !preferVP9 {
+		preferredExt = "m4a"
+	} else {
+		preferredCodec = "opus"
+	}
+	if preferredExt != "" || preferredCodec != "" {
+		preferred := filterFormats(candidates, func(format *models.FormatInfo) bool {
+			return (preferredExt != "" && strings.EqualFold(format.Ext, preferredExt)) ||
+				(preferredCodec != "" && strings.Contains(strings.ToLower(format.ACodec), preferredCodec))
+		})
+		if len(preferred) > 0 {
+			candidates = preferred
+		}
+	}
+
+	best := candidates[0]
+	for _, format := range candidates[1:] {
+		if audioBitrate(*format) > audioBitrate(*best) {
 			best = format
 		}
 	}
@@ -1224,11 +1350,14 @@ func estimateFormatSize(format models.FormatInfo, duration float64) (int64, bool
 		return 0, true
 	}
 	bitrate := format.TBR
-	if format.IsVideo && format.VBR > 0 {
+	if formatIsVideoOnly(&format) && format.VBR > 0 {
 		bitrate = format.VBR
 	}
-	if format.IsAudio && !format.IsVideo && format.ABR > 0 {
+	if formatIsAudioOnly(&format) && format.ABR > 0 {
 		bitrate = format.ABR
+	}
+	if formatIsMuxed(&format) && bitrate <= 0 {
+		bitrate = format.VBR + format.ABR
 	}
 	if bitrate <= 0 {
 		bitrate = format.VBR + format.ABR

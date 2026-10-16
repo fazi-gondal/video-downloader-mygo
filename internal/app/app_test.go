@@ -178,6 +178,102 @@ func TestEstimatedFinalSizeUsesExactAndApproximateFileSizes(t *testing.T) {
 	}
 }
 
+func TestEstimatedFinalSizeDoesNotDoubleCountMuxedFallbackAudio(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Duration: 60,
+			Formats: []models.FormatInfo{
+				{ID: "muxed", Ext: "mp4", IsVideo: true, IsAudio: true, Filesize: 10_000_000, Height: 1080},
+				{ID: "audio", Ext: "m4a", IsAudio: true, Filesize: 2_000_000, ABR: 128},
+			},
+		},
+		mode:             models.ModeVideoAudio,
+		maxHeight:        1080,
+		container:        "mp4",
+		audioTracksMode:  audioTracksNone,
+		subtitleMode:     subtitleModeNone,
+		selectedAudio:    map[string]*bool{},
+		selectedSubtitle: map[string]*bool{},
+	}
+	got, _ := a.estimatedFinalSize()
+	if got != 10_000_000 {
+		t.Fatalf("muxed fallback estimate = %d, want 10000000 without duplicate audio", got)
+	}
+}
+
+func TestEstimatedFinalSizeAddsOnlySelectedAudioTracks(t *testing.T) {
+	on := true
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Duration: 60,
+			Formats: []models.FormatInfo{
+				{ID: "video", Ext: "mp4", IsVideo: true, Filesize: 8_000_000, Height: 1080},
+				{ID: "en", Ext: "m4a", IsAudio: true, Filesize: 1_000_000, ABR: 128},
+				{ID: "de", Ext: "m4a", IsAudio: true, Filesize: 1_500_000, ABR: 192},
+				{ID: "es", Ext: "m4a", IsAudio: true, Filesize: 2_000_000, ABR: 256},
+			},
+			AudioTracks: []models.AudioTrack{
+				{ID: "en", Language: "en", Bitrate: 128},
+				{ID: "de", Language: "de", Bitrate: 192},
+				{ID: "es", Language: "es", Bitrate: 256},
+			},
+		},
+		mode:             models.ModeVideoAudio,
+		maxHeight:        1080,
+		container:        "mp4",
+		audioTracksMode:  audioTracksCustom,
+		selectedAudio:    map[string]*bool{"en": &on, "de": &on},
+		subtitleMode:     subtitleModeNone,
+		selectedSubtitle: map[string]*bool{},
+	}
+	got, _ := a.estimatedFinalSize()
+	if got != 10_500_000 {
+		t.Fatalf("custom multi-audio estimate = %d, want 10500000", got)
+	}
+}
+
+func TestEstimatedFinalSizeUsesSeparateVideoAndAudioStreams(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Duration: 60,
+			Formats: []models.FormatInfo{
+				{ID: "video", Ext: "mp4", IsVideo: true, Filesize: 8_000_000, Height: 1080},
+				{ID: "audio", Ext: "m4a", IsAudio: true, Filesize: 2_000_000, ABR: 128},
+			},
+		},
+		mode:             models.ModeVideoAudio,
+		maxHeight:        1080,
+		container:        "mp4",
+		audioTracksMode:  audioTracksNone,
+		subtitleMode:     subtitleModeNone,
+		selectedAudio:    map[string]*bool{},
+		selectedSubtitle: map[string]*bool{},
+	}
+	got, _ := a.estimatedFinalSize()
+	if got != 10_000_000 {
+		t.Fatalf("separate stream estimate = %d, want 10000000", got)
+	}
+}
+
+func TestEstimatedFinalSizeAudioOnlyUsesSelectedAudio(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Duration: 60,
+			Formats: []models.FormatInfo{
+				{ID: "audio", Ext: "m4a", IsAudio: true, Filesize: 2_000_000},
+			},
+		},
+		mode:                models.ModeAudioOnly,
+		selectedAudioFormat: "audio",
+		selectedAudio:       map[string]*bool{},
+		selectedSubtitle:    map[string]*bool{},
+	}
+	got, _ := a.estimatedFinalSize()
+	if got != 2_000_000 {
+		t.Fatalf("audio-only estimate = %d, want 2000000", got)
+	}
+}
+
 func TestDownloadMetricsShowsEstimatedTotalSpeedAndETA(t *testing.T) {
 	metrics := downloadMetrics(models.ProgressInfo{
 		DownloadedBytes: 1024,

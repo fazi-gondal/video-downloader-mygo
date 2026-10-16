@@ -224,6 +224,33 @@ func TestBuildDownloadArgsVideoOnlySelectsVideoFormats(t *testing.T) {
 	}
 }
 
+func TestBuildDownloadArgsPreservesOneSidedExplicitFormatSelection(t *testing.T) {
+	tests := []struct {
+		name      string
+		videoID   string
+		audioID   string
+		wantParts []string
+	}{
+		{name: "video only", videoID: "137", wantParts: []string{"137+ba/b"}},
+		{name: "audio only", audioID: "140", wantParts: []string{"bv*+140/b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := models.DownloadRequest{
+				Mode: models.ModeVideoAudio, Container: "mp4",
+				VideoFormatID: tt.videoID, AudioFormatID: tt.audioID,
+				OutputDir: t.TempDir(),
+			}
+			got := formatArgument(testYtDlpService().buildDownloadArgs(req))
+			for _, want := range tt.wantParts {
+				if !strings.Contains(got, want) {
+					t.Fatalf("format selector = %q, want it to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildDownloadArgsMultiAudioIncludesSelectedTracks(t *testing.T) {
 	service := testYtDlpService()
 	req := models.DownloadRequest{
@@ -624,6 +651,22 @@ func TestParseMediaKeepsBestAudioFormatPerLanguage(t *testing.T) {
 	}
 	if media.AudioTracks[1].ID != "249" {
 		t.Fatalf("default audio track = %q, want format 249", media.AudioTracks[1].ID)
+	}
+}
+
+func TestParseMediaUsesAudioTBRWhenABRIsMissing(t *testing.T) {
+	raw := map[string]any{
+		"id": "video-1",
+		"formats": []any{
+			map[string]any{
+				"format_id": "audio", "acodec": "opus", "vcodec": "none",
+				"language": "en", "tbr": 160.0,
+			},
+		},
+	}
+	media := parseMedia(raw, "https://example.test/video")
+	if len(media.AudioTracks) != 1 || media.AudioTracks[0].Bitrate != 160 {
+		t.Fatalf("audio track bitrate = %#v, want 160 kbps from tbr", media.AudioTracks)
 	}
 }
 
