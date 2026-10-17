@@ -807,7 +807,7 @@ func (a *App) audioTracksControls(c *ui.Context) {
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Text(c, "Audio tracks").FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Gap(8).Children(func() {
-			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksNone, "None (default)")
+			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksNone, "Default")
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksAll, "All")
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksCustom, "Custom")
 		})

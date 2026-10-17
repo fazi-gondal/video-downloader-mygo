@@ -410,20 +410,29 @@ func TestAudioTrackLanguageFormatting(t *testing.T) {
 }
 
 func TestHighQualityOpusAudioTracks(t *testing.T) {
+	// Single track should be returned as-is
+	single := []models.AudioTrack{
+		{ID: "251-en", Language: "en", Codec: "opus", Bitrate: 160},
+	}
+	if got := highQualityOpusAudioTracks(single); len(got) != 1 || got[0].ID != "251-en" {
+		t.Fatalf("single track = %#v, want 1 track", got)
+	}
+
+	// Multiple tracks with Opus preferred per-language, but non-Opus language (ja) not dropped
 	tracks := []models.AudioTrack{
 		{ID: "140-en", Language: "en", Codec: "mp4a.40.2", Bitrate: 128},
 		{ID: "250-en", Language: "en", Codec: "opus", Bitrate: 70},
 		{ID: "251-en", Language: "en", Codec: "opus", Bitrate: 160},
 		{ID: "140-hi", Language: "hi", Codec: "mp4a.40.2", Bitrate: 128},
 		{ID: "251-hi", Language: "hi", Codec: "opus", Bitrate: 160},
-		{ID: "251-ja", Language: "ja", Codec: "opus", Bitrate: 160},
+		{ID: "140-ja", Language: "ja", Codec: "mp4a.40.2", Bitrate: 128}, // Only AAC available for Japanese
 	}
 
 	best := highQualityOpusAudioTracks(tracks)
 	if len(best) != 3 {
 		t.Fatalf("len(best) = %d, want 3", len(best))
 	}
-	wantIDs := []string{"251-en", "251-hi", "251-ja"}
+	wantIDs := []string{"251-en", "251-hi", "140-ja"}
 	var gotIDs []string
 	for _, tr := range best {
 		gotIDs = append(gotIDs, tr.ID)
