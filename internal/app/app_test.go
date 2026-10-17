@@ -351,3 +351,89 @@ func TestPlaylistEntryCheckboxCommitsSelection(t *testing.T) {
 		t.Fatal("playlist checkbox click did not persist the selected entry")
 	}
 }
+
+func TestSubtitleLanguagesFiltersUndeterminedAndUnknown(t *testing.T) {
+	media := &models.MediaInfo{
+		Subtitles: map[string][]models.SubtitleTrack{
+			"und":       {{Lang: "und"}},
+			"unknown":   {{Lang: "unknown"}},
+			"none":      {{Lang: "none"}},
+			"live_chat": {{Lang: "live_chat"}},
+			"en":        {{Lang: "en"}},
+		},
+	}
+	got := subtitleLanguages(media)
+	want := []string{"en"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("subtitleLanguages() = %#v, want %#v", got, want)
+	}
+}
+
+func TestHasSubtitlesReturnsFalseWhenNoValidSubtitles(t *testing.T) {
+	a := &App{}
+	if a.hasSubtitles() {
+		t.Fatal("hasSubtitles() should be false when currentMedia is nil")
+	}
+
+	a.currentMedia = &models.MediaInfo{
+		Subtitles: map[string][]models.SubtitleTrack{},
+	}
+	if a.hasSubtitles() {
+		t.Fatal("hasSubtitles() should be false when Subtitles is empty")
+	}
+
+	a.currentMedia.Subtitles["und"] = []models.SubtitleTrack{{Lang: "und"}}
+	if a.hasSubtitles() {
+		t.Fatal("hasSubtitles() should be false when Subtitles only contains 'und'")
+	}
+
+	a.currentMedia.Subtitles["en"] = []models.SubtitleTrack{{Lang: "en"}}
+	if !a.hasSubtitles() {
+		t.Fatal("hasSubtitles() should be true when valid subtitles exist")
+	}
+}
+
+func TestAudioTrackLanguageAndDetailsFormatting(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Duration: 120,
+			Formats: []models.FormatInfo{
+				{ID: "251", Filesize: 2_000_000},
+			},
+		},
+	}
+
+	tr := models.AudioTrack{
+		ID:       "251",
+		Language: "en",
+		Codec:    "opus",
+		Bitrate:  128,
+		Note:     "medium",
+	}
+
+	lang := a.audioTrackLanguage(tr)
+	if lang != "English (en)" {
+		t.Fatalf("audioTrackLanguage() = %q, want %q", lang, "English (en)")
+	}
+
+	details := a.audioTrackDetails(tr)
+	if !strings.Contains(details, "opus") || !strings.Contains(details, "128 kbps") || !strings.Contains(details, "medium") {
+		t.Fatalf("audioTrackDetails() = %q, expected codec, bitrate, and note", details)
+	}
+}
+
+func TestSubtitleDetailsFormatting(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Subtitles: map[string][]models.SubtitleTrack{
+				"en": {{Lang: "en", Name: "English [CC]", Ext: "vtt"}},
+			},
+		},
+	}
+
+	details := a.subtitleDetails("en")
+	if !strings.Contains(details, "en") || !strings.Contains(details, "English [CC]") || !strings.Contains(details, "VTT") {
+		t.Fatalf("subtitleDetails() = %q, expected language code, track name, and ext", details)
+	}
+}
+

@@ -104,7 +104,7 @@ type App struct {
 	settingsSubtitleLangs string
 	settingsRateLimit     string
 
-	dlListState, plListState, fmtListState, histListState, convListState ui.ListState
+	dlListState, plListState, fmtListState, histListState, convListState, audListState, subListState ui.ListState
 
 	toastMsg    string
 	toastUntil  time.Time
@@ -561,8 +561,8 @@ func (a *App) mediaCard(c *ui.Context) {
 			if len(m.AudioTracks) > 1 {
 				ui.Text(c, fmt.Sprintf("%d audio tracks", len(m.AudioTracks))).FontSize(11).TextColor(t.Accent)
 			}
-			if len(m.Subtitles) > 0 {
-				ui.Text(c, fmt.Sprintf("%d subtitle languages", len(m.Subtitles))).FontSize(11).TextColor(t.Accent)
+			if subCount := len(subtitleLanguages(m)); subCount > 0 {
+				ui.Text(c, fmt.Sprintf("%d subtitle languages", subCount)).FontSize(11).TextColor(t.Accent)
 			}
 		})
 	})
@@ -768,7 +768,9 @@ func (a *App) configPanel(c *ui.Context) {
 			a.audioTracksControls(c)
 		}
 		if a.mode != models.ModeAudioOnly {
-			a.subtitleControls(c)
+			if a.hasSubtitles() {
+				a.subtitleControls(c)
+			}
 			ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
 		}
 		a.syncContainerSelection()
@@ -786,6 +788,9 @@ func (a *App) configPanel(c *ui.Context) {
 }
 
 func (a *App) audioTracksControls(c *ui.Context) {
+	if a.currentMedia == nil || len(a.currentMedia.AudioTracks) == 0 {
+		return
+	}
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Text(c, "Audio tracks").FontSize(12).TextColor(t.TextMuted)
@@ -795,50 +800,103 @@ func (a *App) audioTracksControls(c *ui.Context) {
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksCustom, "Custom")
 		})
 		if a.audioTracksMode == audioTracksCustom {
-			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Children(func() {
-				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).Gap(4).Children(func() {
-					for _, tr := range a.currentMedia.AudioTracks {
-						id := tr.ID
-						on := checkboxState(a.selectedAudio, id)
-						label := a.audioTrackLabel(tr)
-						ui.Row(c.Key("aud-tile-"+id)).FillWidth().MinWidth(0).Padding(3, 4).
-							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
-							ui.Checkbox(c.Key("aud-"+id), on, "").Shrink(0)
-							ui.Text(c, label).FontSize(11).Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
-						})
-					}
-				})
-			})
+			tracks := a.currentMedia.AudioTracks
+			cols := []ui.TableColumn{
+				{Title: "Select", Width: 60, Align: ui.Center, Fixed: true},
+				{Title: "Language", Width: 200, MinWidth: 120},
+				{Title: "Details", Width: 0, MinWidth: 160},
+			}
+			ui.Table(c, &a.audListState, cols, len(tracks), func(row, col int) {
+				if row < 0 || row >= len(tracks) {
+					return
+				}
+				tr := tracks[row]
+				id := tr.ID
+				switch col {
+				case 0:
+					on := checkboxState(a.selectedAudio, id)
+					ui.Checkbox(c.Key("aud-"+id), on, "").Shrink(0)
+				case 1:
+					lang := a.audioTrackLanguage(tr)
+					ui.Text(c, lang).FontSize(11).SingleLine().Ellipsis("…")
+				case 2:
+					details := a.audioTrackDetails(tr)
+					ui.Text(c, details).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
+				}
+			}).FillWidth().Height(168).Border(1, t.Border).Radius(6).Background(t.Background)
 		}
 	})
 }
 
-func (a *App) audioTrackLabel(track models.AudioTrack) string {
-	label := languageDisplayName(track.Language)
-	if label == "" {
-		label = "Unknown language"
+func (a *App) audioTrackLanguage(track models.AudioTrack) string {
+	lang := languageDisplayName(track.Language)
+	if lang == "" {
+		clean := strings.ToLower(strings.TrimSpace(track.Language))
+		if clean != "" && clean != "und" && clean != "unknown" && clean != "none" {
+			lang = track.Language
+		} else if track.Note != "" {
+			lang = track.Note
+		} else {
+			lang = "Audio track " + track.ID
+		}
+	} else if track.Language != "" && !strings.EqualFold(lang, track.Language) {
+		lang += " (" + track.Language + ")"
 	}
-	if track.Language != "" && label != track.Language {
-		label += " (" + track.Language + ")"
+	return lang
+}
+
+func (a *App) audioTrackDetails(track models.AudioTrack) string {
+	var parts []string
+	if track.Codec != "" && track.Codec != "none" {
+		parts = append(parts, track.Codec)
 	}
-	if track.Note != "" {
-		label += " · " + track.Note
+	if track.Bitrate > 0 {
+		parts = append(parts, fmt.Sprintf("%.0f kbps", track.Bitrate))
+	}
+	if track.Note != "" && !strings.EqualFold(track.Note, track.Language) {
+		parts = append(parts, track.Note)
 	}
 	if a.currentMedia != nil {
 		if format := findFormat(a.currentMedia.Formats, track.ID); format != nil {
 			if size, _ := estimateFormatSize(*format, a.currentMedia.Duration); size > 0 {
-				label += " · ~" + formatBytes(size)
+				parts = append(parts, "~"+formatBytes(size))
 			}
 		} else if track.Bitrate > 0 && a.currentMedia.Duration > 0 {
 			size := int64(track.Bitrate * 1000 / 8 * a.currentMedia.Duration)
-			label += " · ~" + formatBytes(size)
+			parts = append(parts, "~"+formatBytes(size))
 		}
 	}
-	return label
+	if len(parts) == 0 {
+		return "Default"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (a *App) audioTrackLabel(track models.AudioTrack) string {
+	lang := a.audioTrackLanguage(track)
+	details := a.audioTrackDetails(track)
+	if details != "" && details != "Default" {
+		return lang + " · " + details
+	}
+	return lang
+}
+
+func (a *App) hasSubtitles() bool {
+	if a.currentMedia == nil {
+		return false
+	}
+	return len(subtitleLanguages(a.currentMedia)) > 0
 }
 
 func (a *App) subtitleControls(c *ui.Context) {
+	if !a.hasSubtitles() {
+		return
+	}
 	t := c.Theme()
+	langs := subtitleLanguages(a.currentMedia)
+	if len(langs) == 0 {
+		return
+	}
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Text(c, "Subtitles").FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Gap(8).Children(func() {
@@ -847,26 +905,58 @@ func (a *App) subtitleControls(c *ui.Context) {
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeCustom, "Custom")
 		})
 		if a.subtitleMode == subtitleModeCustom {
-			langs := subtitleLanguages(a.currentMedia)
-			if len(langs) == 0 {
-				ui.Text(c, "No subtitle languages found").FontSize(11).TextColor(t.TextMuted)
-				return
+			cols := []ui.TableColumn{
+				{Title: "Select", Width: 60, Align: ui.Center, Fixed: true},
+				{Title: "Language", Width: 200, MinWidth: 120},
+				{Title: "Details", Width: 0, MinWidth: 160},
 			}
-			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Children(func() {
-				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).Gap(4).Children(func() {
-					for _, lang := range langs {
-						on := checkboxState(a.selectedSubtitle, lang)
-						label := languageDisplayName(lang)
-						ui.Row(c.Key("sub-tile-"+lang)).FillWidth().MinWidth(0).Padding(3, 4).
-							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
-							ui.Checkbox(c.Key("sub-"+lang), on, "").Shrink(0)
-							ui.Text(c, label).FontSize(11).Grow(1).MinWidth(0).SingleLine().Ellipsis("…")
-						})
-					}
-				})
-			})
+			ui.Table(c, &a.subListState, cols, len(langs), func(row, col int) {
+				if row < 0 || row >= len(langs) {
+					return
+				}
+				lang := langs[row]
+				switch col {
+				case 0:
+					on := checkboxState(a.selectedSubtitle, lang)
+					ui.Checkbox(c.Key("sub-"+lang), on, "").Shrink(0)
+				case 1:
+					label := languageDisplayName(lang)
+					ui.Text(c, label).FontSize(11).SingleLine().Ellipsis("…")
+				case 2:
+					details := a.subtitleDetails(lang)
+					ui.Text(c, details).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
+				}
+			}).FillWidth().Height(168).Border(1, t.Border).Radius(6).Background(t.Background)
 		}
 	})
+}
+
+func (a *App) subtitleDetails(lang string) string {
+	var parts []string
+	parts = append(parts, lang)
+	if a.currentMedia != nil {
+		langName := languageDisplayName(lang)
+		if tracks, ok := a.currentMedia.Subtitles[lang]; ok && len(tracks) > 0 {
+			if tracks[0].Name != "" && !strings.EqualFold(tracks[0].Name, lang) && !strings.EqualFold(tracks[0].Name, langName) {
+				parts = append(parts, tracks[0].Name)
+			} else {
+				parts = append(parts, "Subtitles")
+			}
+			if tracks[0].Ext != "" {
+				parts = append(parts, strings.ToUpper(tracks[0].Ext))
+			}
+		} else if tracks, ok := a.currentMedia.AutomaticCaptions[lang]; ok && len(tracks) > 0 {
+			if tracks[0].Name != "" && !strings.EqualFold(tracks[0].Name, lang) && !strings.EqualFold(tracks[0].Name, langName) {
+				parts = append(parts, tracks[0].Name)
+			} else {
+				parts = append(parts, "Auto-captions")
+			}
+			if tracks[0].Ext != "" {
+				parts = append(parts, strings.ToUpper(tracks[0].Ext))
+			}
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (a *App) selectionModeBtn(c *ui.Context, key string, selected *string, value, label string) {
@@ -2271,6 +2361,17 @@ var languageNames = map[string]string{
 	"zh": "Chinese", "zu": "Zulu",
 	// yt-dlp and older metadata sometimes use these legacy ISO 639 aliases.
 	"in": "Indonesian", "iw": "Hebrew", "jw": "Javanese",
+	// Common 3-letter ISO 639-2/3 codes used by yt-dlp and media extractors.
+	"ara": "Arabic", "ben": "Bengali", "ces": "Czech", "chi": "Chinese",
+	"cze": "Czech", "dan": "Danish", "deu": "German", "dut": "Dutch",
+	"ell": "Greek", "eng": "English", "fas": "Persian", "fin": "Finnish",
+	"fra": "French", "fre": "French", "ger": "German", "gre": "Greek",
+	"heb": "Hebrew", "hin": "Hindi", "ind": "Indonesian", "ita": "Italian",
+	"jpn": "Japanese", "kor": "Korean", "nld": "Dutch", "nor": "Norwegian",
+	"per": "Persian", "pol": "Polish", "por": "Portuguese", "ron": "Romanian",
+	"rum": "Romanian", "rus": "Russian", "spa": "Spanish", "swe": "Swedish",
+	"tha": "Thai", "tur": "Turkish", "ukr": "Ukrainian", "urd": "Urdu",
+	"vie": "Vietnamese", "zho": "Chinese",
 }
 
 func languageDisplayName(language string) string {
@@ -2281,13 +2382,16 @@ func languageDisplayName(language string) string {
 		return r == '-' || r == '_'
 	})
 	if len(parts) == 0 {
-		return "Unknown language"
+		return ""
 	}
 	base := strings.ToLower(parts[0])
+	if base == "und" || base == "unknown" || base == "none" {
+		return ""
+	}
 	if name, ok := languageNames[base]; ok {
 		return name
 	}
-	return "Unknown language"
+	return ""
 }
 
 func subtitleModeFromSettings(settings config.AppSettings) string {
@@ -2315,7 +2419,12 @@ func subtitleLanguages(m *models.MediaInfo) []string {
 	addAvailable := func(source map[string][]models.SubtitleTrack) {
 		for lang, tracks := range source {
 			lang = strings.TrimSpace(lang)
-			if lang == "" || strings.EqualFold(lang, "live_chat") || len(tracks) == 0 {
+			cleanLower := strings.ToLower(lang)
+			if lang == "" || cleanLower == "und" || cleanLower == "unknown" || cleanLower == "none" || strings.EqualFold(lang, "live_chat") || len(tracks) == 0 {
+				continue
+			}
+			displayName := languageDisplayName(lang)
+			if displayName == "" || displayName == "Unknown language" {
 				continue
 			}
 			seen[lang] = true

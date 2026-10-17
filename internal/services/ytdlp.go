@@ -754,7 +754,8 @@ func parseSubs(raw any, dest map[string][]models.SubtitleTrack) {
 	}
 	for lang, list := range m {
 		lang = strings.TrimSpace(lang)
-		if lang == "" {
+		cleanLower := strings.ToLower(lang)
+		if lang == "" || cleanLower == "und" || cleanLower == "unknown" || cleanLower == "none" || strings.EqualFold(lang, "live_chat") {
 			continue
 		}
 		arr, _ := list.([]any)
