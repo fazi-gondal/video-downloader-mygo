@@ -905,36 +905,6 @@ func (a *App) audioTrackLanguage(track models.AudioTrack) string {
 	return lang
 }
 
-func (a *App) audioTrackDetails(track models.AudioTrack) string {
-	var parts []string
-	if track.Codec != "" && track.Codec != "none" {
-		parts = append(parts, track.Codec)
-	}
-	if track.Bitrate > 0 {
-		parts = append(parts, fmt.Sprintf("%.0f kbps", track.Bitrate))
-	}
-	if track.Note != "" && !strings.EqualFold(track.Note, track.Language) {
-		parts = append(parts, track.Note)
-	}
-	if a.currentMedia != nil {
-		if format := findFormat(a.currentMedia.Formats, track.ID); format != nil {
-			if size, _ := estimateFormatSize(*format, a.currentMedia.Duration); size > 0 {
-				parts = append(parts, "~"+formatBytes(size))
-			}
-		} else if track.Bitrate > 0 && a.currentMedia.Duration > 0 {
-			size := int64(track.Bitrate * 1000 / 8 * a.currentMedia.Duration)
-			parts = append(parts, "~"+formatBytes(size))
-		}
-	}
-	if len(parts) == 0 {
-		return "Default"
-	}
-	return strings.Join(parts, " · ")
-}
-
-func (a *App) audioTrackLabel(track models.AudioTrack) string {
-	return a.audioTrackLanguage(track)
-}
 
 func (a *App) hasSubtitles() bool {
 	if a.currentMedia == nil {
@@ -979,33 +949,6 @@ func (a *App) subtitleControls(c *ui.Context) {
 	})
 }
 
-func (a *App) subtitleDetails(lang string) string {
-	var parts []string
-	parts = append(parts, lang)
-	if a.currentMedia != nil {
-		langName := languageDisplayName(lang)
-		if tracks, ok := a.currentMedia.Subtitles[lang]; ok && len(tracks) > 0 {
-			if tracks[0].Name != "" && !strings.EqualFold(tracks[0].Name, lang) && !strings.EqualFold(tracks[0].Name, langName) {
-				parts = append(parts, tracks[0].Name)
-			} else {
-				parts = append(parts, "Subtitles")
-			}
-			if tracks[0].Ext != "" {
-				parts = append(parts, strings.ToUpper(tracks[0].Ext))
-			}
-		} else if tracks, ok := a.currentMedia.AutomaticCaptions[lang]; ok && len(tracks) > 0 {
-			if tracks[0].Name != "" && !strings.EqualFold(tracks[0].Name, lang) && !strings.EqualFold(tracks[0].Name, langName) {
-				parts = append(parts, tracks[0].Name)
-			} else {
-				parts = append(parts, "Auto-captions")
-			}
-			if tracks[0].Ext != "" {
-				parts = append(parts, strings.ToUpper(tracks[0].Ext))
-			}
-		}
-	}
-	return strings.Join(parts, " · ")
-}
 
 func (a *App) selectionModeBtn(c *ui.Context, key string, selected *string, value, label string) {
 	a.toggleBtn(c, key+"-"+value, label, *selected == value, func() {
@@ -1551,9 +1494,10 @@ func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) m
 		SubtitleSelectionMode: models.SubtitleSelectionMode(a.subtitleMode),
 		SubtitleSelection:     models.SubtitleSelectionMode(a.subtitleMode),
 	}
-	if a.audioTracksMode == audioTracksAll {
+	switch a.audioTracksMode {
+	case audioTracksAll:
 		req.MultiAudio = true
-	} else if a.audioTracksMode == audioTracksCustom {
+	case audioTracksCustom:
 		for id, on := range a.selectedAudio {
 			if on != nil && *on {
 				req.SelectedAudioTrackIDs = append(req.SelectedAudioTrackIDs, id)
@@ -1659,7 +1603,6 @@ func (a *App) downloadsPage(c *ui.Context) {
 			})
 		}).Grow(1).Gap(8)
 	})
-	return
 }
 
 func stateColor(c *ui.Context, s models.DownloadState) ui.Color {
@@ -1828,7 +1771,7 @@ func (a *App) converterPage(c *ui.Context) {
 				if drop.FileDragOver() {
 					drop.Border(2, t.Accent)
 				}
-				if files := drop.DroppedFiles(); files != nil && len(files) > 0 {
+				if files := drop.DroppedFiles(); len(files) > 0 {
 					a.convSource = files[0]
 				}
 				drop.Children(func() {
@@ -2067,134 +2010,7 @@ func (a *App) historyPage(c *ui.Context) {
 	})
 }
 
-func (a *App) settingsPage(c *ui.Context) {
-	t := c.Theme()
-	ui.Scroll(c).Grow(1).Gap(14).Children(func() {
-		ui.Text(c, "Settings").FontSize(15).Bold()
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Theme").FontSize(13).Width(130)
-			mode := a.settings.ThemeMode
-			if ui.Select(c, &mode, []string{"system", "dark", "light"}).Changed() {
-				a.settings.ThemeMode = mode
-			}
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Download folder").FontSize(13).Width(130)
-			ui.TextInput(c, &a.settings.DownloadDir).Grow(1)
-			if ui.Button(c, "Browse…").Clicked() {
-				go a.pickDownloadDir()
-			}
-		})
-		maxC := float64(a.settings.MaxConcurrent)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Max concurrent").FontSize(13).Width(130)
-			if ui.Slider(c, &maxC, 1, 16).Changed() {
-				a.settings.MaxConcurrent = int(maxC)
-				a.manager.SetMaxWorkers(a.settings.MaxConcurrent)
-			}
-			ui.Text(c, fmt.Sprintf("%d", a.settings.MaxConcurrent)).FontSize(13).TextColor(t.TextMuted).Width(24)
-		})
-		fragments := float64(a.settings.ConcurrentFragments)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Concurrent fragments").FontSize(13).Width(130)
-			if ui.Slider(c, &fragments, 1, 16).Changed() {
-				a.settings.ConcurrentFragments = int(fragments)
-			}
-			ui.Text(c, fmt.Sprintf("%d", a.settings.ConcurrentFragments)).FontSize(13).TextColor(t.TextMuted).Width(24)
-		})
-		ui.Checkbox(c, &a.settings.EmbedThumbnail, "Embed thumbnail")
-		ui.Checkbox(c, &a.settings.EmbedMetadata, "Embed metadata & chapters")
-		ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
-		ui.Checkbox(c, &a.settings.KeepOriginals, "Keep originals after conversion")
-		ui.Checkbox(c, &a.settings.WriteSubtitles, "Write subtitles by default")
-		ui.Checkbox(c, &a.settings.MultiAudio, "Multi-audio by default")
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Proxy").FontSize(13).Width(130)
-			ui.TextInput(c, &a.settings.Proxy).Placeholder("http://… or socks5://…").Grow(1)
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Cookies browser").FontSize(13).Width(130)
-			ui.TextInput(c, &a.settings.CookiesBrowser).Placeholder("chrome, firefox, edge…").Grow(1)
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Rate limit (KB/s)").FontSize(13).Width(130)
-			ui.TextInput(c, &a.settingsRateLimit).Placeholder("0 = unlimited").Grow(1)
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Subtitle languages").FontSize(13).Width(130)
-			ui.TextInput(c, &a.settingsSubtitleLangs).Placeholder("all or en, es, ar").Grow(1)
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Custom headers").FontSize(13).Width(130)
-			ui.TextInput(c, &a.settingsHeaders).Placeholder("Header: value, one per line").Grow(1)
-		})
-		if ui.PrimaryButton(c, "Save settings").Clicked() {
-			a.saveSettings()
-		}
-		ui.Row(c).Gap(8).Children(func() {
-			if ui.Button(c, "Export settings").Clicked() {
-				a.saveSettings()
-				settings := a.settings
-				go a.exportSettings(settings)
-			}
-			if ui.Button(c, "Import settings").Clicked() {
-				go a.importSettings()
-			}
-		})
-		ff := a.ffmpeg.Path()
-		if ff == "" {
-			ff = "not found"
-		}
-		yt := "not found"
-		if a.ytdlp != nil {
-			if b := a.ytdlp.Bin(); b != "" {
-				yt = b
-			}
-		}
-		ui.Text(c, "FFmpeg: "+ff).FontSize(12).TextColor(t.TextMuted)
-		ui.Text(c, "yt-dlp: "+yt).FontSize(12).TextColor(t.TextMuted)
-	})
-}
 
-func (a *App) saveSettings() {
-	a.settings.CustomHeaders = parseHeaders(a.settingsHeaders)
-	a.settings.SubtitleLangs = parseList(a.settingsSubtitleLangs)
-	if len(a.settings.SubtitleLangs) == 0 {
-		a.settings.SubtitleLangs = []string{"all"}
-	}
-	if limit, err := strconv.Atoi(strings.TrimSpace(a.settingsRateLimit)); err == nil && limit >= 0 {
-		a.settings.RateLimitKbps = limit
-	} else {
-		a.settingsRateLimit = strconv.Itoa(a.settings.RateLimitKbps)
-	}
-	if err := a.settingsRepo.Save(a.settings); err != nil {
-		a.showToast("Could not save settings: " + err.Error())
-		return
-	}
-	a.showToast("Settings saved")
-}
-
-func parseList(raw string) []string {
-	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == ';' })
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if value := strings.TrimSpace(part); value != "" {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func parseHeaders(raw string) map[string]string {
-	out := map[string]string{}
-	for _, line := range strings.Split(raw, "\n") {
-		name, value, ok := strings.Cut(line, ":")
-		if ok && strings.TrimSpace(name) != "" && strings.TrimSpace(value) != "" {
-			out[strings.TrimSpace(name)] = strings.TrimSpace(value)
-		}
-	}
-	return out
-}
 
 func (a *App) exportSettings(settings config.AppSettings) {
 	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.window(), Title: "Export settings", DefaultPath: "video_downloader_settings.json", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
@@ -2268,15 +2084,6 @@ func (a *App) importSettings() {
 	})
 }
 
-func (a *App) aboutPage(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-		ui.Text(c, "Video Downloader").FontSize(22).Bold()
-		ui.Text(c, "v2.1.0 · MyGo native UI").FontSize(13).TextColor(t.TextMuted)
-		ui.Text(c, "Rewritten from the Flet + Python original by Fazi Gondal").FontSize(13).TextColor(t.TextMuted)
-		ui.Text(c, "yt-dlp · FFmpeg · MyGo").FontSize(12).TextColor(t.TextMuted)
-	})
-}
 
 func (a *App) pickConvertFile() {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
