@@ -3,7 +3,7 @@ module github.com/fazi-gondal/video-downloader-mygo
 go 1.27.1
 
 require (
-	github.com/egoist/mygo v0.5.1
+	github.com/egoist/mygo v0.5.5
 	golang.org/x/image v0.47.0
 )
 
