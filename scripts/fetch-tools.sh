@@ -106,12 +106,28 @@ ffmpeg_archive_url() {
 ffmpeg_sha256() {
 	local plat="$1"
 	case "$plat" in
-        windows-amd64) echo "0111401c68487bd1966637266809b97feb98f87fb688a6f3197e27dfb1567eac" ;;
-        windows-arm64) echo "4c8db10281c07ff49c870243fb6ec3a163ec91cea638d66dfa0b3cd1aae9dd31" ;;
-        linux-amd64)   echo "0473bd5d641a368f22e2e7037b4ee9421219be15d9dbd5f8108823c0db0944fe" ;;
-        linux-arm64)   echo "ac8128dc560774cf2e526340b73f224a5ba8eb631a4c220c4eef3be9a57e8a01" ;;
+        windows-amd64) echo "a20f67d27f375cde0a5dc763a83d5b80448a934ef814556ea3f6e353b70c4036" ;;
+        windows-arm64) echo "83959adb9c98692c5988d5a953bb5a35c60546a9340e86ee13b61b1b225b586f" ;;
+        linux-amd64)   echo "bce7caa8cb6b82a552f207689f79c3cf9da0bd12db3cd539f0dc3e18213f0417" ;;
+        linux-arm64)   echo "2b9a9cdec839f7b546f27c686c3f1c31dbc4cda2493fbc4caf173e06c8ca77b2" ;;
         *) echo "" ;;
     esac
+}
+
+get_ffmpeg_expected_sha256() {
+  local plat="$1" archive_name="$2"
+  if [ -n "${FFMPEG_SHA256:-}" ]; then
+    echo "$FFMPEG_SHA256"
+    return
+  fi
+  local cs_url="https://github.com/yt-dlp/FFmpeg-Builds/releases/download/${FFMPEG_RELEASE}/checksums.sha256"
+  local remote_hash
+  remote_hash="$(curl -fsSL "$cs_url" 2>/dev/null | grep "${archive_name}" | cut -d' ' -f1 || true)"
+  if [ -n "$remote_hash" ]; then
+    echo "$remote_hash"
+    return
+  fi
+  ffmpeg_sha256 "$plat"
 }
 
 install_macos_ffmpeg() {
@@ -182,15 +198,15 @@ install_platform() {
 	case "$fu" in
 		*.zip)
 			fetch "$fu" "$tmp/ffmpeg.zip"
-			verify_sha256 "$tmp/ffmpeg.zip" "${FFMPEG_SHA256:-$(ffmpeg_sha256 "$plat")}"
+			verify_sha256 "$tmp/ffmpeg.zip" "$(get_ffmpeg_expected_sha256 "$plat" "$(basename "$fu")")"
 			unzip -q -o "$tmp/ffmpeg.zip" -d "$tmp/out"
 			;;
 		*.tar.xz)
 			fetch "$fu" "$tmp/ffmpeg.tar.xz"
-			verify_sha256 "$tmp/ffmpeg.tar.xz" "${FFMPEG_SHA256:-$(ffmpeg_sha256 "$plat")}"
+			verify_sha256 "$tmp/ffmpeg.tar.xz" "$(get_ffmpeg_expected_sha256 "$plat" "$(basename "$fu")")"
 			mkdir -p "$tmp/out"
-      tar -xJf "$tmp/ffmpeg.tar.xz" -C "$tmp/out"
-      ;;
+			tar -xJf "$tmp/ffmpeg.tar.xz" -C "$tmp/out"
+			;;
     *)
       echo "  unknown archive: $fu"
       return 1
