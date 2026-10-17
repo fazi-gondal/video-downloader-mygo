@@ -44,8 +44,10 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - Resolution presets from best quality through 360p.
 - MP4, MKV, and WebM container selection when the selected media allows it.
 - Format explorer with format ID, resolution, frame rate, codec, and size information.
+- Explicit video or audio format choices are preserved when yt-dlp builds the final selector; reset to Auto to return to automatic container-aware selection.
 - VP9 preference option.
-- Live final-size estimate based on available stream sizes, bitrates, duration, and selected tracks.
+- Combined final-size estimate based on the physical video/audio streams that will be downloaded, their sizes or bitrates, duration, and selected tracks.
+- Approximate estimates are marked with `~`; container overhead, metadata, thumbnails, subtitles, and remuxing can change the final file size.
 - Download folder picker.
 - Thumbnail and metadata embedding options.
 
@@ -53,9 +55,16 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 
 - Default, All, and Custom audio-track modes.
 - Human-readable language labels while preserving yt-dlp language/format IDs internally.
+- Individual audio-track labels include an approximate contribution to the final size when metadata permits.
 - Responsive three-column custom picker with a bounded vertical scroll area.
 - Multiple audio tracks automatically require MKV and disable incompatible container choices.
 - Audio-track selection is passed to yt-dlp with multistream support.
+
+The size shown on the configuration page sums the selected physical stream
+payloads once. If an automatic fallback is already a combined video+audio
+stream, its embedded audio is not counted a second time. Custom multi-audio
+selection adds only the checked tracks. If yt-dlp does not report an exact
+stream size, the app estimates it from bitrate and duration and displays `~`.
 
 ### Subtitles
 
@@ -77,7 +86,8 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - Status pills for preparing, pending, downloading, processing, completed, failed, and cancelled states.
 - Determinate progress from downloaded/total bytes or percentage.
 - Downloaded bytes, total bytes, approximate-total marker, speed, and ETA.
-- Separate processing state for post-processing and remuxing.
+- Unknown values are shown as calculating/unknown instead of being silently hidden.
+- Separate processing state for stream merging, post-processing, and remuxing so a completed stream does not look like a completed file.
 - Show completed files in the operating-system file manager.
 
 ### Converter
@@ -107,7 +117,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 
 - Go **1.27.1** or a compatible Go 1.27 toolchain. The version is declared in `go.mod`.
 - Git.
-- MyGo CLI **v0.5.1**, pinned as a Go tool in `go.mod`.
+- MyGo CLI **v0.5.5**, pinned as a Go tool in `go.mod`.
 - A C compiler is not required for normal MyGo builds; CI sets `CGO_ENABLED=0`.
 
 ### Runtime requirements
@@ -144,7 +154,7 @@ The Linux archive may require GTK/WebKit runtime packages on minimal distributio
 
 ### macOS
 
-The release matrix targets both macOS amd64 and arm64. The workflow bundles yt-dlp and an architecture-matched FFmpeg/FFprobe Homebrew bottle. Unsigned/ad-hoc builds may be blocked by Gatekeeper; configure Developer ID signing and notarization for public distribution.
+The current release workflow targets macOS arm64. Local builds can also target macOS amd64 when run on a compatible environment. The workflow bundles yt-dlp and an architecture-matched FFmpeg/FFprobe Homebrew bottle. Unsigned/ad-hoc builds may be blocked by Gatekeeper; configure Developer ID signing and notarization for public distribution.
 
 ## Run from source
 
@@ -297,7 +307,14 @@ Select **Start download**. The application opens the Downloads page, where each 
 - Downloaded and total bytes.
 - Approximate total marker when yt-dlp reports an estimate.
 - Speed and ETA.
+- A processing state while yt-dlp merges streams or applies post-processing.
 - Retry, cancel, and show-in-folder actions where applicable.
+
+At the beginning of a download, size or ETA can be unavailable while yt-dlp
+initializes. The card displays `size unknown`, `speed calculating`, or
+`ETA calculating` until a value is available. The progress bar becomes
+determinate when yt-dlp reports a total or the configuration estimate can be
+used as a fallback.
 
 Subtitle HTTP 429 responses are treated as partial subtitle warnings when the media download succeeds. The video/audio file still completes, but the blocked language may be missing until a later retry.
 
@@ -380,10 +397,15 @@ The application keeps worker processes away from UI widgets. yt-dlp and FFmpeg r
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on pushes to `main`/`master` and pull requests:
+`.github/workflows/ci.yml` runs on pushes to `main`/`master` and pull requests.
+It verifies the module graph, runs the race-enabled test suite, runs `go vet`,
+and performs a Linux native packaging smoke build. The packaging matrix also
+checks Windows amd64/arm64, Linux amd64/arm64, and macOS arm64 artifacts.
 
 ```text
-go test ./... -count=1
+go test -race ./... -count=1
+go vet ./...
+CGO_ENABLED=0 go tool mygo build -platform linux/amd64 -skip-build-command
 ```
 
 The CI job uses the Go version from `go.mod`, does not modify dependencies, and sets `CGO_ENABLED=0` for the native packaging smoke build.

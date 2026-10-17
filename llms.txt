@@ -5,7 +5,7 @@ Video Downloader for MyGo is a native Go desktop application for downloading and
 ## Stack
 
 - Go 1.27.1.
-- MyGo v0.5.1, pinned as `tool github.com/egoist/mygo/cmd/mygo` in `go.mod`.
+- MyGo v0.5.5, pinned as `tool github.com/egoist/mygo/cmd/mygo` in `go.mod`.
 - Native MyGo UI; no web frontend or Bun build.
 - yt-dlp for extraction/downloads.
 - FFmpeg and FFprobe for merge, remux, subtitle embedding, conversion, and probing.
@@ -13,6 +13,10 @@ Video Downloader for MyGo is a native Go desktop application for downloading and
 ## Run and verify
 
 ```bash
+go mod download
+go test ./... -count=1
+go vet ./...
+go build ./...
 ```
 
 Use `go tool mygo dev` for live development. Use `go tool mygo build -platform windows/amd64` or `linux/amd64` for packaging. Set `CGO_ENABLED=0` for reproducible native builds.
@@ -23,10 +27,14 @@ Use `go tool mygo dev` for live development. Use `go tool mygo build -platform w
 - Single-video results show a thumbnail and lead to download configuration.
 - Playlists provide entry selection and batch queueing.
 - Multiple audio tracks and any embedded subtitles force MKV in the UI and request.
+- The configuration estimate sums selected physical stream payloads once; muxed fallback audio is not double-counted.
+- Custom multi-audio mode adds only checked tracks and shows approximate per-track contributions when available.
 - Subtitle custom lists contain available languages and retain language codes internally.
 - Subtitle-only HTTP 429 failures are shown as warnings when media succeeds.
-- Downloads show thumbnails, status, progress, downloaded/total bytes, speed, and ETA.
+- Downloads show thumbnails, status, progress, downloaded/total bytes, speed, ETA, and a separate processing state for merging/post-processing.
+- Unknown startup values are shown as `size unknown`, `speed calculating`, or `ETA calculating`; approximate values are marked with `~`.
 - Converter supports drag/drop, native file picking, remux where safe, and FFmpeg re-encoding.
+- Lossy converter audio supports 128/192/256/320 kbps; FLAC and WAV ignore bitrate because they are lossless.
 - History is persisted as JSON and supports search, filters, re-download, deletion, and opening output folders.
 
 ## Configuration

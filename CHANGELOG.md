@@ -12,19 +12,28 @@ All notable user-visible changes are recorded here. Release tags use the version
 - Automatic MKV presentation for multiple audio tracks or embedded subtitles.
 - Estimated final download size based on stream metadata and duration.
 - Download progress metrics for bytes, approximate totals, speed, and ETA.
-- Windows/Linux CI packaging smoke checks and pinned MyGo CLI usage.
+- Per-track approximate size contributions for custom multi-audio selection.
+- Audio conversion bitrate choices from 128 kbps through 320 kbps for lossy formats.
+- Windows/Linux/macOS CI packaging checks and pinned MyGo CLI usage.
 
 ### Changed
 
 - Release packaging uses `go tool mygo` from the pinned module tool instead of an unpinned global CLI.
 - Runtime helper resolution supports both packaged flattened resources and development platform directories.
 - Linux release uploads include the generated `install.sh` artifact.
+- Size estimates now sum physical video/audio payloads once, prefer selections that match the download container, and mark final-size uncertainty with `~`.
+- Download progress parsing uses an explicit stdout marker and preserves a processing state while yt-dlp merges or post-processes streams.
+- Unknown size, speed, and ETA values are shown explicitly while yt-dlp initializes instead of being hidden.
 
 ### Fixed
 
 - Subtitle HTTP 429 responses no longer fail a valid media download when only subtitle retrieval fails.
 - Multiple subtitle embedding uses SRT conversion and MKV remuxing for player compatibility.
 - Audio/subtitle selector cells no longer expand outside the right side of the window.
+- Muxed video+audio formats are no longer counted as video plus a second copy of the same audio stream.
+- Custom multi-audio estimates no longer include unchecked tracks.
+- One-sided explicit video or audio format selections are preserved in the yt-dlp selector.
+- Audio-track bitrate parsing falls back to total bitrate when `abr` is unavailable.
 
 ## [2.0.0]
 

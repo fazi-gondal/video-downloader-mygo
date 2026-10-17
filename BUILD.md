@@ -6,7 +6,7 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 
 - Go 1.27.1, as declared in `go.mod`.
 - Git.
-- MyGo v0.5.1 through the pinned Go tool in `go.mod`.
+- MyGo v0.5.5 through the pinned Go tool in `go.mod`.
 - FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
 - A supported yt-dlp JavaScript runtime such as Deno on `PATH` for extractor
   workflows that require one; it is not bundled by the current release.
@@ -150,7 +150,7 @@ Configure a `.pfx` certificate through the MyGo Windows configuration and provid
 
 ### CI
 
-`.github/workflows/ci.yml` runs on pushes to `main`/`master` and pull requests. It uses the Go version from `go.mod`, tests the committed dependency graph, runs vet, and performs a Linux MyGo packaging smoke build.
+`.github/workflows/ci.yml` runs on pushes to `main`/`master` and pull requests. It uses the Go version from `go.mod`, verifies the committed dependency graph, runs the race-enabled test suite and vet, performs a Linux MyGo packaging smoke build, and validates the Windows, Linux, and macOS arm64 packaging matrix.
 
 ### Release
 
@@ -159,7 +159,7 @@ Configure a `.pfx` certificate through the MyGo Windows configuration and provid
 1. Checks that the tag matches `mygo.json`.
 2. Creates a draft GitHub Release.
 3. Fetches verified helper tools for Windows/Linux and architecture-matched Homebrew FFmpeg for macOS.
-4. Builds Windows and Linux amd64/arm64 plus macOS amd64/arm64 with `go tool mygo` and `CGO_ENABLED=0`.
+4. Builds Windows and Linux amd64/arm64 plus macOS arm64 with `go tool mygo` and `CGO_ENABLED=0`.
 5. Uploads Windows installers, Linux packages/archives/install script, and macOS disk images to the draft.
 6. Publishes the release only after every platform job succeeds.
 
