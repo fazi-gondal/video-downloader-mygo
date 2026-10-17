@@ -558,11 +558,19 @@ func (a *App) mediaCard(c *ui.Context) {
 			ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
 		})
 		ui.Column(c).Gap(5).AlignItems(ui.End).Children(func() {
-			if len(m.AudioTracks) > 1 {
-				ui.Text(c, fmt.Sprintf("%d audio tracks", len(m.AudioTracks))).FontSize(11).TextColor(t.Accent)
+			if count := len(highQualityOpusAudioTracks(m.AudioTracks)); count > 0 {
+				if count == 1 {
+					ui.Text(c, "1 audio track").FontSize(11).TextColor(t.Accent)
+				} else {
+					ui.Text(c, fmt.Sprintf("%d audio tracks", count)).FontSize(11).TextColor(t.Accent)
+				}
 			}
 			if subCount := len(subtitleLanguages(m)); subCount > 0 {
-				ui.Text(c, fmt.Sprintf("%d subtitle languages", subCount)).FontSize(11).TextColor(t.Accent)
+				if subCount == 1 {
+					ui.Text(c, "1 subtitle language").FontSize(11).TextColor(t.Accent)
+				} else {
+					ui.Text(c, fmt.Sprintf("%d subtitle languages", subCount)).FontSize(11).TextColor(t.Accent)
+				}
 			}
 		})
 	})
@@ -788,7 +796,11 @@ func (a *App) configPanel(c *ui.Context) {
 }
 
 func (a *App) audioTracksControls(c *ui.Context) {
-	if a.currentMedia == nil || len(a.currentMedia.AudioTracks) == 0 {
+	if a.currentMedia == nil {
+		return
+	}
+	tracks := highQualityOpusAudioTracks(a.currentMedia.AudioTracks)
+	if len(tracks) == 0 {
 		return
 	}
 	t := c.Theme()
@@ -800,32 +812,82 @@ func (a *App) audioTracksControls(c *ui.Context) {
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksCustom, "Custom")
 		})
 		if a.audioTracksMode == audioTracksCustom {
-			tracks := a.currentMedia.AudioTracks
-			cols := []ui.TableColumn{
-				{Title: "Select", Width: 60, Align: ui.Center, Fixed: true},
-				{Title: "Language", Width: 200, MinWidth: 120},
-				{Title: "Details", Width: 0, MinWidth: 160},
-			}
-			ui.Table(c, &a.audListState, cols, len(tracks), func(row, col int) {
-				if row < 0 || row >= len(tracks) {
-					return
-				}
-				tr := tracks[row]
-				id := tr.ID
-				switch col {
-				case 0:
-					on := checkboxState(a.selectedAudio, id)
-					ui.Checkbox(c.Key("aud-"+id), on, "").Shrink(0)
-				case 1:
-					lang := a.audioTrackLanguage(tr)
-					ui.Text(c, lang).FontSize(11).SingleLine().Ellipsis("…")
-				case 2:
-					details := a.audioTrackDetails(tr)
-					ui.Text(c, details).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
-				}
-			}).FillWidth().Height(168).Border(1, t.Border).Radius(6).Background(t.Background)
+			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Children(func() {
+				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).Gap(6).Children(func() {
+					for _, tr := range tracks {
+						id := tr.ID
+						on := checkboxState(a.selectedAudio, id)
+						label := a.audioTrackLanguage(tr)
+						ui.Row(c.Key("aud-tile-"+id)).FillWidth().MinWidth(0).Padding(6, 10).
+							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
+							ui.Checkbox(c.Key("aud-"+id), on, label)
+						})
+					}
+				})
+			})
 		}
 	})
+}
+
+func highQualityOpusAudioTracks(tracks []models.AudioTrack) []models.AudioTrack {
+	if len(tracks) == 0 {
+		return nil
+	}
+
+	bestByLang := make(map[string]models.AudioTrack)
+	for _, tr := range tracks {
+		langKey := strings.ToLower(strings.TrimSpace(tr.Language))
+		if langKey == "und" || langKey == "unknown" || langKey == "none" {
+			langKey = ""
+		}
+		if langKey == "" {
+			langKey = tr.ID
+		}
+
+		current, exists := bestByLang[langKey]
+		if !exists {
+			bestByLang[langKey] = tr
+			continue
+		}
+
+		trOpus := strings.Contains(strings.ToLower(tr.Codec), "opus")
+		curOpus := strings.Contains(strings.ToLower(current.Codec), "opus")
+
+		if trOpus && !curOpus {
+			// Prefer Opus for this language
+			bestByLang[langKey] = tr
+		} else if trOpus == curOpus {
+			// Both Opus or both non-Opus: pick higher bitrate
+			if tr.Bitrate > current.Bitrate {
+				bestByLang[langKey] = tr
+			} else if tr.Bitrate == current.Bitrate && tr.ID > current.ID {
+				bestByLang[langKey] = tr
+			}
+		}
+		// If current is Opus and tr is not Opus, keep current Opus track
+	}
+
+	result := make([]models.AudioTrack, 0, len(bestByLang))
+	for _, tr := range bestByLang {
+		result = append(result, tr)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		nameI := languageDisplayName(result[i].Language)
+		if nameI == "" {
+			nameI = result[i].Language
+		}
+		nameJ := languageDisplayName(result[j].Language)
+		if nameJ == "" {
+			nameJ = result[j].Language
+		}
+		if nameI != nameJ {
+			return strings.ToLower(nameI) < strings.ToLower(nameJ)
+		}
+		return result[i].ID < result[j].ID
+	})
+
+	return result
 }
 
 func (a *App) audioTrackLanguage(track models.AudioTrack) string {
@@ -839,8 +901,6 @@ func (a *App) audioTrackLanguage(track models.AudioTrack) string {
 		} else {
 			lang = "Audio track " + track.ID
 		}
-	} else if track.Language != "" && !strings.EqualFold(lang, track.Language) {
-		lang += " (" + track.Language + ")"
 	}
 	return lang
 }
@@ -873,12 +933,7 @@ func (a *App) audioTrackDetails(track models.AudioTrack) string {
 }
 
 func (a *App) audioTrackLabel(track models.AudioTrack) string {
-	lang := a.audioTrackLanguage(track)
-	details := a.audioTrackDetails(track)
-	if details != "" && details != "Default" {
-		return lang + " · " + details
-	}
-	return lang
+	return a.audioTrackLanguage(track)
 }
 
 func (a *App) hasSubtitles() bool {
@@ -905,28 +960,21 @@ func (a *App) subtitleControls(c *ui.Context) {
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeCustom, "Custom")
 		})
 		if a.subtitleMode == subtitleModeCustom {
-			cols := []ui.TableColumn{
-				{Title: "Select", Width: 60, Align: ui.Center, Fixed: true},
-				{Title: "Language", Width: 200, MinWidth: 120},
-				{Title: "Details", Width: 0, MinWidth: 160},
-			}
-			ui.Table(c, &a.subListState, cols, len(langs), func(row, col int) {
-				if row < 0 || row >= len(langs) {
-					return
-				}
-				lang := langs[row]
-				switch col {
-				case 0:
-					on := checkboxState(a.selectedSubtitle, lang)
-					ui.Checkbox(c.Key("sub-"+lang), on, "").Shrink(0)
-				case 1:
-					label := languageDisplayName(lang)
-					ui.Text(c, label).FontSize(11).SingleLine().Ellipsis("…")
-				case 2:
-					details := a.subtitleDetails(lang)
-					ui.Text(c, details).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
-				}
-			}).FillWidth().Height(168).Border(1, t.Border).Radius(6).Background(t.Background)
+			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Children(func() {
+				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).Gap(6).Children(func() {
+					for _, lang := range langs {
+						on := checkboxState(a.selectedSubtitle, lang)
+						label := languageDisplayName(lang)
+						if label == "" {
+							label = lang
+						}
+						ui.Row(c.Key("sub-tile-"+lang)).FillWidth().MinWidth(0).Padding(6, 10).
+							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
+							ui.Checkbox(c.Key("sub-"+lang), on, label)
+						})
+					}
+				})
+			})
 		}
 	})
 }
@@ -2438,7 +2486,20 @@ func subtitleLanguages(m *models.MediaInfo) []string {
 	for lang := range seen {
 		langs = append(langs, lang)
 	}
-	sort.Strings(langs)
+	sort.Slice(langs, func(i, j int) bool {
+		nameI := languageDisplayName(langs[i])
+		if nameI == "" {
+			nameI = langs[i]
+		}
+		nameJ := languageDisplayName(langs[j])
+		if nameJ == "" {
+			nameJ = langs[j]
+		}
+		if nameI != nameJ {
+			return strings.ToLower(nameI) < strings.ToLower(nameJ)
+		}
+		return langs[i] < langs[j]
+	})
 	return langs
 }
 

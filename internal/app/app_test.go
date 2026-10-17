@@ -393,16 +393,8 @@ func TestHasSubtitlesReturnsFalseWhenNoValidSubtitles(t *testing.T) {
 	}
 }
 
-func TestAudioTrackLanguageAndDetailsFormatting(t *testing.T) {
-	a := &App{
-		currentMedia: &models.MediaInfo{
-			Duration: 120,
-			Formats: []models.FormatInfo{
-				{ID: "251", Filesize: 2_000_000},
-			},
-		},
-	}
-
+func TestAudioTrackLanguageFormatting(t *testing.T) {
+	a := &App{}
 	tr := models.AudioTrack{
 		ID:       "251",
 		Language: "en",
@@ -412,28 +404,32 @@ func TestAudioTrackLanguageAndDetailsFormatting(t *testing.T) {
 	}
 
 	lang := a.audioTrackLanguage(tr)
-	if lang != "English (en)" {
-		t.Fatalf("audioTrackLanguage() = %q, want %q", lang, "English (en)")
-	}
-
-	details := a.audioTrackDetails(tr)
-	if !strings.Contains(details, "opus") || !strings.Contains(details, "128 kbps") || !strings.Contains(details, "medium") {
-		t.Fatalf("audioTrackDetails() = %q, expected codec, bitrate, and note", details)
+	if lang != "English" {
+		t.Fatalf("audioTrackLanguage() = %q, want %q", lang, "English")
 	}
 }
 
-func TestSubtitleDetailsFormatting(t *testing.T) {
-	a := &App{
-		currentMedia: &models.MediaInfo{
-			Subtitles: map[string][]models.SubtitleTrack{
-				"en": {{Lang: "en", Name: "English [CC]", Ext: "vtt"}},
-			},
-		},
+func TestHighQualityOpusAudioTracks(t *testing.T) {
+	tracks := []models.AudioTrack{
+		{ID: "140-en", Language: "en", Codec: "mp4a.40.2", Bitrate: 128},
+		{ID: "250-en", Language: "en", Codec: "opus", Bitrate: 70},
+		{ID: "251-en", Language: "en", Codec: "opus", Bitrate: 160},
+		{ID: "140-hi", Language: "hi", Codec: "mp4a.40.2", Bitrate: 128},
+		{ID: "251-hi", Language: "hi", Codec: "opus", Bitrate: 160},
+		{ID: "251-ja", Language: "ja", Codec: "opus", Bitrate: 160},
 	}
 
-	details := a.subtitleDetails("en")
-	if !strings.Contains(details, "en") || !strings.Contains(details, "English [CC]") || !strings.Contains(details, "VTT") {
-		t.Fatalf("subtitleDetails() = %q, expected language code, track name, and ext", details)
+	best := highQualityOpusAudioTracks(tracks)
+	if len(best) != 3 {
+		t.Fatalf("len(best) = %d, want 3", len(best))
+	}
+	wantIDs := []string{"251-en", "251-hi", "251-ja"}
+	var gotIDs []string
+	for _, tr := range best {
+		gotIDs = append(gotIDs, tr.ID)
+	}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("highQualityOpusAudioTracks() IDs = %#v, want %#v", gotIDs, wantIDs)
 	}
 }
 
