@@ -812,8 +812,8 @@ func (a *App) audioTracksControls(c *ui.Context) {
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksCustom, "Custom")
 		})
 		if a.audioTracksMode == audioTracksCustom {
-			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Children(func() {
-				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).Gap(6).Children(func() {
+			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Padding(4, 6).Children(func() {
+				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).GapX(14).GapY(8).Children(func() {
 					for _, tr := range tracks {
 						id := tr.ID
 						on := checkboxState(a.selectedAudio, id)
@@ -960,8 +960,8 @@ func (a *App) subtitleControls(c *ui.Context) {
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeCustom, "Custom")
 		})
 		if a.subtitleMode == subtitleModeCustom {
-			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Children(func() {
-				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).Gap(6).Children(func() {
+			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Padding(4, 6).Children(func() {
+				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).GapX(14).GapY(8).Children(func() {
 					for _, lang := range langs {
 						on := checkboxState(a.selectedSubtitle, lang)
 						label := languageDisplayName(lang)
