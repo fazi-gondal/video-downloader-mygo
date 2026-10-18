@@ -1,12 +1,100 @@
 package services
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
+
+func TestFFmpegHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_FFMPEG_HELPER") != "1" {
+		return
+	}
+	output := os.Args[len(os.Args)-1]
+	if err := os.WriteFile(output, []byte("converted"), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	fmt.Fprintln(os.Stdout, "out_time_ms=1000")
+	os.Exit(0)
+}
+
+func TestConvertCancellationPreservesOriginalFile(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "input.mkv")
+	if err := os.WriteFile(source, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &FFmpegService{ffmpeg: "fake-ffmpeg", remuxCache: make(map[string]remuxCacheEntry)}
+	service.command = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		helperArgs := []string{"-test.run=TestFFmpegHelperProcess", "--"}
+		helperArgs = append(helperArgs, args...)
+		cmd := exec.CommandContext(ctx, os.Args[0], helperArgs...)
+		cmd.Env = append(os.Environ(), "GO_WANT_FFMPEG_HELPER=1")
+		return cmd
+	}
+	job := models.NewConversionJob(models.ConversionRequest{
+		Source:       source,
+		TargetFormat: "mp4",
+		Kind:         models.KindVideo,
+		KeepOriginal: false,
+	})
+
+	_, err := service.Convert(context.Background(), job, func(percent float64) {
+		if percent == 100 {
+			job.Cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Convert() error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("original file stat after cancellation: %v", err)
+	}
+}
+
+func TestConvertSuccessfulCleanupHonorsKeepOriginalSetting(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "input.mkv")
+	if err := os.WriteFile(source, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &FFmpegService{ffmpeg: "fake-ffmpeg", remuxCache: make(map[string]remuxCacheEntry)}
+	service.command = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		helperArgs := []string{"-test.run=TestFFmpegHelperProcess", "--"}
+		helperArgs = append(helperArgs, args...)
+		cmd := exec.CommandContext(ctx, os.Args[0], helperArgs...)
+		cmd.Env = append(os.Environ(), "GO_WANT_FFMPEG_HELPER=1")
+		return cmd
+	}
+	job := models.NewConversionJob(models.ConversionRequest{
+		Source:       source,
+		TargetFormat: "mp4",
+		Kind:         models.KindVideo,
+		KeepOriginal: false,
+	})
+
+	output, err := service.Convert(context.Background(), job, nil)
+	if err != nil {
+		t.Fatalf("Convert() error = %v", err)
+	}
+	if output == "" {
+		t.Fatal("Convert() returned an empty output path")
+	}
+	if _, err := os.Stat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("original file stat after successful cleanup = %v, want not exist", err)
+	}
+}
 
 func TestConversionArgsAudioCodecAndBitrate(t *testing.T) {
 	tests := []struct {

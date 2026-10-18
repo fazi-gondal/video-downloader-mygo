@@ -25,6 +25,7 @@ type FFmpegService struct {
 	ffprobe    string
 	remuxMu    sync.Mutex
 	remuxCache map[string]remuxCacheEntry
+	command    func(context.Context, string, ...string) *exec.Cmd
 }
 
 type remuxCacheEntry struct {
@@ -127,7 +128,7 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 		<-watchExited
 	}()
 
-	cmd := exec.CommandContext(runCtx, s.ffmpeg, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
+	cmd := s.commandContext(runCtx, s.ffmpeg, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -209,10 +210,22 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 	if onProgress != nil {
 		onProgress(100)
 	}
-	if !req.KeepOriginal {
-		_ = os.Remove(src)
+	if !job.FinalizeIfNotCancelled(func() {
+		if !req.KeepOriginal {
+			_ = os.Remove(src)
+		}
+	}) {
+		_ = os.Remove(out)
+		return "", context.Canceled
 	}
 	return out, nil
+}
+
+func (s *FFmpegService) commandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	if s.command != nil {
+		return s.command(ctx, name, args...)
+	}
+	return exec.CommandContext(ctx, name, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 }
 
 func uniqueOutputPath(src, ext string) string {

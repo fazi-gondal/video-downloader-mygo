@@ -155,6 +155,21 @@ func (j *ConversionJob) Done() <-chan struct{} {
 	return j.cancelCh
 }
 
+// FinalizeIfNotCancelled serializes a final destructive step with Cancel.
+// The callback should be short; it runs while the job state is locked so a
+// cancellation that wins the race prevents finalization.
+func (j *ConversionJob) FinalizeIfNotCancelled(finalize func()) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	select {
+	case <-j.cancelCh:
+		return false
+	default:
+		finalize()
+		return true
+	}
+}
+
 func cloneConversionTime(value *time.Time) *time.Time {
 	if value == nil {
 		return nil

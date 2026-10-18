@@ -28,3 +28,15 @@ func TestConversionJobCancelIsIdempotentConcurrently(t *testing.T) {
 		t.Fatal("Done channel should be closed after cancellation")
 	}
 }
+
+func TestConversionJobFinalizationSkipsCancelledJob(t *testing.T) {
+	job := NewConversionJob(ConversionRequest{})
+	job.Cancel()
+	called := false
+	if job.FinalizeIfNotCancelled(func() { called = true }) {
+		t.Fatal("cancelled job should not finalize")
+	}
+	if called {
+		t.Fatal("finalizer ran for a cancelled job")
+	}
+}
