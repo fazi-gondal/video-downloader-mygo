@@ -98,9 +98,11 @@ jobs:
         run: |
           # Create x64 copies for amd64 installers/archives so users easily recognize Intel/AMD 64-bit support
           while IFS= read -r -d '' file; do
-            case "$file" in
+            base="$(basename "$file")"
+            case "$base" in
               *amd64.exe|*amd64.zip|*amd64.tar.gz)
-                x64_file="${file//amd64/x64}"
+                dir="$(dirname "$file")"
+                x64_file="$dir/${base//amd64/x64}"
                 if [ ! -f "$x64_file" ]; then
                   cp "$file" "$x64_file"
                 fi
