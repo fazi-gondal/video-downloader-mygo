@@ -4,6 +4,8 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-18
+
 ### Added
 
 - Native MyGo home, downloads, converter, history, settings, and about screen refinements.
