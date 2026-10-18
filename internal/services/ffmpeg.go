@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -528,30 +527,3 @@ func (s *FFmpegService) cacheRemuxDecision(key string, info os.FileInfo, result 
 	}
 }
 
-var timeRe = regexp.MustCompile(`time=(\d+):(\d+):(\d+\.\d+)`)
-
-func parseFFmpegTime(line string) time.Duration {
-	m := timeRe.FindStringSubmatch(line)
-	if m == nil {
-		return 0
-	}
-	h, _ := strconv.Atoi(m[1])
-	min, _ := strconv.Atoi(m[2])
-	sec, _ := strconv.ParseFloat(m[3], 64)
-	return time.Duration(h)*time.Hour + time.Duration(min)*time.Minute + time.Duration(sec*float64(time.Second))
-}
-
-func lookPath(file string) (string, error) {
-	path := os.Getenv("PATH")
-	for _, dir := range strings.Split(path, string(os.PathListSeparator)) {
-		p := filepath.Join(dir, file)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
-		}
-		// Windows
-		if st, err := os.Stat(p + ".exe"); err == nil && !st.IsDir() {
-			return p + ".exe", nil
-		}
-	}
-	return "", fmt.Errorf("%s not found", file)
-}
