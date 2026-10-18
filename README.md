@@ -115,7 +115,7 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 
 ### Build requirements
 
-- Go **1.27.1** or a compatible Go 1.27 toolchain. The version is declared in `go.mod`.
+- Go **1.27.2** or a compatible Go 1.27 toolchain. The version is declared in `go.mod`.
 - Git.
 - MyGo CLI **v0.5.5**, pinned as a Go tool in `go.mod`.
 - A C compiler is not required for normal MyGo builds; CI sets `CGO_ENABLED=0`.

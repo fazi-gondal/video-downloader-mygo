@@ -13,6 +13,8 @@ import (
 // shutdown has started.
 var ErrConversionServiceClosed = errors.New("conversion service is shut down")
 
+const maxRetainedConversionJobs = 100
+
 type ConversionEventKind int
 
 const (
@@ -178,11 +180,11 @@ func (s *ConversionService) Shutdown() {
 				deferred = append(deferred, job)
 			}
 		}
+		s.mu.Unlock()
 		for _, job := range deferred {
 			job.Cancel()
 			s.finishCancelled(job)
 		}
-		s.mu.Unlock()
 		close(s.events)
 	})
 }
@@ -253,6 +255,7 @@ func (s *ConversionService) runJob(job *models.ConversionJob) {
 			job.SetState(models.ConvError)
 			job.SetError(err.Error())
 			s.emit(ConvEventFinished, job, err)
+			s.pruneFinished()
 		}
 		return
 	}
@@ -263,6 +266,7 @@ func (s *ConversionService) runJob(job *models.ConversionJob) {
 	now := time.Now()
 	job.SetFinishedAt(now)
 	s.emit(ConvEventFinished, job, nil)
+	s.pruneFinished()
 }
 
 func (s *ConversionService) finishCancelled(job *models.ConversionJob) {
@@ -270,6 +274,34 @@ func (s *ConversionService) finishCancelled(job *models.ConversionJob) {
 	now := time.Now()
 	job.SetFinishedAt(now)
 	s.emit(ConvEventFinished, job, nil)
+	s.pruneFinished()
+}
+
+func (s *ConversionService) pruneFinished() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for len(s.jobs) > maxRetainedConversionJobs {
+		oldestID := ""
+		var oldest time.Time
+		for id, job := range s.jobs {
+			snapshot := job.Snapshot()
+			if !snapshot.State.IsTerminal() {
+				continue
+			}
+			finished := snapshot.CreatedAt
+			if snapshot.FinishedAt != nil {
+				finished = *snapshot.FinishedAt
+			}
+			if oldestID == "" || finished.Before(oldest) {
+				oldestID = id
+				oldest = finished
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		delete(s.jobs, oldestID)
+	}
 }
 
 func (s *ConversionService) emit(kind ConversionEventKind, job *models.ConversionJob, err error) {

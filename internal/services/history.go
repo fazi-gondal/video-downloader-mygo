@@ -40,7 +40,7 @@ func NewHistoryService() (*HistoryService, error) {
 		return nil, fmt.Errorf("create history directory: %w", err)
 	}
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(dir, 0o700); err != nil {
+		if err := os.Chmod(dir, 0o700); err != nil { // #nosec G302 -- history directories intentionally use owner-only permissions.
 			return nil, fmt.Errorf("secure history directory: %w", err)
 		}
 	}
@@ -99,7 +99,7 @@ func (h *HistoryService) save(entries []HistoryEntry) error {
 		return fmt.Errorf("create history directory: %w", err)
 	}
 	if runtime.GOOS != "windows" {
-		_ = os.Chmod(filepath.Dir(h.path), 0o700)
+		_ = os.Chmod(filepath.Dir(h.path), 0o700) // #nosec G302 -- history directories intentionally use owner-only permissions.
 	}
 	return atomicWriteHistoryFile(h.path, data)
 }

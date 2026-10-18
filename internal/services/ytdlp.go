@@ -146,13 +146,21 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		ctx = context.Background()
 	}
 	req := task.Request
+	stagingDir, err := newDownloadStagingDir(req.OutputDir)
+	if err != nil {
+		return "", err
+	}
+	if stagingDir != "" {
+		defer os.RemoveAll(stagingDir)
+		req.OutputDir = stagingDir
+	}
 	args := s.downloadArgs(req)
 	settings := s.appSettings()
 	subtitleErrorsIgnored := subtitleDownloadEnabled(req, settings)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, s.ytdlpPath, args...)
+	cmd := exec.CommandContext(runCtx, s.ytdlpPath, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -273,11 +281,145 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		task.SetErrorDetail(ytDlpSubtitleWarning(stderrText))
 	}
 
-	if lastPath == "" {
-		// fallback: look for newest file in output dir
-		lastPath = newestFile(req.OutputDir)
+	if stagingDir != "" {
+		// The command runs in an isolated directory, so a fallback can only
+		// select files created by this request. This avoids associating an
+		// unrelated or concurrently downloaded file from the shared output dir.
+		if _, inStaging := relativeStagingPath(stagingDir, lastPath); !inStaging || !isRegularFile(lastPath) {
+			lastPath = newestFile(stagingDir)
+		}
+		lastPath, err = promoteStagedDownload(stagingDir, task.Request.OutputDir, lastPath)
+		if err != nil {
+			return "", err
+		}
 	}
 	return lastPath, nil
+}
+
+func newDownloadStagingDir(outputDir string) (string, error) {
+	if outputDir == "" {
+		outputDir = "."
+	}
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		return "", fmt.Errorf("create download output directory: %w", err)
+	}
+	stagingDir, err := os.MkdirTemp(outputDir, ".mygo-download-*")
+	if err != nil {
+		return "", fmt.Errorf("create download staging directory: %w", err)
+	}
+	return stagingDir, nil
+}
+
+func promoteStagedDownload(stagingDir, outputDir, selectedPath string) (string, error) {
+	selectedPath = filepath.Clean(selectedPath)
+	selectedRel, selectedInStaging := relativeStagingPath(stagingDir, selectedPath)
+	if selectedPath == "." || !selectedInStaging {
+		selectedRel = ""
+	}
+
+	var promotedPath string
+	err := filepath.Walk(stagingDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		rel, err := filepath.Rel(stagingDir, path)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(outputDir, rel)
+		if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
+			return err
+		}
+		if err := moveStagedFile(path, destination); err != nil {
+			return err
+		}
+		if selectedRel != "" && rel == selectedRel {
+			promotedPath = destination
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("finalize yt-dlp output: %w", err)
+	}
+	return promotedPath, nil
+}
+
+func relativeStagingPath(stagingDir, path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(stagingDir, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return rel, true
+}
+
+func moveStagedFile(source, destination string) error {
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(destination); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("destination %q is a directory", destination)
+		}
+		// yt-dlp normally skips an existing output. Preserve that behavior
+		// while removing the duplicate staged file.
+		return os.Remove(source)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	// A hard link plus removal is an atomic no-overwrite move on the same
+	// filesystem, which is where the staging directory is created. This also
+	// prevents two concurrent promotions from replacing each other's output.
+	if err := os.Link(source, destination); err == nil {
+		return os.Remove(source)
+	} else if _, statErr := os.Stat(destination); statErr == nil {
+		return os.Remove(source)
+	}
+
+	// Fall back for filesystems without hard-link support while retaining
+	// exclusive creation semantics.
+	sourceFile, err := os.Open(source) // #nosec G304 -- source is a file discovered under the request-specific staging directory.
+	if err != nil {
+		return err
+	}
+	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, sourceInfo.Mode().Perm()) // #nosec G304 -- destination is derived from a validated staging-relative path.
+	if err != nil {
+		_ = sourceFile.Close()
+		if _, statErr := os.Stat(destination); statErr == nil {
+			return os.Remove(source)
+		}
+		return err
+	}
+	_, copyErr := io.Copy(destinationFile, sourceFile)
+	sourceCloseErr := sourceFile.Close()
+	destinationCloseErr := destinationFile.Close()
+	if copyErr != nil {
+		_ = os.Remove(destination)
+		return copyErr
+	}
+	if sourceCloseErr != nil {
+		return sourceCloseErr
+	}
+	if destinationCloseErr != nil {
+		return destinationCloseErr
+	}
+	return os.Remove(source)
+}
+
+func isRegularFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func (s *YtDlpService) downloadArgs(req models.DownloadRequest) []string {
@@ -348,7 +490,7 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	}
 	embedSubtitles := subtitleMode != models.SubtitleSelectionNone
 
-	_ = os.MkdirAll(req.OutputDir, 0o755)
+	_ = os.MkdirAll(req.OutputDir, 0o750)
 	outTpl := filepath.Join(req.OutputDir, "%(title).200B [%(id)s].%(ext)s")
 	if req.PlaylistTitle != "" {
 		outTpl = filepath.Join(req.OutputDir, "%(playlist_title).100B", "%(playlist_index)02d - %(title).150B [%(id)s].%(ext)s")
@@ -617,7 +759,7 @@ func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...)
+	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	diagnostics := &boundedDiagnosticBuffer{limit: maxYtDlpDiagnosticBytes}
@@ -884,24 +1026,17 @@ func isUnavailableProgressValue(value string) bool {
 }
 
 func newestFile(dir string) string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
 	var newest string
 	var newestMod time.Time
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
 		}
 		if info.ModTime().After(newestMod) {
 			newestMod = info.ModTime()
-			newest = filepath.Join(dir, e.Name())
+			newest = path
 		}
-	}
+		return nil
+	})
 	return newest
 }

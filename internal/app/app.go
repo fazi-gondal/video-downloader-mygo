@@ -35,21 +35,27 @@ const (
 	audioTracksAll    = "all"
 	audioTracksCustom = "custom"
 
-	subtitleModeNone   = "none"
-	subtitleModeAll    = "all"
-	subtitleModeCustom = "custom"
+	subtitleModeNone    = "none"
+	subtitleModeAll     = "all"
+	subtitleModeCustom  = "custom"
+	thumbnailCacheLimit = 256
 )
 
 type App struct {
-	winMu        sync.RWMutex
-	win          *mygo.Window
-	settingsRepo *config.SettingsRepository
-	settings     config.AppSettings
-	ffmpeg       *services.FFmpegService
-	ytdlp        *services.YtDlpService
-	manager      *services.DownloadManager
-	conv         *services.ConversionService
-	history      *services.HistoryService
+	winMu              sync.RWMutex
+	win                *mygo.Window
+	pendingMu          sync.Mutex
+	pendingUpdates     []func()
+	settingsRepo       *config.SettingsRepository
+	settingsMu         sync.RWMutex
+	settings           config.AppSettings // worker-visible snapshot, protected by settingsMu
+	settingsDraft      config.AppSettings // editable UI state, accessed on the main thread
+	settingsDraftReady bool
+	ffmpeg             *services.FFmpegService
+	ytdlp              *services.YtDlpService
+	manager            *services.DownloadManager
+	conv               *services.ConversionService
+	history            *services.HistoryService
 
 	page string
 
@@ -94,6 +100,12 @@ type App struct {
 	convAudioBitrateKbps int
 	convJobs             []models.ConversionJobSnapshot
 	convJobsMu           sync.Mutex
+	remuxMu              sync.Mutex
+	remuxSource          string
+	remuxTarget          string
+	remuxChecking        bool
+	remuxKnown           bool
+	remuxResult          bool
 
 	historyEntries []services.HistoryEntry
 	historyLoaded  bool
@@ -114,6 +126,60 @@ type App struct {
 	thumbnails        map[string]*ui.Bitmap
 	thumbnailLoading  map[string]bool
 	thumbnailFailures map[string]bool
+	thumbnailOrder    []string
+}
+
+func cloneAppSettings(settings config.AppSettings) config.AppSettings {
+	if settings.CustomHeaders != nil {
+		headers := settings.CustomHeaders
+		settings.CustomHeaders = make(map[string]string, len(headers))
+		for key, value := range headers {
+			settings.CustomHeaders[key] = value
+		}
+	}
+	if settings.SubtitleLangs != nil {
+		settings.SubtitleLangs = append([]string(nil), settings.SubtitleLangs...)
+	}
+	return settings
+}
+
+// settingsSnapshot returns an immutable copy for worker and background code.
+func (a *App) settingsSnapshot() config.AppSettings {
+	a.settingsMu.RLock()
+	defer a.settingsMu.RUnlock()
+	return cloneAppSettings(a.settings)
+}
+
+func (a *App) setSettings(settings config.AppSettings) {
+	settings = cloneAppSettings(settings)
+	a.settingsMu.Lock()
+	a.settings = settings
+	a.settingsMu.Unlock()
+}
+
+func (a *App) ensureSettingsDraft() {
+	if a.settingsDraftReady {
+		return
+	}
+	a.settingsDraft = a.settingsSnapshot()
+	a.settingsDraftReady = true
+}
+
+func (a *App) settingsDraftSnapshot() config.AppSettings {
+	a.ensureSettingsDraft()
+	return cloneAppSettings(a.settingsDraft)
+}
+
+func (a *App) publishSettingsDraft() {
+	a.ensureSettingsDraft()
+	a.setSettings(a.settingsDraft)
+}
+
+func (a *App) applySettings(settings config.AppSettings) {
+	settings = cloneAppSettings(settings)
+	a.setSettings(settings)
+	a.settingsDraft = cloneAppSettings(settings)
+	a.settingsDraftReady = true
 }
 
 func New() *App {
@@ -125,7 +191,9 @@ func New() *App {
 	ffmpeg := services.NewFFmpegService()
 	a := &App{
 		settingsRepo:         repo,
-		settings:             settings,
+		settings:             cloneAppSettings(settings),
+		settingsDraft:        cloneAppSettings(settings),
+		settingsDraftReady:   true,
 		ffmpeg:               ffmpeg,
 		page:                 PageDashboard,
 		mode:                 models.ModeVideoAudio,
@@ -169,7 +237,7 @@ func New() *App {
 			}
 		}
 	}
-	a.ytdlp = services.NewYtDlpService(ffmpeg.Path(), func() config.AppSettings { return a.settings })
+	a.ytdlp = services.NewYtDlpService(ffmpeg.Path(), a.settingsSnapshot)
 	a.manager = services.NewDownloadManager(a.ytdlp, settings.MaxConcurrent)
 	a.conv = services.NewConversionService(ffmpeg)
 	hist, err := services.NewHistoryService()
@@ -185,7 +253,14 @@ func New() *App {
 func (a *App) SetWindow(w *mygo.Window) {
 	a.winMu.Lock()
 	a.win = w
+	a.pendingMu.Lock()
+	pending := append([]func(){}, a.pendingUpdates...)
+	a.pendingUpdates = nil
+	a.pendingMu.Unlock()
 	a.winMu.Unlock()
+	for _, fn := range pending {
+		w.Update(fn)
+	}
 }
 
 // Shutdown stops media workers before the application event loop exits. Both
@@ -207,11 +282,17 @@ func (a *App) window() *mygo.Window {
 }
 
 func (a *App) updateOnMain(fn func()) {
-	if win := a.window(); win != nil {
+	a.winMu.Lock()
+	if a.win != nil {
+		win := a.win
+		a.winMu.Unlock()
 		win.Update(fn)
 		return
 	}
-	fn()
+	a.pendingMu.Lock()
+	a.pendingUpdates = append(a.pendingUpdates, fn)
+	a.pendingMu.Unlock()
+	a.winMu.Unlock()
 }
 
 func (a *App) invalidate() {
@@ -297,10 +378,12 @@ func (a *App) pumpConversionEvents() {
 }
 
 func (a *App) View(c *ui.Context) {
+	a.ensureSettingsDraft()
+	defer a.publishSettingsDraft()
 	// Apply the reference app's palette without replacing mygo's native
 	// controls. The initial theme tells us whether the OS is currently dark.
 	dark := c.Theme().Dark
-	switch a.settings.ThemeMode {
+	switch a.settingsDraft.ThemeMode {
 	case "dark":
 		dark = true
 	case "light":
@@ -518,6 +601,15 @@ func (a *App) ensureThumbnail(url string) {
 		return
 	}
 	a.thumbnailMu.Lock()
+	if a.thumbnails == nil {
+		a.thumbnails = make(map[string]*ui.Bitmap)
+	}
+	if a.thumbnailLoading == nil {
+		a.thumbnailLoading = make(map[string]bool)
+	}
+	if a.thumbnailFailures == nil {
+		a.thumbnailFailures = make(map[string]bool)
+	}
 	if a.thumbnails[url] != nil || a.thumbnailLoading[url] || a.thumbnailFailures[url] {
 		a.thumbnailMu.Unlock()
 		return
@@ -535,10 +627,47 @@ func (a *App) ensureThumbnail(url string) {
 			a.thumbnailFailures[url] = true
 		} else {
 			a.thumbnails[url] = bitmap
+			delete(a.thumbnailFailures, url)
 		}
+		a.rememberThumbnailLocked(url)
 		a.thumbnailMu.Unlock()
 		a.invalidate()
 	}()
+}
+
+func (a *App) rememberThumbnailLocked(url string) {
+	if a.thumbnails == nil {
+		a.thumbnails = make(map[string]*ui.Bitmap)
+	}
+	if a.thumbnailFailures == nil {
+		a.thumbnailFailures = make(map[string]bool)
+	}
+	known := false
+	for _, candidate := range a.thumbnailOrder {
+		if candidate == url {
+			known = true
+			break
+		}
+	}
+	if !known {
+		a.thumbnailOrder = append(a.thumbnailOrder, url)
+	}
+	for len(a.thumbnailOrder) > thumbnailCacheLimit {
+		victimIndex := -1
+		for i, candidate := range a.thumbnailOrder {
+			if !a.thumbnailLoading[candidate] && candidate != url {
+				victimIndex = i
+				break
+			}
+		}
+		if victimIndex < 0 {
+			break
+		}
+		victim := a.thumbnailOrder[victimIndex]
+		a.thumbnailOrder = append(a.thumbnailOrder[:victimIndex], a.thumbnailOrder[victimIndex+1:]...)
+		delete(a.thumbnails, victim)
+		delete(a.thumbnailFailures, victim)
+	}
 }
 
 func (a *App) mediaCard(c *ui.Context) {
@@ -779,7 +908,7 @@ func (a *App) configPanel(c *ui.Context) {
 			if a.hasSubtitles() {
 				a.subtitleControls(c)
 			}
-			ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
+			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, "Prefer VP9 video (MKV)")
 		}
 		a.syncContainerSelection()
 		if estimate := a.estimatedSizeText(); estimate != "" {
@@ -905,7 +1034,6 @@ func (a *App) audioTrackLanguage(track models.AudioTrack) string {
 	return lang
 }
 
-
 func (a *App) hasSubtitles() bool {
 	if a.currentMedia == nil {
 		return false
@@ -948,7 +1076,6 @@ func (a *App) subtitleControls(c *ui.Context) {
 		}
 	})
 }
-
 
 func (a *App) selectionModeBtn(c *ui.Context, key string, selected *string, value, label string) {
 	a.toggleBtn(c, key+"-"+value, label, *selected == value, func() {
@@ -1192,6 +1319,7 @@ func (a *App) estimatedFinalSize() (int64, bool) {
 	if m == nil {
 		return 0, false
 	}
+	settings := a.settingsDraftSnapshot()
 	var total int64
 	approximate := false
 	seenFormats := make(map[string]bool)
@@ -1223,7 +1351,7 @@ func (a *App) estimatedFinalSize() (int64, bool) {
 	if a.mode != models.ModeAudioOnly {
 		video := findFormat(m.Formats, a.selectedVideoFormat)
 		if video == nil {
-			video = bestVideoFormatForRequest(m.Formats, a.maxHeight, a.container, a.settings.PreferVP9Video)
+			video = bestVideoFormatForRequest(m.Formats, a.maxHeight, a.container, settings.PreferVP9Video)
 		}
 		addFormat(video)
 		if a.mode == models.ModeVideoOnly {
@@ -1255,12 +1383,12 @@ func (a *App) estimatedFinalSize() (int64, bool) {
 					}
 				}
 				if selected == 0 {
-					addFormat(bestAudioFormatForRequest(m.Formats, a.container, a.settings.PreferVP9Video))
+					addFormat(bestAudioFormatForRequest(m.Formats, a.container, settings.PreferVP9Video))
 				}
 			default:
 				format := findFormat(m.Formats, a.selectedAudioFormat)
 				if format == nil {
-					format = bestAudioFormatForRequest(m.Formats, a.container, a.settings.PreferVP9Video)
+					format = bestAudioFormatForRequest(m.Formats, a.container, settings.PreferVP9Video)
 				}
 				addFormat(format)
 			}
@@ -1269,7 +1397,7 @@ func (a *App) estimatedFinalSize() (int64, bool) {
 	if a.mode == models.ModeAudioOnly {
 		format := findFormat(m.Formats, a.selectedAudioFormat)
 		if format == nil {
-			format = bestAudioFormatForRequest(m.Formats, a.container, a.settings.PreferVP9Video)
+			format = bestAudioFormatForRequest(m.Formats, a.container, settings.PreferVP9Video)
 		}
 		addFormat(format)
 	}
@@ -1277,8 +1405,9 @@ func (a *App) estimatedFinalSize() (int64, bool) {
 }
 
 func markFinalSizeApproximate(a *App, approximate bool) bool {
+	settings := a.settingsDraftSnapshot()
 	if a.mode == models.ModeVideoAudio || a.subtitleMode != subtitleModeNone ||
-		a.settings.EmbedMetadata || a.settings.EmbedThumbnail {
+		settings.EmbedMetadata || settings.EmbedThumbnail {
 		return true
 	}
 	return approximate
@@ -1479,13 +1608,15 @@ func formatHeight(format models.FormatInfo) int {
 
 func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) models.DownloadRequest {
 	a.syncContainerSelection()
+	settings := a.settingsDraftSnapshot()
+	a.publishSettingsDraft()
 	expectedSize, expectedSizeApproximate := a.estimatedFinalSize()
 	req := models.DownloadRequest{
-		URL: url, Title: title, Mode: a.mode, OutputDir: a.settings.DownloadDir,
+		URL: url, Title: title, Mode: a.mode, OutputDir: settings.DownloadDir,
 		Container: a.container, MaxHeight: a.maxHeight, AudioFormat: a.audioFormat,
 		AudioBitrateKbps: 0, // 0 = best available (yt-dlp ba* / opus preferred)
-		EmbedThumbnail:   a.settings.EmbedThumbnail, EmbedMetadata: a.settings.EmbedMetadata,
-		PreferVP9: a.settings.PreferVP9Video, ThumbnailURL: thumb,
+		EmbedThumbnail:   settings.EmbedThumbnail, EmbedMetadata: settings.EmbedMetadata,
+		PreferVP9: settings.PreferVP9Video, ThumbnailURL: thumb,
 		ExpectedSizeBytes: expectedSize, ExpectedSizeIsApproximate: expectedSizeApproximate,
 		PlaylistTitle: playlistTitle, PlaylistIndex: index,
 		VideoFormatID: a.selectedVideoFormat, AudioFormatID: a.selectedAudioFormat,
@@ -1825,15 +1956,21 @@ func (a *App) converterPage(c *ui.Context) {
 					}
 				}
 				if strings.TrimSpace(a.convSource) != "" {
-					remux := a.convKind == models.KindVideo && a.ffmpeg.CanRemux(a.convSource, a.convFormat)
-					label, color := "Re-encode", t.Warning
-					if remux {
-						label, color = "Lossless remux", t.Success
+					if a.convKind == models.KindVideo {
+						remux, checking, known := a.remuxDecision(a.convSource, a.convFormat)
+						label, color := "Checking compatibility…", t.TextMuted
+						if known && remux {
+							label, color = "Lossless remux", t.Success
+						} else if known && !remux {
+							label, color = "Re-encode", t.Warning
+						} else if !checking {
+							label, color = "Re-encode", t.Warning
+						}
+						ui.Row(c).Gap(6).Children(func() {
+							ui.Text(c, label).FontSize(12).Bold().TextColor(color)
+							ui.Text(c, "for this source/target").FontSize(12).TextColor(t.TextMuted)
+						})
 					}
-					ui.Row(c).Gap(6).Children(func() {
-						ui.Text(c, label).FontSize(12).Bold().TextColor(color)
-						ui.Text(c, "for this source/target").FontSize(12).TextColor(t.TextMuted)
-					})
 				}
 				if ui.PrimaryButton(c, "Convert").Clicked() {
 					src := strings.TrimSpace(a.convSource)
@@ -1842,10 +1979,18 @@ func (a *App) converterPage(c *ui.Context) {
 						return
 					}
 					mode := models.ConversionReencode
-					if a.convKind == models.KindVideo && a.ffmpeg.CanRemux(src, a.convFormat) {
-						mode = models.ConversionRemux
+					if a.convKind == models.KindVideo {
+						remux, checking, known := a.remuxDecision(src, a.convFormat)
+						if checking || !known {
+							a.showToast("Still checking source compatibility")
+							return
+						}
+						if remux {
+							mode = models.ConversionRemux
+						}
 					}
-					if a.conv.Enqueue(models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, AudioBitrateKbps: a.convAudioBitrateKbps, KeepOriginal: a.settings.KeepOriginals}) == nil {
+					settings := a.settingsDraftSnapshot()
+					if a.conv.Enqueue(models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, AudioBitrateKbps: a.convAudioBitrateKbps, KeepOriginal: settings.KeepOriginals}) == nil {
 						a.showToast("Could not queue conversion: conversion service is shut down")
 					}
 				}
@@ -1888,6 +2033,40 @@ func (a *App) converterPage(c *ui.Context) {
 			})
 		})
 	})
+}
+
+func (a *App) remuxDecision(source, target string) (result, checking, known bool) {
+	source = strings.TrimSpace(source)
+	target = strings.TrimSpace(target)
+	if source == "" || target == "" || a.ffmpeg == nil {
+		return false, false, false
+	}
+	a.remuxMu.Lock()
+	if a.remuxSource == source && a.remuxTarget == target {
+		result, checking, known = a.remuxResult, a.remuxChecking, a.remuxKnown
+		a.remuxMu.Unlock()
+		return result, checking, known
+	}
+	a.remuxSource = source
+	a.remuxTarget = target
+	a.remuxChecking = true
+	a.remuxKnown = false
+	a.remuxMu.Unlock()
+
+	go func() {
+		result := a.ffmpeg.CanRemux(source, target)
+		a.updateOnMain(func() {
+			a.remuxMu.Lock()
+			if a.remuxSource == source && a.remuxTarget == target {
+				a.remuxResult = result
+				a.remuxChecking = false
+				a.remuxKnown = true
+			}
+			a.remuxMu.Unlock()
+			a.invalidate()
+		})
+	}()
+	return false, true, false
 }
 
 func (a *App) historyPage(c *ui.Context) {
@@ -1991,7 +2170,8 @@ func (a *App) historyPage(c *ui.Context) {
 					}
 				}
 				if e.URL != "" && ui.Button(c.Key("hist-redo-"+e.ID), "Download again").Clicked() {
-					if a.manager.Enqueue(models.DownloadRequest{URL: e.URL, Title: e.Title, Mode: historyMode(e.Mode), OutputDir: a.settings.DownloadDir, Container: e.Container, AudioFormat: e.AudioFmt}) == nil {
+					settings := a.settingsDraftSnapshot()
+					if a.manager.Enqueue(models.DownloadRequest{URL: e.URL, Title: e.Title, Mode: historyMode(e.Mode), OutputDir: settings.DownloadDir, Container: e.Container, AudioFormat: e.AudioFmt}) == nil {
 						a.showToast("Could not queue download: download manager is shut down")
 						return
 					}
@@ -2009,8 +2189,6 @@ func (a *App) historyPage(c *ui.Context) {
 		}).Grow(1).Gap(8)
 	})
 }
-
-
 
 func (a *App) exportSettings(settings config.AppSettings) {
 	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.window(), Title: "Export settings", DefaultPath: "video_downloader_settings.json", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
@@ -2062,28 +2240,27 @@ func (a *App) importSettings() {
 		return
 	}
 	a.updateOnMain(func() {
-		a.settings = validated
-		if a.settings.CustomHeaders == nil {
-			a.settings.CustomHeaders = map[string]string{}
+		if validated.CustomHeaders == nil {
+			validated.CustomHeaders = map[string]string{}
 		}
+		a.applySettings(validated)
 		a.settingsHeaders = ""
-		for key, value := range a.settings.CustomHeaders {
+		for key, value := range validated.CustomHeaders {
 			a.settingsHeaders += key + ": " + value + "\n"
 		}
-		a.settingsSubtitleLangs = strings.Join(a.settings.SubtitleLangs, ", ")
-		a.settingsRateLimit = strconv.Itoa(a.settings.RateLimitKbps)
-		if err := a.settingsRepo.Save(a.settings); err != nil {
+		a.settingsSubtitleLangs = strings.Join(validated.SubtitleLangs, ", ")
+		a.settingsRateLimit = strconv.Itoa(validated.RateLimitKbps)
+		if err := a.settingsRepo.Save(validated); err != nil {
 			a.showToast("Could not save imported settings: " + err.Error())
 			return
 		}
 		if a.manager != nil {
-			a.manager.SetMaxWorkers(a.settings.MaxConcurrent)
+			a.manager.SetMaxWorkers(validated.MaxConcurrent)
 		}
 		a.invalidate()
 		a.showToast("Settings imported")
 	})
 }
-
 
 func (a *App) pickConvertFile() {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
@@ -2121,7 +2298,9 @@ func (a *App) pickDownloadDir() {
 		return
 	}
 	a.updateOnMain(func() {
-		a.settings.DownloadDir = paths[0]
+		a.ensureSettingsDraft()
+		a.settingsDraft.DownloadDir = paths[0]
+		a.publishSettingsDraft()
 		a.invalidate()
 	})
 }

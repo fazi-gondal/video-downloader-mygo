@@ -2,6 +2,7 @@ package app
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
@@ -125,4 +126,49 @@ func TestValidateSettingsDraft(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSettingsSnapshotReturnsDefensiveCopies(t *testing.T) {
+	a := &App{}
+	a.setSettings(config.AppSettings{
+		CustomHeaders: map[string]string{"X-Test": "one"},
+		SubtitleLangs: []string{"en"},
+	})
+
+	snapshot := a.settingsSnapshot()
+	snapshot.CustomHeaders["X-Test"] = "changed"
+	snapshot.SubtitleLangs[0] = "changed"
+	snapshot.SubtitleLangs = append(snapshot.SubtitleLangs, "ur")
+
+	got := a.settingsSnapshot()
+	if got.CustomHeaders["X-Test"] != "one" {
+		t.Fatalf("settings snapshot header = %q, want %q", got.CustomHeaders["X-Test"], "one")
+	}
+	if len(got.SubtitleLangs) != 1 || got.SubtitleLangs[0] != "en" {
+		t.Fatalf("settings snapshot languages = %#v, want [en]", got.SubtitleLangs)
+	}
+}
+
+func TestSettingsSnapshotCanBeReadWhileUpdated(t *testing.T) {
+	a := &App{}
+	a.setSettings(config.AppSettings{CustomHeaders: map[string]string{"X-Test": "initial"}})
+
+	const iterations = 64
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			a.setSettings(config.AppSettings{
+				CustomHeaders: map[string]string{"X-Test": "updated"},
+			})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = a.settingsSnapshot()
+		}
+	}()
+	wg.Wait()
 }

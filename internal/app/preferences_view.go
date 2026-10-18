@@ -133,13 +133,14 @@ func validateSettingsDraft(draft refinedSettingsDraft) (config.AppSettings, erro
 }
 
 func (a *App) refinedSettingsPage(c *ui.Context) {
+	a.ensureSettingsDraft()
 	t := c.Theme()
 	page := ui.Scroll(c).Grow(1).Gap(14)
 	maxConcurrent := ui.Local(page, "refined-max-concurrent", func() string {
-		return strconv.Itoa(a.settings.MaxConcurrent)
+		return strconv.Itoa(a.settingsDraft.MaxConcurrent)
 	})
 	concurrentFragments := ui.Local(page, "refined-concurrent-fragments", func() string {
-		return strconv.Itoa(a.settings.ConcurrentFragments)
+		return strconv.Itoa(a.settingsDraft.ConcurrentFragments)
 	})
 
 	page.Children(func() {
@@ -159,7 +160,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 		settingsCard(c, "Download location", "Files are saved here unless a request chooses another folder.", func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, appui.IconFolder).FontSize(16).TextColor(t.TextMuted)
-				ui.TextInput(c, &a.settings.DownloadDir).Grow(1).Placeholder("Download folder")
+				ui.TextInput(c, &a.settingsDraft.DownloadDir).Grow(1).Placeholder("Download folder")
 				if ui.Button(c, "Browse…").Clicked() {
 					go a.pickDownloadDir()
 				}
@@ -172,13 +173,13 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 		})
 
 		settingsCard(c, "Media defaults", "These options are applied to new download requests.", func() {
-			ui.Checkbox(c, &a.settings.EmbedThumbnail, "Embed thumbnail")
-			ui.Checkbox(c, &a.settings.EmbedMetadata, "Embed metadata and chapters")
-			ui.Checkbox(c, &a.settings.MultiAudio, "Download multiple audio tracks when available")
+			ui.Checkbox(c, &a.settingsDraft.EmbedThumbnail, "Embed thumbnail")
+			ui.Checkbox(c, &a.settingsDraft.EmbedMetadata, "Embed metadata and chapters")
+			ui.Checkbox(c, &a.settingsDraft.MultiAudio, "Download multiple audio tracks when available")
 		})
 
 		settingsCard(c, "Subtitles", "Use comma-separated yt-dlp language codes, such as en, ur, or all.", func() {
-			ui.Checkbox(c, &a.settings.WriteSubtitles, "Write subtitles by default")
+			ui.Checkbox(c, &a.settingsDraft.WriteSubtitles, "Write subtitles by default")
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Languages").FontSize(12).TextColor(t.TextMuted).Width(86)
 				ui.TextInput(c, &a.settingsSubtitleLangs).Grow(1).Placeholder("all, en, ur")
@@ -186,8 +187,8 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 		})
 
 		settingsCard(c, "Network", "Optional proxy, browser cookies, and a per-download rate limit.", func() {
-			settingsLabeledInput(c, "Proxy", &a.settings.Proxy, "http://… or socks5://…")
-			settingsLabeledInput(c, "Cookies", &a.settings.CookiesBrowser, "chrome, firefox, edge…")
+			settingsLabeledInput(c, "Proxy", &a.settingsDraft.Proxy, "http://… or socks5://…")
+			settingsLabeledInput(c, "Cookies", &a.settingsDraft.CookiesBrowser, "chrome, firefox, edge…")
 			settingsLabeledInput(c, "Rate limit", &a.settingsRateLimit, "0 = unlimited (Kbps)")
 		})
 
@@ -196,8 +197,8 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 		})
 
 		settingsCard(c, "Conversion", "Defaults used by the local FFmpeg converter.", func() {
-			ui.Checkbox(c, &a.settings.KeepOriginals, "Keep originals after conversion")
-			ui.Checkbox(c, &a.settings.PreferVP9Video, "Prefer VP9 video (MKV)")
+			ui.Checkbox(c, &a.settingsDraft.KeepOriginals, "Keep originals after conversion")
+			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, "Prefer VP9 video (MKV)")
 		})
 
 		settingsCard(c, "Dependencies", "The executable paths currently resolved by the app.", func() {
@@ -207,7 +208,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
 			if ui.Button(c, "Export settings").Clicked() {
-				settings := a.settings
+				settings := a.settingsDraftSnapshot()
 				go a.exportSettings(settings)
 			}
 			if ui.Button(c, "Import settings").Clicked() {
@@ -216,7 +217,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			ui.Spacer(c).Grow(1)
 			if ui.PrimaryButton(c, "Save settings").Clicked() {
 				draft := refinedSettingsDraft{
-					settings:       a.settings,
+					settings:       a.settingsDraftSnapshot(),
 					maxConcurrent:  *maxConcurrent,
 					concurrentFrag: *concurrentFragments,
 					rateLimit:      a.settingsRateLimit,
@@ -236,7 +237,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 					a.showToast("Could not save settings: " + err.Error())
 					return
 				}
-				a.settings = saved
+				a.applySettings(saved)
 				a.settingsRateLimit = strconv.Itoa(saved.RateLimitKbps)
 				a.settingsSubtitleLangs = strings.Join(saved.SubtitleLangs, ", ")
 				if a.manager != nil {
@@ -333,13 +334,14 @@ func (a *App) ytdlpPath() string {
 }
 
 func (a *App) themeChoice(c *ui.Context, mode, label string) {
-	selected := a.settings.ThemeMode == mode
+	a.ensureSettingsDraft()
+	selected := a.settingsDraft.ThemeMode == mode
 	if selected {
 		ui.PrimaryButton(c.Key("theme-"+mode+"-selected"), label)
 		return
 	}
 	if ui.Button(c.Key("theme-"+mode), label).Clicked() {
-		a.settings.ThemeMode = mode
+		a.settingsDraft.ThemeMode = mode
 		a.invalidate()
 	}
 }

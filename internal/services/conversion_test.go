@@ -13,6 +13,12 @@ type blockingConversionRunner struct {
 	started chan struct{}
 }
 
+type immediateConversionRunner struct{}
+
+func (immediateConversionRunner) Convert(context.Context, *models.ConversionJob, func(float64)) (string, error) {
+	return "output", nil
+}
+
 func (r *blockingConversionRunner) Convert(ctx context.Context, _ *models.ConversionJob, _ func(float64)) (string, error) {
 	select {
 	case <-r.started:
@@ -85,4 +91,27 @@ func TestConversionEnqueueContextDoesNotDropOnSaturation(t *testing.T) {
 		t.Fatalf("jobs after rejected enqueue = %d, want %d", got, cap(service.queue)+1)
 	}
 	service.Shutdown()
+}
+
+func TestConversionServiceBoundsFinishedJobRetention(t *testing.T) {
+	service := NewConversionService(&FFmpegService{})
+	service.ffmpeg = immediateConversionRunner{}
+	eventsDone := make(chan struct{})
+	go func() {
+		for range service.Events() {
+		}
+		close(eventsDone)
+	}()
+
+	for i := 0; i < maxRetainedConversionJobs+10; i++ {
+		if _, err := service.EnqueueContext(context.Background(), models.ConversionRequest{Source: "source"}); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+	service.Shutdown()
+	<-eventsDone
+
+	if got := len(service.All()); got > maxRetainedConversionJobs {
+		t.Fatalf("retained conversion jobs = %d, want at most %d", got, maxRetainedConversionJobs)
+	}
 }

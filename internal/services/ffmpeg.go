@@ -127,7 +127,7 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 		<-watchExited
 	}()
 
-	cmd := exec.CommandContext(runCtx, s.ffmpeg, args...)
+	cmd := exec.CommandContext(runCtx, s.ffmpeg, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -245,7 +245,7 @@ func (s *FFmpegService) probeDuration(ctx context.Context, path string) float64 
 	if s.ffprobe == "" {
 		return 0
 	}
-	cmd := exec.CommandContext(ctx, s.ffprobe, "-v", "error", "-show_entries", "format=duration",
+	cmd := exec.CommandContext(ctx, s.ffprobe, "-v", "error", "-show_entries", "format=duration", // #nosec G204 -- ffprobe receives argv directly without a shell.
 		"-of", "default=noprint_wrappers=1:nokey=1", path)
 	out, err := cmd.Output()
 	if err != nil {
@@ -420,7 +420,7 @@ type probeResult struct {
 func (s *FFmpegService) probeCodecs(path string) ([]probedStream, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(
+	cmd := exec.CommandContext( // #nosec G204 -- ffprobe receives argv directly without a shell.
 		ctx,
 		s.ffprobe,
 		"-v", "error",

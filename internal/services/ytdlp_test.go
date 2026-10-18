@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,9 +27,39 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stdout, "PROGRESS|downloading|40|100|NA|20|3.5|1|1")
 		fmt.Fprintln(os.Stdout, "PROGRESS|finished|100|100|NA|NA|NA|1|1")
 		fmt.Fprintln(os.Stderr, strings.Repeat("diagnostic ", 512))
+		writeYtDlpHelperOutput()
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func writeYtDlpHelperOutput() {
+	if os.Getenv("GO_WANT_YTDLP_HELPER_OUTPUT") != "1" {
+		return
+	}
+	var outputTemplate string
+	for i := 0; i+1 < len(os.Args); i++ {
+		if os.Args[i] == "-o" {
+			outputTemplate = os.Args[i+1]
+			break
+		}
+	}
+	if outputTemplate == "" {
+		return
+	}
+	name := "helper-output"
+	if url := os.Args[len(os.Args)-1]; url != "" {
+		name = strings.TrimSuffix(url, "/")
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			name = name[i+1:]
+		}
+		if name == "" {
+			name = "helper-output"
+		}
+	}
+	path := filepath.Join(filepath.Dir(outputTemplate), "helper-"+name+".mp4")
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, []byte(name), 0o644)
 }
 
 func TestYtDlpHelperProcess(t *testing.T) {
@@ -75,6 +107,83 @@ func TestYtDlpDownloadDrainsStdoutAndStderrConcurrently(t *testing.T) {
 	}
 	if path != "" {
 		t.Fatalf("Download() path = %q, want empty fallback for helper", path)
+	}
+}
+
+func TestYtDlpDownloadDoesNotUseUnrelatedOutputFile(t *testing.T) {
+	service := testYtDlpHelperService(t)
+	outputDir := t.TempDir()
+	unrelated := filepath.Join(outputDir, "unrelated.mp4")
+	if err := os.WriteFile(unrelated, []byte("not this download"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: outputDir})
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+
+	path, err := service.Download(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("Download() error = %v", err)
+	}
+	if path != "" {
+		t.Fatalf("Download() path = %q, want no output from this request", path)
+	}
+}
+
+func TestYtDlpDownloadAssociatesConcurrentOutputs(t *testing.T) {
+	service := testYtDlpHelperService(t)
+	outputDir := t.TempDir()
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_OUTPUT", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_OUTPUT")
+
+	tasks := []*models.DownloadTask{
+		models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/one", OutputDir: outputDir}),
+		models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/two", OutputDir: outputDir}),
+	}
+	start := make(chan struct{})
+	paths := make([]string, len(tasks))
+	errs := make([]error, len(tasks))
+	var wg sync.WaitGroup
+	for i, task := range tasks {
+		wg.Add(1)
+		go func(i int, task *models.DownloadTask) {
+			defer wg.Done()
+			<-start
+			paths[i], errs[i] = service.Download(context.Background(), task, nil)
+		}(i, task)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("download %d error = %v", i, err)
+		}
+	}
+	wantPaths := map[string]string{
+		"helper-one.mp4": "one",
+		"helper-two.mp4": "two",
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		name := filepath.Base(path)
+		want, ok := wantPaths[name]
+		if !ok {
+			t.Fatalf("Download() path = %q, want one of the task-specific outputs", path)
+		}
+		if seen[name] {
+			t.Fatalf("Download() associated %q with more than one task", name)
+		}
+		seen[name] = true
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %q: %v", path, err)
+		}
+		if string(contents) != want {
+			t.Fatalf("contents of %q = %q, want %q", path, contents, want)
+		}
 	}
 }
 

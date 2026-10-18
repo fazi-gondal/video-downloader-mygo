@@ -6,7 +6,7 @@ Thank you for contributing to Video Downloader for MyGo. The project is a native
 
 Install:
 
-- Go 1.27.1.
+- Go 1.27.2.
 - Git.
 - FFmpeg and yt-dlp for end-to-end local downloads, or use the bundled-tool helper.
 - Git Bash or another Bash environment for `scripts/fetch-tools.sh`.

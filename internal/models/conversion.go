@@ -80,6 +80,8 @@ func NewConversionJob(req ConversionRequest) *ConversionJob {
 }
 
 func (j *ConversionJob) Cancel() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	select {
 	case <-j.cancelCh:
 	default:

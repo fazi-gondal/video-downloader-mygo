@@ -82,7 +82,7 @@ func settingsPath() (string, error) {
 		return filepath.Join(dir, "settings.json"), fmt.Errorf("create settings directory: %w", err)
 	}
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(dir, 0o700); err != nil {
+		if err := os.Chmod(dir, 0o700); err != nil { // #nosec G302 -- settings directories intentionally use owner-only permissions.
 			return filepath.Join(dir, "settings.json"), fmt.Errorf("secure settings directory: %w", err)
 		}
 	}
@@ -142,7 +142,7 @@ func (r *SettingsRepository) Save(s AppSettings) error {
 		return fmt.Errorf("create settings directory: %w", err)
 	}
 	if runtime.GOOS != "windows" {
-		_ = os.Chmod(filepath.Dir(r.path), 0o700)
+		_ = os.Chmod(filepath.Dir(r.path), 0o700) // #nosec G302 -- settings directories intentionally use owner-only permissions.
 	}
 	return atomicWriteSettingsFile(r.path, data)
 }

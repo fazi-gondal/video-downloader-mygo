@@ -4,7 +4,7 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 
 ## Prerequisites
 
-- Go 1.27.1, as declared in `go.mod`.
+- Go 1.27.2, as declared in `go.mod`.
 - Git.
 - MyGo v0.5.5 through the pinned Go tool in `go.mod`.
 - FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
