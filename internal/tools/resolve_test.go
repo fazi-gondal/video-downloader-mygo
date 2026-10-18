@@ -52,3 +52,4 @@ func TestLookInPrefersFlattenedPackagedResource(t *testing.T) {
 		t.Fatalf("lookIn(%q, %q) = %q, want flattened path %q", root, "ffprobe", got, flat)
 	}
 }
+

@@ -100,6 +100,16 @@ Tool names are:
 | `ffmpeg` | Stream merging, MKV remuxing, subtitle embedding, thumbnail/metadata post-processing, and conversion. |
 | `ffprobe` | Media probing and duration information used by conversion. |
 
+## ARY Plus support
+
+The application includes native Go support for ARY Plus (`aryplus.tv`) episode URLs
+and series playlists, including the YouTube and Dailymotion platform redirects.
+Episode metadata, series episodes, and direct HLS stream sources are resolved
+directly via Go HTTP client requests using the standard client API key, with
+optional overrides via `ARYPLUS_API_KEY` and `ARYPLUS_API_BASE`. Direct HLS
+streams are downloaded and merged by the bundled tools without requiring any
+external plugins.
+
 On Windows, `.exe` is added automatically. On Unix-like systems, downloaded files are marked executable by the helper script.
 
 ## Conversion support

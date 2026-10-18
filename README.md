@@ -33,6 +33,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 
 - Native MyGo desktop UI with the operating system title bar.
 - URL analysis for individual videos and playlists through yt-dlp.
+- ARY Plus episode and series downloads through the bundled yt-dlp plugin.
 - Video thumbnail loading with bounded, validated image decoding.
 - Human-readable media title, uploader, duration, extractor, audio-track, and subtitle information.
 - Playlist selection with select-all, select-none, persistent per-entry checkboxes, and batch progress.
@@ -265,6 +266,11 @@ Runtime lookup order is:
 3. Development `resources/<os>-<arch>/bin/<tool>`.
 4. A matching executable on `PATH`.
 
+The bundled ARY Plus extractor supports aryplus.tv episode URLs and series
+playlists, multi-quality HLS streams up to 4K, thumbnails, and DRM checks.
+Optionally, set `ARYPLUS_API_KEY` or `ARYPLUS_API_BASE` in the environment
+to override the default client API configuration.
+
 ## Using the application
 
 ### 1. Analyze a URL
@@ -419,7 +425,7 @@ The CI job uses the Go version from `go.mod`, does not modify dependencies, and 
 3. Create a matching tag, for example:
 
 ```bash
-git tag v2.1.0
+git tag v2.2.0
 ```
 
 The workflow checks that the tag matches `mygo.json`, downloads platform tools, uses the pinned MyGo CLI, builds Windows and Linux from Ubuntu, builds macOS from macOS, and uploads the generated artifacts to a draft GitHub release.

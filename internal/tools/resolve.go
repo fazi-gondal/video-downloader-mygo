@@ -21,8 +21,32 @@ var (
 func ResourcesDir() string {
 	once.Do(func() {
 		if d, err := mygo.App.Path(mygo.PathResources); err == nil && d != "" {
-			resDir = d
-			return
+			if st, err := os.Stat(d); err == nil && st.IsDir() {
+				resDir = d
+				return
+			}
+		}
+		if exe, err := os.Executable(); err == nil {
+			candidate := filepath.Join(filepath.Dir(exe), "resources")
+			if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+				resDir = candidate
+				return
+			}
+		}
+		if wd, err := os.Getwd(); err == nil {
+			dir := wd
+			for {
+				candidate := filepath.Join(dir, "resources")
+				if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+					resDir = candidate
+					return
+				}
+				parent := filepath.Dir(dir)
+				if parent == dir {
+					break
+				}
+				dir = parent
+			}
 		}
 		if exe, err := os.Executable(); err == nil {
 			resDir = filepath.Join(filepath.Dir(exe), "resources")
@@ -88,3 +112,4 @@ func YtDlp() string {
 	}
 	return Resolve("youtube-dl")
 }
+

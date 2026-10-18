@@ -81,7 +81,11 @@ func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtD
 	if ffmpegPath == "" {
 		ffmpegPath = tools.FFmpeg()
 	}
-	return &YtDlpService{ffmpegPath: ffmpegPath, ytdlpPath: yt, settings: settings}
+	return &YtDlpService{
+		ffmpegPath: ffmpegPath,
+		ytdlpPath:  yt,
+		settings:   settings,
+	}
 }
 
 func (s *YtDlpService) Bin() string { return s.ytdlpPath }
@@ -91,6 +95,9 @@ func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
 	url = strings.TrimSpace(url)
 	if url == "" {
 		return nil, fmt.Errorf("empty URL")
+	}
+	if IsAryPlusURL(url) {
+		return s.analyzeAryPlus(ctx, url)
 	}
 	args := s.baseArgs()
 	args = append(args,
@@ -116,6 +123,10 @@ func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
 
 // FetchFormats does a full extraction of a single video (formats + tracks).
 func (s *YtDlpService) FetchFormats(ctx context.Context, url string) (*models.MediaInfo, error) {
+	url = strings.TrimSpace(url)
+	if IsAryPlusURL(url) {
+		return s.fetchFormatsAryPlus(ctx, url)
+	}
 	args := s.fetchFormatsArgs(url)
 	out, err := s.run(ctx, args)
 	if err != nil {
@@ -126,6 +137,46 @@ func (s *YtDlpService) FetchFormats(ctx context.Context, url string) (*models.Me
 		return nil, err
 	}
 	return parseMedia(raw, url), nil
+}
+
+func (s *YtDlpService) analyzeAryPlus(ctx context.Context, rawURL string) (any, error) {
+	if IsAryPlusSeriesURL(rawURL) {
+		return FetchAryPlusSeriesPlaylist(ctx, rawURL)
+	}
+	return s.fetchFormatsAryPlus(ctx, rawURL)
+}
+
+func (s *YtDlpService) fetchFormatsAryPlus(ctx context.Context, rawURL string) (*models.MediaInfo, error) {
+	ep, err := ResolveAryPlusEpisode(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if ep.PlatformID == "1" {
+		return s.FetchFormats(ctx, "https://www.youtube.com/watch?v="+ep.VideoID)
+	}
+	if ep.PlatformID == "2" {
+		return s.FetchFormats(ctx, "https://www.dailymotion.com/video/"+ep.VideoID)
+	}
+
+	media, err := s.FetchFormats(ctx, ep.VideoSource)
+	if err != nil {
+		return nil, err
+	}
+	media.ID = ep.VideoID
+	media.Title = ep.Title
+	if ep.Description != "" {
+		media.Description = ep.Description
+	}
+	if ep.Thumbnail != "" {
+		media.Thumbnail = ep.Thumbnail
+	}
+	if ep.Duration > 0 {
+		media.Duration = ep.Duration
+	}
+	media.OriginalURL = rawURL
+	media.WebpageURL = rawURL
+	media.Extractor = "aryplus"
+	return media, nil
 }
 
 func (s *YtDlpService) fetchFormatsArgs(url string) []string {
@@ -146,6 +197,20 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		ctx = context.Background()
 	}
 	req := task.Request
+	if IsAryPlusEpisodeURL(req.URL) {
+		if ep, err := ResolveAryPlusEpisode(ctx, req.URL); err == nil {
+			if ep.PlatformID == "1" {
+				req.URL = "https://www.youtube.com/watch?v=" + ep.VideoID
+			} else if ep.PlatformID == "2" {
+				req.URL = "https://www.dailymotion.com/video/" + ep.VideoID
+			} else if ep.VideoSource != "" {
+				req.URL = ep.VideoSource
+				if req.Title == "" {
+					req.Title = ep.Title
+				}
+			}
+		}
+	}
 	stagingDir, err := newDownloadStagingDir(req.OutputDir)
 	if err != nil {
 		return "", err
@@ -495,6 +560,15 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	if req.PlaylistTitle != "" {
 		outTpl = filepath.Join(req.OutputDir, "%(playlist_title).100B", "%(playlist_index)02d - %(title).150B [%(id)s].%(ext)s")
 	}
+	if req.Title != "" && isDirectStreamURL(req.URL) {
+		cleanTitle := sanitizeFilename(req.Title)
+		if req.PlaylistTitle != "" {
+			cleanPlaylist := sanitizeFilename(req.PlaylistTitle)
+			outTpl = filepath.Join(req.OutputDir, cleanPlaylist, fmt.Sprintf("%02d - %s.%%(ext)s", req.PlaylistIndex, cleanTitle))
+		} else {
+			outTpl = filepath.Join(req.OutputDir, cleanTitle+".%(ext)s")
+		}
+	}
 	args = append(args, "-o", outTpl)
 
 	// Format selection
@@ -753,6 +827,11 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func isDirectStreamURL(rawURL string) bool {
+	lower := strings.ToLower(rawURL)
+	return strings.Contains(lower, ".m3u8") || strings.Contains(lower, ".mpd") || strings.Contains(lower, "aryzap.com")
 }
 
 func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {

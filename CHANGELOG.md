@@ -14,6 +14,7 @@ All notable user-visible changes are recorded here. Release tags use the version
 - Download progress metrics for bytes, approximate totals, speed, and ETA.
 - Per-track approximate size contributions for custom multi-audio selection.
 - Audio conversion bitrate choices from 128 kbps through 320 kbps for lossy formats.
+- Native ARY Plus (aryplus.tv) extractor supporting episode downloads up to 4K, series playlists, thumbnails, durations, and DRM protection detection.
 - Windows/Linux/macOS CI packaging checks and pinned MyGo CLI usage.
 
 ### Changed

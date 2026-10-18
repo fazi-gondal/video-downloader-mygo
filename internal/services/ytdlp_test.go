@@ -13,6 +13,7 @@ import (
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
+	"github.com/fazi-gondal/video-downloader-mygo/internal/tools"
 )
 
 func TestMain(m *testing.M) {
@@ -661,6 +662,7 @@ func TestBaseArgsKeepsTLSCertificateVerificationEnabled(t *testing.T) {
 	}
 }
 
+
 func TestBuildDownloadArgsEmptyCustomSubtitleSelectionDisablesSubtitleOptions(t *testing.T) {
 	req := models.DownloadRequest{
 		Mode:                  models.ModeVideoAudio,
@@ -838,3 +840,56 @@ func hasArgument(args []string, want string) bool {
 	}
 	return false
 }
+
+func TestAryPlusExtraction(t *testing.T) {
+	yt := tools.YtDlp()
+	if yt == "" {
+		t.Skip("yt-dlp binary not found")
+	}
+
+	service := NewYtDlpService("", func() config.AppSettings { return config.AppSettings{} })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	url := "https://aryplus.tv/video/v2/3/6a6e0b1e9bc4b079859bc14b/6a57868b5bf57c474cc00a50"
+	result, err := service.Analyze(ctx, url)
+	if err != nil {
+		t.Fatalf("Analyze ARY Plus URL error: %v", err)
+	}
+
+	media, ok := result.(*models.MediaInfo)
+	if !ok || media == nil {
+		t.Fatalf("expected *models.MediaInfo, got %T", result)
+	}
+	if !strings.Contains(media.Title, "Dar-E-Nijaat") {
+		t.Errorf("expected title to contain 'Dar-E-Nijaat', got %q", media.Title)
+	}
+	if media.Thumbnail == "" {
+		t.Errorf("expected non-empty thumbnail, got %q", media.Thumbnail)
+	}
+
+	formats, err := service.FetchFormats(ctx, url)
+	if err != nil {
+		t.Fatalf("FetchFormats error: %v", err)
+	}
+	if len(formats.Formats) == 0 {
+		t.Fatalf("expected at least one format variant")
+	}
+
+	seriesURL := "https://aryplus.tv/series/6a57868b5bf57c474cc00a50"
+	seriesResult, err := service.Analyze(ctx, seriesURL)
+	if err != nil {
+		t.Fatalf("Analyze series error: %v", err)
+	}
+	playlist, ok := seriesResult.(*models.PlaylistInfo)
+	if !ok || playlist == nil {
+		t.Fatalf("expected *models.PlaylistInfo, got %T", seriesResult)
+	}
+	if len(playlist.Entries) == 0 {
+		t.Fatalf("expected playlist entries, got none")
+	}
+	if !strings.Contains(playlist.Entries[0].Title, "Dar-E-Nijaat") {
+		t.Errorf("expected entry title to contain 'Dar-E-Nijaat', got %q", playlist.Entries[0].Title)
+	}
+}
+

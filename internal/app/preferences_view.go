@@ -258,7 +258,7 @@ func (a *App) refinedAboutPage(c *ui.Context) {
 			})
 			ui.Text(c, "Video Downloader").FontSize(24).Bold()
 			ui.Text(c, "MyGo native desktop app").FontSize(13).TextColor(t.TextMuted)
-			ui.Text(c, "v2.1.0").FontSize(12).TextColor(t.Accent)
+			ui.Text(c, "v2.2.0").FontSize(12).TextColor(t.Accent)
 			ui.Text(c, "Rewritten from the Flet + Python original by Fazi Gondal.").FontSize(13).TextColor(t.TextMuted).MaxWidth(480)
 
 			ui.Row(c).Gap(8).Wrap().Justify(ui.Center).Children(func() {

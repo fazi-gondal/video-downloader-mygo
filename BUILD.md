@@ -10,6 +10,8 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 - FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
 - A supported yt-dlp JavaScript runtime such as Deno on `PATH` for extractor
   workflows that require one; it is not bundled by the current release.
+- Optional `ARYPLUS_API_KEY` to override the default client key when downloading
+  from ARY Plus through the native extractor.
 - Bash, curl, unzip, and tar/xz when using `scripts/fetch-tools.sh`.
 - On Windows, Git Bash or WSL is required to run the Bash helper script. The Go application itself runs natively from PowerShell or Command Prompt.
 
@@ -80,6 +82,11 @@ matches; update the release name and checksum together when intentionally
 upgrading it. Do not commit the downloaded files: `resources/*/bin/*` is
 ignored because FFmpeg binaries are large.
 
+The shared `resources/yt-dlp-plugins` directory is packaged with the
+application and loaded by yt-dlp through `--plugin-dirs`. Each child is a
+standard yt-dlp plugin package; this is how the ARY Plus extractor is available
+in local and packaged runs.
+
 ## Local production builds
 
 Build the default target:
@@ -122,11 +129,11 @@ The platform directories are flattened/selected by MyGo during packaging. During
 
 - Application name: `Video Downloader`.
 - Identifier: `com.fazigondal.videodownloader`.
-- Version: `2.1.0`.
+- Version: `2.2.0`.
 - Output directory: `build`.
 - Linux maintainer metadata.
 
-When publishing a release, the Git tag must match the version: `mygo.json` version `2.1.0` requires tag `v2.1.0`.
+When publishing a release, the Git tag must match the version: `mygo.json` version `2.2.0` requires tag `v2.2.0`.
 
 ## Signing
 
