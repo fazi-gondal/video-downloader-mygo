@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -564,7 +565,7 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		cleanTitle := sanitizeFilename(req.Title)
 		if req.PlaylistTitle != "" {
 			cleanPlaylist := sanitizeFilename(req.PlaylistTitle)
-			outTpl = filepath.Join(req.OutputDir, cleanPlaylist, fmt.Sprintf("%02d - %s.%%(ext)s", req.PlaylistIndex, cleanTitle))
+			outTpl = filepath.Join(req.OutputDir, cleanPlaylist, cleanTitle+".%(ext)s")
 		} else {
 			outTpl = filepath.Join(req.OutputDir, cleanTitle+".%(ext)s")
 		}
@@ -713,15 +714,29 @@ func videoAudioSelector(req models.DownloadRequest) string {
 	// silently replaced by the MP4 fallback expression.
 	if req.VideoFormatID != "" || req.AudioFormatID != "" {
 		a := bestAudioSelector(req)
+		if req.VideoFormatID != "" {
+			return video + "+" + a + "/" + video + "/b"
+		}
 		return video + "+" + a + "/b"
 	}
 
 	// mp4 container: prefer H.264 + AAC (reliable merge into .mp4).
 	// Otherwise allow any best video + best audio, with a progressive fallback.
 	a := bestAudioSelector(req)
+	filters := videoFilters(req)
 	if req.Container == "mp4" && !req.PreferVP9 {
-		filters := videoFilters(req)
-		return "bv*[ext=mp4]" + filters + "+ba[ext=m4a]/bv*" + filters + "+ba/b" + filters
+		if filters != "" {
+			return "bv*[ext=mp4]" + filters + "+ba[ext=m4a]/bv*" + filters + "+ba/b" + filters + "/b"
+		}
+		return "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b"
+	}
+
+	if filters != "" {
+		bFallback := "b" + filters + "/b"
+		if a == "ba/b" {
+			return video + "+ba/" + video + "/" + bFallback
+		}
+		return video + "+" + a + "/" + video + "/" + bFallback
 	}
 
 	if a == "ba/b" {
@@ -1068,11 +1083,13 @@ func parseProgressInt64(value string) int64 {
 	if isUnavailableProgressValue(value) {
 		return 0
 	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || parsed < 0 {
-		return 0
+	if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed >= 0 {
+		return parsed
 	}
-	return parsed
+	if parsedFloat, err := strconv.ParseFloat(value, 64); err == nil && parsedFloat >= 0 {
+		return int64(math.Round(parsedFloat))
+	}
+	return 0
 }
 
 func parseProgressInt(value string) int {

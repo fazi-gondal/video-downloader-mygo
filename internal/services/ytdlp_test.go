@@ -237,6 +237,22 @@ func TestParseProgressLine(t *testing.T) {
 			},
 			ok: true,
 		},
+		{
+			name: "hls decimal estimate and float speed",
+			line: "PROGRESS|downloading|15624624|NA|72900628.8|4223233.75|14.71|49|228",
+			want: models.ProgressInfo{
+				Status:          "downloading",
+				DownloadedBytes: 15624624,
+				TotalBytes:      72900629,
+				TotalIsEstimate: true,
+				SpeedBps:        4223233.75,
+				ETA:             14710 * time.Millisecond,
+				FragmentIndex:   49,
+				FragmentCount:   228,
+				Percent:         float64(15624624) / 72900629 * 100,
+			},
+			ok: true,
+		},
 		{name: "unmarked output", line: "download:10|100|100|NA|NA|0|1", ok: false},
 	}
 	for _, tt := range tests {
@@ -892,4 +908,43 @@ func TestAryPlusExtraction(t *testing.T) {
 		t.Errorf("expected entry title to contain 'Dar-E-Nijaat', got %q", playlist.Entries[0].Title)
 	}
 }
+
+func TestVideoAudioSelectorMuxedFallbacks(t *testing.T) {
+	// When explicit format ID is chosen (e.g. 860 for 720p on ARY Plus HLS):
+	reqExplicit := models.DownloadRequest{
+		VideoFormatID: "860",
+		Mode:          models.ModeVideoAudio,
+	}
+	gotExplicit := videoAudioSelector(reqExplicit)
+	wantExplicit := "860+ba/b/860/b"
+	if gotExplicit != wantExplicit {
+		t.Errorf("videoAudioSelector(explicit) = %q, want %q", gotExplicit, wantExplicit)
+	}
+
+	// When resolution cap is chosen (e.g. 720p with default VP9 preference):
+	reqHeight := models.DownloadRequest{
+		MaxHeight: 720,
+		PreferVP9: true,
+		Mode:      models.ModeVideoAudio,
+	}
+	gotHeight := videoAudioSelector(reqHeight)
+	wantHeight := "bv*[height<=?720]+ba/bv*[height<=?720]/b[height<=?720]/b"
+	if gotHeight != wantHeight {
+		t.Errorf("videoAudioSelector(height) = %q, want %q", gotHeight, wantHeight)
+	}
+
+	// When MP4 container is chosen with height cap:
+	reqMP4 := models.DownloadRequest{
+		MaxHeight: 480,
+		Container: "mp4",
+		PreferVP9: false,
+		Mode:      models.ModeVideoAudio,
+	}
+	gotMP4 := videoAudioSelector(reqMP4)
+	wantMP4 := "bv*[ext=mp4][height<=?480]+ba[ext=m4a]/bv*[height<=?480]+ba/b[height<=?480]/b"
+	if gotMP4 != wantMP4 {
+		t.Errorf("videoAudioSelector(mp4 height) = %q, want %q", gotMP4, wantMP4)
+	}
+}
+
 
