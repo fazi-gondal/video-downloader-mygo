@@ -4,6 +4,17 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-10-19
+
+### Changed
+
+- Direct stream playlist downloads (such as ARY Plus series episodes) now name files directly with the media title rather than prepending the playlist track index (e.g. `Dar-E-Nijaat - Episode 21.mp4`).
+
+### Fixed
+
+- Quality selection for pre-muxed HLS streams (ARY Plus) now accurately respects resolution caps (480p, 720p, 1080p, etc.) and explicit format IDs instead of falling back to 4K.
+- Progress parsing now properly handles decimal values in estimated total sizes and speed/ETA emitted by yt-dlp, enabling accurate live percentage, video size, speed, and time remaining in the UI.
+
 ## [2.2.0] - 2026-10-18
 
 ### Added
