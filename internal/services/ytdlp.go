@@ -901,11 +901,15 @@ func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
 			m.Formats = append(m.Formats, fi)
 			if fi.IsAudio && !fi.IsVideo {
 				track := models.AudioTrack{
-					ID:       fi.ID,
-					Language: fi.Language,
-					Codec:    fi.ACodec,
-					Bitrate:  fi.ABR,
-					Note:     fi.Note,
+					ID:         fi.ID,
+					Language:   fi.Language,
+					Codec:      fi.ACodec,
+					Bitrate:    fi.ABR,
+					Note:       fi.Note,
+					IsOriginal: fi.IsOriginal,
+				}
+				if !track.IsOriginal && track.IsOriginalTrack() {
+					track.IsOriginal = true
 				}
 				if track.Bitrate <= 0 {
 					track.Bitrate = fi.TBR
@@ -934,6 +938,9 @@ func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
 }
 
 func preferAudioTrack(candidate, current models.AudioTrack) bool {
+	if candidate.IsOriginalTrack() != current.IsOriginalTrack() {
+		return candidate.IsOriginalTrack()
+	}
 	candidateOpus := strings.Contains(strings.ToLower(candidate.Codec), "opus")
 	currentOpus := strings.Contains(strings.ToLower(current.Codec), "opus")
 	if candidateOpus != currentOpus {
@@ -955,6 +962,9 @@ func parseFormat(fm map[string]any) models.FormatInfo {
 	fi.Note, _ = fm["format_note"].(string)
 	fi.Protocol, _ = fm["protocol"].(string)
 	fi.Language, _ = fm["language"].(string)
+	if orig, ok := fm["is_original"].(bool); ok && orig {
+		fi.IsOriginal = true
+	}
 	if v, ok := fm["fps"].(float64); ok {
 		fi.FPS = v
 	}

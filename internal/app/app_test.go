@@ -442,3 +442,87 @@ func TestHighQualityOpusAudioTracks(t *testing.T) {
 	}
 }
 
+func TestSortSelectedAudioTrackIDsOriginalFirst(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			AudioTracks: []models.AudioTrack{
+				{ID: "track-ar", Language: "ar", Note: "Arabic - dubbed"},
+				{ID: "track-es", Language: "es", Note: "Spanish - dubbed"},
+				{ID: "track-de", Language: "de", Note: "German - dubbed"},
+				{ID: "track-orig", Language: "en", Note: "English - original (original)", IsOriginal: true},
+			},
+		},
+	}
+
+	// 1. When original is selected along with others, original is main (first) and others are A-Z
+	selected := []string{"track-es", "track-orig", "track-de", "track-ar"}
+	got := a.sortSelectedAudioTrackIDs(selected)
+	// Display names: Arabic ("track-ar"), German ("track-de"), Spanish ("track-es")
+	want := []string{"track-orig", "track-ar", "track-de", "track-es"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sortSelectedAudioTrackIDs() with original = %#v, want %#v", got, want)
+	}
+
+	// 2. When original is NOT selected, use A to Z format by language display name
+	selectedNoOrig := []string{"track-es", "track-de", "track-ar"}
+	gotNoOrig := a.sortSelectedAudioTrackIDs(selectedNoOrig)
+	wantNoOrig := []string{"track-ar", "track-de", "track-es"}
+	if !reflect.DeepEqual(gotNoOrig, wantNoOrig) {
+		t.Fatalf("sortSelectedAudioTrackIDs() without original = %#v, want %#v", gotNoOrig, wantNoOrig)
+	}
+}
+
+func TestSortSelectedSubtitleLangsEnglishFirst(t *testing.T) {
+	// 1. When English is selected along with others, English is main (first) and others are A-Z
+	selected := []string{"es", "en", "de", "ar"}
+	got := sortSelectedSubtitleLangs(selected)
+	// Display names: Arabic ("ar"), German ("de"), Spanish ("es")
+	want := []string{"en", "ar", "de", "es"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sortSelectedSubtitleLangs() with English = %#v, want %#v", got, want)
+	}
+
+	// 2. When English is NOT selected, use A to Z format by language display name
+	selectedNoEn := []string{"es", "de", "ar"}
+	gotNoEn := sortSelectedSubtitleLangs(selectedNoEn)
+	wantNoEn := []string{"ar", "de", "es"}
+	if !reflect.DeepEqual(gotNoEn, wantNoEn) {
+		t.Fatalf("sortSelectedSubtitleLangs() without English = %#v, want %#v", gotNoEn, wantNoEn)
+	}
+}
+
+func TestAudioTrackLanguageFormattingOriginal(t *testing.T) {
+	a := &App{}
+	origTrack := models.AudioTrack{
+		ID:       "251",
+		Language: "en",
+		Codec:    "opus",
+		Bitrate:  128,
+		Note:     "original",
+	}
+
+	lang := a.audioTrackLanguage(origTrack)
+	if lang != "English (Original)" {
+		t.Fatalf("audioTrackLanguage() = %q, want %q", lang, "English (Original)")
+	}
+}
+
+func TestHighQualityOpusAudioTracksPrioritizesOriginal(t *testing.T) {
+	tracks := []models.AudioTrack{
+		{ID: "251-ar", Language: "ar", Codec: "opus", Bitrate: 128},
+		{ID: "251-de", Language: "de", Codec: "opus", Bitrate: 128},
+		{ID: "251-en", Language: "en", Codec: "opus", Bitrate: 128, IsOriginal: true},
+	}
+
+	best := highQualityOpusAudioTracks(tracks)
+	if len(best) != 3 {
+		t.Fatalf("len(best) = %d, want 3", len(best))
+	}
+	if best[0].ID != "251-en" {
+		t.Fatalf("best[0].ID = %q, want original track 251-en first", best[0].ID)
+	}
+	if best[1].ID != "251-ar" || best[2].ID != "251-de" {
+		t.Fatalf("remaining tracks = [%q, %q], want [251-ar, 251-de]", best[1].ID, best[2].ID)
+	}
+}
+

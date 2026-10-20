@@ -972,6 +972,9 @@ func highQualityOpusAudioTracks(tracks []models.AudioTrack) []models.AudioTrack 
 		if langKey == "" {
 			langKey = tr.ID
 		}
+		if tr.IsOriginalTrack() {
+			langKey += "\x00orig"
+		}
 
 		current, exists := bestByLang[langKey]
 		if !exists {
@@ -1002,6 +1005,11 @@ func highQualityOpusAudioTracks(tracks []models.AudioTrack) []models.AudioTrack 
 	}
 
 	sort.Slice(result, func(i, j int) bool {
+		origI := result[i].IsOriginalTrack()
+		origJ := result[j].IsOriginalTrack()
+		if origI != origJ {
+			return origI
+		}
 		nameI := languageDisplayName(result[i].Language)
 		if nameI == "" {
 			nameI = result[i].Language
@@ -1030,6 +1038,9 @@ func (a *App) audioTrackLanguage(track models.AudioTrack) string {
 		} else {
 			lang = "Audio track " + track.ID
 		}
+	}
+	if track.IsOriginalTrack() && !strings.Contains(strings.ToLower(lang), "original") {
+		lang += " (Original)"
 	}
 	return lang
 }
@@ -1629,12 +1640,13 @@ func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) m
 	case audioTracksAll:
 		req.MultiAudio = true
 	case audioTracksCustom:
+		var selectedIDs []string
 		for id, on := range a.selectedAudio {
 			if on != nil && *on {
-				req.SelectedAudioTrackIDs = append(req.SelectedAudioTrackIDs, id)
+				selectedIDs = append(selectedIDs, id)
 			}
 		}
-		sort.Strings(req.SelectedAudioTrackIDs)
+		req.SelectedAudioTrackIDs = a.sortSelectedAudioTrackIDs(selectedIDs)
 	}
 	switch a.subtitleMode {
 	case subtitleModeAll:
@@ -1642,14 +1654,89 @@ func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) m
 		req.SubtitleLangs = []string{"all"}
 	case subtitleModeCustom:
 		req.WriteSubtitles = true
+		var selectedLangs []string
 		for lang, on := range a.selectedSubtitle {
 			if on != nil && *on {
-				req.SubtitleLangs = append(req.SubtitleLangs, lang)
+				selectedLangs = append(selectedLangs, lang)
 			}
 		}
-		sort.Strings(req.SubtitleLangs)
+		req.SubtitleLangs = sortSelectedSubtitleLangs(selectedLangs)
 	}
 	return req
+}
+
+func (a *App) sortSelectedAudioTrackIDs(selectedIDs []string) []string {
+	if len(selectedIDs) <= 1 {
+		return selectedIDs
+	}
+	var tracks []models.AudioTrack
+	if a.currentMedia != nil {
+		tracks = a.currentMedia.AudioTracks
+	}
+	result := append([]string(nil), selectedIDs...)
+	sort.Slice(result, func(i, j int) bool {
+		trI := findAudioTrack(tracks, result[i])
+		trJ := findAudioTrack(tracks, result[j])
+		origI := trI != nil && trI.IsOriginalTrack()
+		origJ := trJ != nil && trJ.IsOriginalTrack()
+		if origI != origJ {
+			return origI
+		}
+		nameI := ""
+		if trI != nil {
+			nameI = a.audioTrackLanguage(*trI)
+		}
+		if nameI == "" {
+			nameI = result[i]
+		}
+		nameJ := ""
+		if trJ != nil {
+			nameJ = a.audioTrackLanguage(*trJ)
+		}
+		if nameJ == "" {
+			nameJ = result[j]
+		}
+		if strings.ToLower(nameI) != strings.ToLower(nameJ) {
+			return strings.ToLower(nameI) < strings.ToLower(nameJ)
+		}
+		return result[i] < result[j]
+	})
+	return result
+}
+
+func isEnglishSubtitle(lang string) bool {
+	clean := strings.ToLower(strings.TrimSpace(lang))
+	if clean == "en" || clean == "eng" || strings.HasPrefix(clean, "en-") || strings.HasPrefix(clean, "en_") {
+		return true
+	}
+	return strings.EqualFold(languageDisplayName(clean), "English")
+}
+
+func sortSelectedSubtitleLangs(langs []string) []string {
+	if len(langs) <= 1 {
+		return langs
+	}
+	result := append([]string(nil), langs...)
+	sort.Slice(result, func(i, j int) bool {
+		enI := isEnglishSubtitle(result[i])
+		enJ := isEnglishSubtitle(result[j])
+		if enI != enJ {
+			return enI
+		}
+		nameI := languageDisplayName(result[i])
+		if nameI == "" {
+			nameI = result[i]
+		}
+		nameJ := languageDisplayName(result[j])
+		if nameJ == "" {
+			nameJ = result[j]
+		}
+		if strings.ToLower(nameI) != strings.ToLower(nameJ) {
+			return strings.ToLower(nameI) < strings.ToLower(nameJ)
+		}
+		return result[i] < result[j]
+	})
+	return result
 }
 
 func (a *App) downloadsPage(c *ui.Context) {
@@ -2472,21 +2559,7 @@ func subtitleLanguages(m *models.MediaInfo) []string {
 	for lang := range seen {
 		langs = append(langs, lang)
 	}
-	sort.Slice(langs, func(i, j int) bool {
-		nameI := languageDisplayName(langs[i])
-		if nameI == "" {
-			nameI = langs[i]
-		}
-		nameJ := languageDisplayName(langs[j])
-		if nameJ == "" {
-			nameJ = langs[j]
-		}
-		if nameI != nameJ {
-			return strings.ToLower(nameI) < strings.ToLower(nameJ)
-		}
-		return langs[i] < langs[j]
-	})
-	return langs
+	return sortSelectedSubtitleLangs(langs)
 }
 
 func maxInt(a, b int) int {

@@ -1,5 +1,7 @@
 package models
 
+import "strings"
+
 // FormatInfo describes one available stream from yt-dlp.
 type FormatInfo struct {
 	ID          string
@@ -22,15 +24,40 @@ type FormatInfo struct {
 	HasAudio    bool
 	Height      int
 	Width       int
+	IsOriginal  bool
 }
 
 // AudioTrack is a selectable audio stream (for multi-audio).
 type AudioTrack struct {
-	ID       string
-	Language string
-	Codec    string
-	Bitrate  float64
-	Note     string
+	ID         string
+	Language   string
+	Codec      string
+	Bitrate    float64
+	Note       string
+	IsOriginal bool
+}
+
+// IsOriginalTrack returns true if the track is marked as the original audio stream.
+func (t AudioTrack) IsOriginalTrack() bool {
+	if t.IsOriginal {
+		return true
+	}
+	note := strings.ToLower(t.Note)
+	if strings.Contains(note, "original") {
+		return true
+	}
+	lang := strings.ToLower(t.Language)
+	if strings.Contains(lang, "orig") {
+		return true
+	}
+	id := strings.ToLower(t.ID)
+	if strings.Contains(id, "orig") {
+		return true
+	}
+	if strings.Contains(note, "default") && !strings.Contains(note, "dubbed") {
+		return true
+	}
+	return false
 }
 
 // SubtitleTrack is a selectable subtitle.
