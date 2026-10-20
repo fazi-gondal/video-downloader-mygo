@@ -227,6 +227,7 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, s.ytdlpPath, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
+	prepareBackgroundCmd(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -854,6 +855,7 @@ func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
 		ctx = context.Background()
 	}
 	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
+	prepareBackgroundCmd(cmd)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	diagnostics := &boundedDiagnosticBuffer{limit: maxYtDlpDiagnosticBytes}

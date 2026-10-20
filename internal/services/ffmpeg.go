@@ -221,10 +221,14 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 }
 
 func (s *FFmpegService) commandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	var cmd *exec.Cmd
 	if s.command != nil {
-		return s.command(ctx, name, args...)
+		cmd = s.command(ctx, name, args...)
+	} else {
+		cmd = exec.CommandContext(ctx, name, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 	}
-	return exec.CommandContext(ctx, name, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
+	prepareBackgroundCmd(cmd)
+	return cmd
 }
 
 func uniqueOutputPath(src, ext string) string {
@@ -259,6 +263,7 @@ func (s *FFmpegService) probeDuration(ctx context.Context, path string) float64 
 	}
 	cmd := exec.CommandContext(ctx, s.ffprobe, "-v", "error", "-show_entries", "format=duration", // #nosec G204 -- ffprobe receives argv directly without a shell.
 		"-of", "default=noprint_wrappers=1:nokey=1", path)
+	prepareBackgroundCmd(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return 0
@@ -440,6 +445,7 @@ func (s *FFmpegService) probeCodecs(path string) ([]probedStream, bool) {
 		"-of", "json",
 		path,
 	)
+	prepareBackgroundCmd(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, false
