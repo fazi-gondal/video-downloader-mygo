@@ -71,7 +71,7 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 
 - None, All, and Custom subtitle modes.
 - Only subtitle languages reported as available for the analyzed media are shown.
-- Creator-provided subtitles are preferred; automatic captions are used as a fallback when no creator subtitles exist.
+- Only creator-provided subtitles are shown and downloaded; YouTube automatic captions are excluded.
 - Human-readable labels such as English, Hindi, German, and Urdu.
 - Custom subtitle languages are sent to yt-dlp using their original codes.
 - Multiple subtitles automatically require MKV.

@@ -33,7 +33,7 @@ func TestSubtitleLanguagesPrefersAvailableCreatorTracks(t *testing.T) {
 	}
 }
 
-func TestSubtitleLanguagesFallsBackToAvailableAutomaticCaptions(t *testing.T) {
+func TestSubtitleLanguagesExcludesAutomaticCaptionsWhenNoCreatorSubtitlesExist(t *testing.T) {
 	media := &models.MediaInfo{
 		AutomaticCaptions: map[string][]models.SubtitleTrack{
 			"en":        {{Lang: "en"}},
@@ -43,9 +43,8 @@ func TestSubtitleLanguagesFallsBackToAvailableAutomaticCaptions(t *testing.T) {
 		},
 	}
 
-	want := []string{"en", "hi"}
-	if got := subtitleLanguages(media); !reflect.DeepEqual(got, want) {
-		t.Fatalf("automatic subtitle languages = %#v, want %#v", got, want)
+	if got := subtitleLanguages(media); len(got) != 0 {
+		t.Fatalf("automatic subtitle languages = %#v, want none", got)
 	}
 }
 

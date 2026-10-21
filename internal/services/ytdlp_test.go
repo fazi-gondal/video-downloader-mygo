@@ -535,6 +535,9 @@ func TestBuildDownloadArgsSubtitleSelectionModes(t *testing.T) {
 			if got := hasArgument(args, "--write-subs"); got != tt.wantWrite {
 				t.Fatalf("write subtitles = %t, want %t", got, tt.wantWrite)
 			}
+			if hasArgument(args, "--write-auto-subs") {
+				t.Fatal("automatic captions must not be requested")
+			}
 			if got := argumentValue(args, "--sub-langs"); got != tt.wantLangs {
 				t.Fatalf("subtitle languages = %q, want %q", got, tt.wantLangs)
 			}
@@ -677,7 +680,6 @@ func TestBaseArgsKeepsTLSCertificateVerificationEnabled(t *testing.T) {
 		t.Fatal("yt-dlp arguments disable TLS certificate verification")
 	}
 }
-
 
 func TestBuildDownloadArgsEmptyCustomSubtitleSelectionDisablesSubtitleOptions(t *testing.T) {
 	req := models.DownloadRequest{
@@ -946,5 +948,3 @@ func TestVideoAudioSelectorMuxedFallbacks(t *testing.T) {
 		t.Errorf("videoAudioSelector(mp4 height) = %q, want %q", gotMP4, wantMP4)
 	}
 }
-
-

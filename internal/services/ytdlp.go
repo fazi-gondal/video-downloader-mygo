@@ -623,7 +623,7 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 			// yt-dlp otherwise keeps the downloaded sidecars when --write-subs
 			// and --embed-subs are used together.
 			args = append(args,
-				"--write-subs", "--write-auto-subs", "--embed-subs",
+				"--write-subs", "--embed-subs",
 				"--convert-subs", "srt",
 				"--compat-options", "no-keep-subs",
 				"--sleep-subtitles", "5",

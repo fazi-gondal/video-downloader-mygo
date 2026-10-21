@@ -2531,10 +2531,8 @@ func subtitleLanguages(m *models.MediaInfo) []string {
 		return nil
 	}
 	// Return codes, not display labels: the codes are used unchanged when the
-	// download request is converted to --sub-langs. Prefer creator-provided
-	// subtitles so the picker does not expand into every auto-translation that
-	// a video service exposes. Fall back to automatic captions only when there
-	// are no creator-provided tracks.
+	// download request is converted to --sub-langs. Only creator-provided
+	// subtitles are eligible; automatic captions are intentionally excluded.
 	seen := make(map[string]bool, len(m.Subtitles))
 	addAvailable := func(source map[string][]models.SubtitleTrack) {
 		for lang, tracks := range source {
@@ -2551,9 +2549,6 @@ func subtitleLanguages(m *models.MediaInfo) []string {
 		}
 	}
 	addAvailable(m.Subtitles)
-	if len(seen) == 0 {
-		addAvailable(m.AutomaticCaptions)
-	}
 	langs := make([]string, 0, len(seen))
 	for lang := range seen {
 		langs = append(langs, lang)
