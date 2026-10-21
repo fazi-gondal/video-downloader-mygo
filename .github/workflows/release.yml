@@ -113,7 +113,7 @@ jobs:
           assets=()
           while IFS= read -r -d '' file; do
             case "$file" in
-              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage|*/install.sh|install.sh)
+              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage)
                 assets+=("$file")
                 ;;
             esac
@@ -126,8 +126,18 @@ jobs:
           fi
 
           printf 'Uploading %s\n' "${assets[@]}"
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          for attempt in 1 2 3; do
+            if gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" --clobber; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "ERROR: failed to upload release assets after 3 attempts" >&2
+              exit 1
+            fi
+            echo "Upload attempt $attempt failed, retrying in 5 seconds..."
+            sleep 5
+          done
 
   publish:
     needs: build
