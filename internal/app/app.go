@@ -394,7 +394,7 @@ func (a *App) View(c *ui.Context) {
 	a.tasksMu.Lock()
 	activeDownloads := 0
 	for _, task := range a.tasks {
-		if !task.State.IsTerminal() {
+		if !task.State.IsTerminal() && task.State != models.StatePaused {
 			activeDownloads++
 		}
 	}
@@ -459,7 +459,7 @@ func (a *App) topBar(c *ui.Context) {
 		a.tasksMu.Lock()
 		n := 0
 		for _, task := range a.tasks {
-			if !task.State.IsTerminal() {
+			if !task.State.IsTerminal() && task.State != models.StatePaused {
 				n++
 			}
 		}
@@ -1758,11 +1758,13 @@ func (a *App) downloadsPage(c *ui.Context) {
 		emptyState(c, appui.IconDownload, "No downloads yet", "Your downloaded videos and audio will appear here.")
 		return
 	}
-	active, queued, finished := 0, 0, 0
+	active, queued, paused, finished := 0, 0, 0, 0
 	for _, task := range tasks {
 		switch task.State {
 		case models.StatePending:
 			queued++
+		case models.StatePaused:
+			paused++
 		case models.StateCompleted, models.StateError, models.StateCancelled:
 			finished++
 		default:
@@ -1773,7 +1775,7 @@ func (a *App) downloadsPage(c *ui.Context) {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
 				ui.Text(c, "Downloads").FontSize(20).Bold()
-				ui.Text(c, fmt.Sprintf("%d active · %d queued · %d finished", active, queued, finished)).FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, fmt.Sprintf("%d active · %d queued · %d paused · %d finished", active, queued, paused, finished)).FontSize(12).TextColor(t.TextMuted)
 			})
 			ui.Spacer(c).Grow(1)
 			if finished > 0 && ui.Button(c, "Clear finished").Clicked() {
@@ -1790,7 +1792,7 @@ func (a *App) downloadsPage(c *ui.Context) {
 						ui.Text(c, task.Request.Title).FontSize(13).Bold().Grow(1).MaxWidth(680)
 						statusPill(c, task.State)
 					})
-					if task.State == models.StatePreparing || task.State == models.StateDownloading || task.State == models.StateProcessing {
+					if task.State == models.StatePreparing || task.State == models.StateDownloading || task.State == models.StateProcessing || task.State == models.StatePaused {
 						pct := float64(-1)
 						if fraction, ok := taskProgressFraction(task.State, task.Progress); ok {
 							pct = fraction
@@ -1808,6 +1810,16 @@ func (a *App) downloadsPage(c *ui.Context) {
 						ui.Text(c, task.ErrorDetail).FontSize(11).TextColor(t.Warning).MaxWidth(720)
 					}
 					ui.Row(c).Gap(6).Children(func() {
+						if task.State == models.StatePreparing || task.State == models.StateDownloading || task.State == models.StateProcessing {
+							if ui.Button(c.Key("pause-"+task.ID), "Pause").Clicked() {
+								a.manager.Pause(task.ID)
+							}
+						}
+						if task.State == models.StatePaused {
+							if ui.Button(c.Key("resume-"+task.ID), "Resume").Clicked() {
+								a.manager.Resume(task.ID)
+							}
+						}
 						if !task.State.IsTerminal() {
 							if ui.Button(c.Key("cancel-"+task.ID), "Cancel").Clicked() {
 								a.manager.Cancel(task.ID)
@@ -1844,6 +1856,8 @@ func stateColor(c *ui.Context, s models.DownloadState) ui.Color {
 	case models.StateProcessing:
 		return appui.ColorTeal
 	case models.StatePreparing:
+		return t.Warning
+	case models.StatePaused:
 		return t.Warning
 	default:
 		return t.TextMuted

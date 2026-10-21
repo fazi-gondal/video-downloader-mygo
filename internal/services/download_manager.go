@@ -32,6 +32,10 @@ type downloadEngine interface {
 	Download(context.Context, *models.DownloadTask, func(models.ProgressInfo)) (string, error)
 }
 
+type partialDownloadCleaner interface {
+	DiscardPartial(*models.DownloadTask)
+}
+
 // DownloadManager owns the bounded worker pool and task map.
 // It never touches UI objects; it only publishes events.
 type DownloadManager struct {
@@ -184,10 +188,78 @@ func (m *DownloadManager) Cancel(id string) {
 		return
 	}
 	task.Cancel()
-	if task.StateValue() == models.StatePending {
+	state := task.StateValue()
+	if state == models.StatePaused {
+		if cleaner, ok := m.engine.(partialDownloadCleaner); ok {
+			cleaner.DiscardPartial(task)
+		}
 		task.SetState(models.StateCancelled)
 		m.emit(EventTaskState, task, nil)
 		m.emit(EventTaskFinished, task, nil)
+	} else if state == models.StatePending {
+		task.SetState(models.StateCancelled)
+		m.emit(EventTaskState, task, nil)
+		m.emit(EventTaskFinished, task, nil)
+	}
+}
+
+// Pause stops an active or queued task while keeping its partial files for a
+// later Resume call.
+func (m *DownloadManager) Pause(id string) {
+	m.mu.Lock()
+	task := m.tasks[id]
+	m.mu.Unlock()
+	if task == nil || task.StateValue().IsTerminal() || task.StateValue() == models.StatePaused {
+		return
+	}
+	task.RequestPause()
+	if task.StateValue() == models.StatePending {
+		task.SetState(models.StatePaused)
+		m.emit(EventTaskState, task, nil)
+	}
+}
+
+func (m *DownloadManager) Resume(id string) *models.DownloadTask {
+	task, _ := m.ResumeContext(context.Background(), id)
+	return task
+}
+
+func (m *DownloadManager) ResumeContext(ctx context.Context, id string) (*models.DownloadTask, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !m.ensureWorkers() {
+		return nil, ErrDownloadManagerClosed
+	}
+
+	m.mu.Lock()
+	task := m.tasks[id]
+	if task == nil {
+		m.mu.Unlock()
+		return nil, errors.New("download task not found")
+	}
+	if task.StateValue() != models.StatePaused {
+		m.mu.Unlock()
+		return nil, errors.New("download task is not paused")
+	}
+	task.ResetForResume()
+	m.mu.Unlock()
+
+	select {
+	case m.queue <- task:
+		m.emit(EventTaskState, task, nil)
+		return task, nil
+	case <-ctx.Done():
+		task.RequestPause()
+		task.SetState(models.StatePaused)
+		return nil, ctx.Err()
+	case <-m.shutdown:
+		task.RequestPause()
+		task.SetState(models.StatePaused)
+		return nil, ErrDownloadManagerClosed
 	}
 }
 
@@ -305,8 +377,14 @@ func (m *DownloadManager) Shutdown() {
 			if task.StateValue().IsTerminal() {
 				continue
 			}
+			state := task.StateValue()
 			task.Cancel()
-			if task.StateValue() == models.StatePending {
+			if state == models.StatePaused {
+				if cleaner, ok := m.engine.(partialDownloadCleaner); ok {
+					cleaner.DiscardPartial(task)
+				}
+			}
+			if state == models.StatePending || state == models.StatePaused {
 				task.SetState(models.StateCancelled)
 				m.emit(EventTaskState, task, nil)
 				m.emit(EventTaskFinished, task, nil)
@@ -351,6 +429,9 @@ func (m *DownloadManager) worker() {
 				continue
 			}
 			if task.Cancelled() {
+				if task.StateValue() == models.StatePaused {
+					continue
+				}
 				if !task.StateValue().IsTerminal() {
 					task.SetState(models.StateCancelled)
 					m.emit(EventTaskState, task, nil)
@@ -451,6 +532,11 @@ func (m *DownloadManager) runTask(task *models.DownloadTask) {
 	})
 
 	if err != nil || task.Cancelled() || m.isStopped() {
+		if task.PauseRequested() && !m.isStopped() {
+			task.SetState(models.StatePaused)
+			m.emit(EventTaskState, task, nil)
+			return
+		}
 		cancelled := task.Cancelled() || errors.Is(err, context.Canceled) || m.isStopped()
 		if cancelled {
 			task.SetState(models.StateCancelled)

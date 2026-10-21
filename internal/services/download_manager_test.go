@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,27 @@ func (e *blockingDownloadEngine) Download(ctx context.Context, _ *models.Downloa
 
 type progressDownloadEngine struct {
 	processing chan bool
+}
+
+type pauseDownloadEngine struct {
+	started chan struct{}
+	runs    atomic.Int32
+}
+
+func (e *pauseDownloadEngine) Download(ctx context.Context, _ *models.DownloadTask, onProgress func(models.ProgressInfo)) (string, error) {
+	run := e.runs.Add(1)
+	select {
+	case <-e.started:
+	default:
+		close(e.started)
+	}
+	onProgress(models.ProgressInfo{Status: "downloading", DownloadedBytes: 50, TotalBytes: 100, Percent: 50})
+	if run > 1 {
+		onProgress(models.ProgressInfo{Status: "finished", DownloadedBytes: 100, TotalBytes: 100, Percent: 100})
+		return "resumed-output.mp4", nil
+	}
+	<-ctx.Done()
+	return "", ctx.Err()
 }
 
 func (e progressDownloadEngine) Download(_ context.Context, task *models.DownloadTask, onProgress func(models.ProgressInfo)) (string, error) {
@@ -171,6 +193,46 @@ func TestDownloadManagerCancelQueuedTaskEmitsFinished(t *testing.T) {
 		case <-deadline:
 			t.Fatal("queued cancellation did not emit a finished event")
 		}
+	}
+	manager.Shutdown()
+}
+
+func TestDownloadManagerPauseAndResume(t *testing.T) {
+	engine := &pauseDownloadEngine{started: make(chan struct{})}
+	manager := NewDownloadManager(&YtDlpService{}, 1)
+	manager.engine = engine
+	task, err := manager.EnqueueContext(context.Background(), models.DownloadRequest{URL: "pause"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-engine.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	manager.Pause(task.ID)
+	deadline := time.Now().Add(time.Second)
+	for task.StateValue() != models.StatePaused && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if task.StateValue() != models.StatePaused {
+		t.Fatalf("state after pause = %q, want paused", task.StateValue())
+	}
+	if task.Snapshot().Progress.Percent != 50 {
+		t.Fatalf("paused progress = %+v, want 50%%", task.Snapshot().Progress)
+	}
+	if _, err := manager.ResumeContext(context.Background(), task.ID); err != nil {
+		t.Fatalf("resume error = %v", err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for task.StateValue() != models.StateCompleted && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if task.StateValue() != models.StateCompleted {
+		t.Fatalf("state after resume = %q, want completed", task.StateValue())
+	}
+	if engine.runs.Load() < 2 {
+		t.Fatalf("engine runs = %d, want at least 2", engine.runs.Load())
 	}
 	manager.Shutdown()
 }

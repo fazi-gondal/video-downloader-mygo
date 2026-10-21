@@ -83,9 +83,9 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 ### Download queue
 
 - Concurrent worker queue with configurable worker count.
-- Cancel, retry, and clear-finished actions.
+- Pause, resume, cancel, retry, and clear-finished actions. Paused yt-dlp partial files are preserved within the session and resumed instead of restarting from zero.
 - Thumbnail cards with video/audio fallback icons.
-- Status pills for preparing, pending, downloading, processing, completed, failed, and cancelled states.
+- Status pills for preparing, pending, downloading, processing, paused, completed, failed, and cancelled states.
 - Determinate progress from downloaded/total bytes or percentage.
 - Downloaded bytes, total bytes, approximate-total marker, speed, and ETA.
 - Unknown values are shown as calculating/unknown instead of being silently hidden.

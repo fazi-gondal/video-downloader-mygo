@@ -18,6 +18,7 @@ const (
 	StateCompleted   DownloadState = "completed"
 	StateError       DownloadState = "error"
 	StateCancelled   DownloadState = "cancelled"
+	StatePaused      DownloadState = "paused"
 )
 
 func (s DownloadState) IsTerminal() bool {
@@ -143,8 +144,10 @@ type DownloadTask struct {
 	StartedAt   *time.Time
 	FinishedAt  *time.Time
 
-	cancelCh chan struct{}
-	mu       sync.Mutex
+	cancelCh       chan struct{}
+	pauseRequested bool
+	stagingDir     string
+	mu             sync.Mutex
 }
 
 // DownloadTaskSnapshot is an immutable view of a task suitable for UI and
@@ -191,6 +194,7 @@ func itoa(n int) string {
 func (t *DownloadTask) Cancel() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.pauseRequested = false
 	select {
 	case <-t.cancelCh:
 	default:
@@ -198,9 +202,34 @@ func (t *DownloadTask) Cancel() {
 	}
 }
 
-func (t *DownloadTask) Cancelled() bool {
+// RequestPause stops the current process while preserving the task as
+// resumable. The manager changes the visible state after the process exits.
+func (t *DownloadTask) RequestPause() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.State.IsTerminal() {
+		return
+	}
+	t.pauseRequested = true
 	select {
 	case <-t.cancelCh:
+	default:
+		close(t.cancelCh)
+	}
+}
+
+func (t *DownloadTask) PauseRequested() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pauseRequested
+}
+
+func (t *DownloadTask) Cancelled() bool {
+	t.mu.Lock()
+	ch := t.cancelCh
+	t.mu.Unlock()
+	select {
+	case <-ch:
 		return true
 	default:
 		return false
@@ -249,8 +278,26 @@ func (t *DownloadTask) SetOutputPath(path string) {
 	t.OutputPath = path
 }
 
+func (t *DownloadTask) SetStagingDir(path string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.stagingDir = path
+}
+
+func (t *DownloadTask) StagingDir() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stagingDir
+}
+
+func (t *DownloadTask) ClearStagingDir() {
+	t.SetStagingDir("")
+}
+
 // Done is closed when Cancel is called; safe for select across packages.
 func (t *DownloadTask) Done() <-chan struct{} {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.cancelCh
 }
 
@@ -259,11 +306,25 @@ func (t *DownloadTask) ResetForRetry() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.cancelCh = make(chan struct{})
+	t.pauseRequested = false
 	t.Error = ""
 	t.ErrorDetail = ""
 	t.Progress = ProgressInfo{}
 	t.OutputPath = ""
 	t.StartedAt = nil
+	t.FinishedAt = nil
+	t.State = StatePending
+}
+
+// ResetForResume requeues a paused task without clearing its progress or
+// staging directory. yt-dlp can then continue its existing .part files.
+func (t *DownloadTask) ResetForResume() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.cancelCh = make(chan struct{})
+	t.pauseRequested = false
+	t.Error = ""
+	t.ErrorDetail = ""
 	t.FinishedAt = nil
 	t.State = StatePending
 }

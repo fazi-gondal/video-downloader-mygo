@@ -212,14 +212,25 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 			}
 		}
 	}
-	stagingDir, err := newDownloadStagingDir(req.OutputDir)
-	if err != nil {
-		return "", err
+	stagingDir := task.StagingDir()
+	var err error
+	if stagingDir == "" {
+		stagingDir, err = newDownloadStagingDir(req.OutputDir)
+		if err != nil {
+			return "", err
+		}
+		task.SetStagingDir(stagingDir)
+	} else if err := os.MkdirAll(stagingDir, 0o750); err != nil {
+		return "", fmt.Errorf("recreate download staging directory: %w", err)
 	}
-	if stagingDir != "" {
-		defer os.RemoveAll(stagingDir)
-		req.OutputDir = stagingDir
-	}
+	cleanupStaging := true
+	defer func() {
+		if cleanupStaging {
+			_ = os.RemoveAll(stagingDir)
+			task.ClearStagingDir()
+		}
+	}()
+	req.OutputDir = stagingDir
 	args := s.downloadArgs(req)
 	settings := s.appSettings()
 	subtitleErrorsIgnored := subtitleDownloadEnabled(req, settings)
@@ -322,6 +333,10 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 	cancel()
 	<-taskWatchExited
 
+	if task.PauseRequested() {
+		cleanupStaging = false
+		return "", context.Canceled
+	}
 	if task.Cancelled() {
 		return "", context.Canceled
 	}
@@ -361,6 +376,18 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		}
 	}
 	return lastPath, nil
+}
+
+// DiscardPartial removes a paused task's staging directory when the user
+// chooses permanent cancellation instead of resuming it.
+func (s *YtDlpService) DiscardPartial(task *models.DownloadTask) {
+	if task == nil {
+		return
+	}
+	if stagingDir := task.StagingDir(); stagingDir != "" {
+		_ = os.RemoveAll(stagingDir)
+		task.ClearStagingDir()
+	}
 }
 
 func newDownloadStagingDir(outputDir string) (string, error) {
@@ -495,6 +522,8 @@ func (s *YtDlpService) downloadArgs(req models.DownloadRequest) []string {
 	// after subtitle embedding/remuxing, so it identifies the final playable
 	// output rather than a temporary media or subtitle sidecar.
 	args = append(args,
+		"--continue",
+		"--part",
 		"--newline",
 		"--progress",
 		// The `download:` prefix selects yt-dlp's progress template type; it is

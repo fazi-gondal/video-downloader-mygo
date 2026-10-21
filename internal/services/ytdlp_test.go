@@ -20,6 +20,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("GO_WANT_YTDLP_HELPER") == "1" {
 		if os.Getenv("GO_WANT_YTDLP_HELPER_BLOCK") == "1" {
 			fmt.Fprintln(os.Stdout, "PROGRESS|downloading|0|100|NA|NA|NA|0|1")
+			writeYtDlpHelperPartial()
 			for {
 				fmt.Fprintln(os.Stderr, strings.Repeat("diagnostic ", 512))
 				time.Sleep(10 * time.Millisecond)
@@ -32,6 +33,21 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func writeYtDlpHelperPartial() {
+	var outputTemplate string
+	for i := 0; i+1 < len(os.Args); i++ {
+		if os.Args[i] == "-o" {
+			outputTemplate = os.Args[i+1]
+			break
+		}
+	}
+	if outputTemplate == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(outputTemplate), 0o755)
+	_ = os.WriteFile(filepath.Join(filepath.Dir(outputTemplate), "partial-video.mp4.part"), []byte("partial"), 0o644)
 }
 
 func writeYtDlpHelperOutput() {
@@ -304,6 +320,72 @@ func TestYtDlpDownloadCancellationReapsProcess(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Download() did not reap cancelled process")
+	}
+}
+
+func TestYtDlpDownloadPausePreservesPartialAndResumeReusesStaging(t *testing.T) {
+	service := testYtDlpHelperService(t)
+	outputDir := t.TempDir()
+	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: outputDir})
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_BLOCK", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_BLOCK")
+
+	done := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		_, err := service.Download(context.Background(), task, func(models.ProgressInfo) {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+		})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("helper process did not start")
+	}
+	deadline := time.Now().Add(time.Second)
+	for task.StagingDir() == "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	stagingDir := task.StagingDir()
+	if stagingDir == "" {
+		t.Fatal("download did not record a staging directory")
+	}
+	task.RequestPause()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("paused Download() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("paused Download() did not stop")
+	}
+	if _, err := os.Stat(stagingDir); err != nil {
+		t.Fatalf("staging directory after pause: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stagingDir, "partial-video.mp4.part")); err != nil {
+		t.Fatalf("partial file after pause: %v", err)
+	}
+
+	task.ResetForResume()
+	_ = os.Unsetenv("GO_WANT_YTDLP_HELPER_BLOCK")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_OUTPUT", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_OUTPUT")
+	path, err := service.Download(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("resumed Download() error = %v", err)
+	}
+	if path == "" {
+		t.Fatal("resumed Download() returned an empty output path")
+	}
+	if _, err := os.Stat(stagingDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging directory after successful resume = %v, want removed", err)
 	}
 }
 
@@ -672,6 +754,13 @@ func TestDownloadArgsProgressTemplateContainsLiteralMarker(t *testing.T) {
 	}
 	if !strings.Contains(template, "%(progress.status)s") {
 		t.Fatalf("progress template = %q, want progress status", template)
+	}
+}
+
+func TestDownloadArgsExplicitlyResumePartialDownloads(t *testing.T) {
+	args := testYtDlpService().downloadArgs(models.DownloadRequest{URL: "https://example.test/video"})
+	if !hasArgument(args, "--continue") || !hasArgument(args, "--part") {
+		t.Fatalf("download args = %#v, want --continue and --part", args)
 	}
 }
 
