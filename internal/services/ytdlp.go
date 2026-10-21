@@ -668,11 +668,11 @@ func videoFormatSelector(req models.DownloadRequest) string {
 		return req.VideoFormatID
 	}
 	filters := videoFilters(req)
-	sel := "bv" + filters
+	sel := preferredVideoSelector(req, "bv", filters)
 	if filters != "" {
 		return sel + "/bv/b" + filters + "/b"
 	}
-	return "bv/b"
+	return sel + "/bv/b"
 }
 
 // bestAudioSelector prefers Opus at the highest available bitrate, then any bestaudio.
@@ -726,10 +726,14 @@ func videoAudioSelector(req models.DownloadRequest) string {
 	a := bestAudioSelector(req)
 	filters := videoFilters(req)
 	if req.Container == "mp4" && !req.PreferVP9 {
-		if filters != "" {
-			return "bv*[ext=mp4]" + filters + "+ba[ext=m4a]/bv*" + filters + "+ba/b" + filters + "/b"
+		mp4Video := "bv*[ext=mp4]"
+		if req.Is360 {
+			mp4Video += "[protocol=m3u8_native]"
 		}
-		return "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b"
+		if filters != "" {
+			return mp4Video + filters + "+ba[ext=m4a]/bv*" + filters + "+ba/b" + filters + "/b"
+		}
+		return mp4Video + "+ba[ext=m4a]/bv*+ba/b"
 	}
 
 	if filters != "" {
@@ -750,7 +754,14 @@ func videoAudioVideoSelector(req models.DownloadRequest) string {
 	if req.VideoFormatID != "" {
 		return req.VideoFormatID
 	}
-	return "bv*" + videoFilters(req)
+	return preferredVideoSelector(req, "bv*", videoFilters(req))
+}
+
+func preferredVideoSelector(req models.DownloadRequest, selector, filters string) string {
+	if req.Is360 {
+		return selector + "[protocol=m3u8_native]" + filters
+	}
+	return selector + filters
 }
 
 func videoFilters(req models.DownloadRequest) string {
@@ -888,6 +899,7 @@ func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
 	m.Thumbnail, _ = raw["thumbnail"].(string)
 	m.WebpageURL, _ = raw["webpage_url"].(string)
 	m.Extractor, _ = raw["extractor"].(string)
+	m.Is360 = is360Video(raw)
 	if d, ok := raw["duration"].(float64); ok {
 		m.Duration = d
 	}
@@ -935,6 +947,31 @@ func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
 	parseSubs(raw["subtitles"], m.Subtitles)
 	parseSubs(raw["automatic_captions"], m.AutomaticCaptions)
 	return m
+}
+
+func is360Video(raw map[string]any) bool {
+	for _, key := range []string{"projection", "stereo_mode"} {
+		value, _ := raw[key].(string)
+		value = strings.ToLower(strings.TrimSpace(value))
+		if strings.Contains(value, "equirectangular") || strings.Contains(value, "spherical") || strings.Contains(value, "mesh") {
+			return true
+		}
+	}
+
+	formats, _ := raw["formats"].([]any)
+	for _, item := range formats {
+		format, _ := item.(map[string]any)
+		note, _ := format["format_note"].(string)
+		if strings.Contains(strings.ToLower(note), "mesh") {
+			return true
+		}
+		streamURL, _ := format["url"].(string)
+		streamURL = strings.ToLower(streamURL)
+		if strings.Contains(streamURL, "vproj=mesh") || strings.Contains(streamURL, "vproj%3dmesh") {
+			return true
+		}
+	}
+	return false
 }
 
 func preferAudioTrack(candidate, current models.AudioTrack) bool {

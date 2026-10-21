@@ -4,27 +4,27 @@ import "strings"
 
 // FormatInfo describes one available stream from yt-dlp.
 type FormatInfo struct {
-	ID          string
-	Ext         string
-	Resolution  string
-	FPS         float64
-	VCodec      string
-	ACodec      string
-	Filesize    int64
+	ID             string
+	Ext            string
+	Resolution     string
+	FPS            float64
+	VCodec         string
+	ACodec         string
+	Filesize       int64
 	FilesizeApprox int64
-	TBR         float64 // total bitrate kbps
-	ABR         float64
-	VBR         float64
-	Language    string
-	LanguagePref int
-	Note        string
-	Protocol    string
-	IsVideo     bool
-	IsAudio     bool
-	HasAudio    bool
-	Height      int
-	Width       int
-	IsOriginal  bool
+	TBR            float64 // total bitrate kbps
+	ABR            float64
+	VBR            float64
+	Language       string
+	LanguagePref   int
+	Note           string
+	Protocol       string
+	IsVideo        bool
+	IsAudio        bool
+	HasAudio       bool
+	Height         int
+	Width          int
+	IsOriginal     bool
 }
 
 // AudioTrack is a selectable audio stream (for multi-audio).
@@ -70,30 +70,31 @@ type SubtitleTrack struct {
 
 // MediaInfo is the result of analyzing a single video URL.
 type MediaInfo struct {
-	ID            string
-	Title         string
-	Description   string
-	Uploader      string
-	Duration      float64 // seconds
-	Thumbnail     string
-	WebpageURL    string
-	Extractor     string
-	Formats       []FormatInfo
-	AudioTracks   []AudioTrack
-	Subtitles     map[string][]SubtitleTrack // lang -> tracks
+	ID                string
+	Title             string
+	Description       string
+	Uploader          string
+	Duration          float64 // seconds
+	Thumbnail         string
+	WebpageURL        string
+	Extractor         string
+	Formats           []FormatInfo
+	AudioTracks       []AudioTrack
+	Subtitles         map[string][]SubtitleTrack // lang -> tracks
 	AutomaticCaptions map[string][]SubtitleTrack
-	IsLive        bool
-	OriginalURL   string
+	Is360             bool // source exposes YouTube's spherical/mesh video formats
+	IsLive            bool
+	OriginalURL       string
 }
 
 // PlaylistEntry is one item inside a playlist.
 type PlaylistEntry struct {
-	ID       string
-	Title    string
-	URL      string
-	Duration float64
+	ID        string
+	Title     string
+	URL       string
+	Duration  float64
 	Thumbnail string
-	Index    int
+	Index     int
 }
 
 // PlaylistInfo is the result of analyzing a playlist/channel URL.

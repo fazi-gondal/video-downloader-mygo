@@ -82,6 +82,7 @@ type DownloadRequest struct {
 	Container string // mp4, mkv, webm …
 	MaxHeight int    // 0 = best
 	MaxFPS    int
+	Is360     bool // prefer an equirectangular stream for spherical video
 
 	// Audio options
 	AudioFormat      string // mp3, m4a, aac, flac, opus, wav

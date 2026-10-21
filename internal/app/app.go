@@ -792,6 +792,12 @@ func (a *App) rebuildFormatOptions() {
 		if !f.IsVideo && !f.IsAudio {
 			continue
 		}
+		if m.Is360 && f.IsVideo && isMeshVideoFormat(f) {
+			// YouTube's progressive "mesh" streams are packed for immersive
+			// playback and can appear as two stacked layers in ordinary players.
+			// Keep the equirectangular HLS streams available instead.
+			continue
+		}
 		parts := []string{f.ID}
 		if f.Resolution != "" {
 			parts = append(parts, f.Resolution)
@@ -846,6 +852,10 @@ func (a *App) rebuildFormatOptions() {
 		a.audioFmtLabels = append(a.audioFmtLabels, r.label)
 		a.audioFmtIDs = append(a.audioFmtIDs, r.id)
 	}
+}
+
+func isMeshVideoFormat(format models.FormatInfo) bool {
+	return strings.Contains(strings.ToLower(format.Note), "mesh")
 }
 
 func (a *App) configPanel(c *ui.Context) {
@@ -1626,7 +1636,7 @@ func (a *App) buildRequest(url, title, thumb, playlistTitle string, index int) m
 		Container: a.container, MaxHeight: a.maxHeight, AudioFormat: a.audioFormat,
 		AudioBitrateKbps: 0, // 0 = best available (yt-dlp ba* / opus preferred)
 		EmbedThumbnail:   settings.EmbedThumbnail, EmbedMetadata: settings.EmbedMetadata,
-		PreferVP9: settings.PreferVP9Video, ThumbnailURL: thumb,
+		PreferVP9: settings.PreferVP9Video, Is360: a.currentMedia != nil && a.currentMedia.Is360, ThumbnailURL: thumb,
 		ExpectedSizeBytes: expectedSize, ExpectedSizeIsApproximate: expectedSizeApproximate,
 		PlaylistTitle: playlistTitle, PlaylistIndex: index,
 		VideoFormatID: a.selectedVideoFormat, AudioFormatID: a.selectedAudioFormat,

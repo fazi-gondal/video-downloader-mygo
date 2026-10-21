@@ -833,6 +833,38 @@ func TestParseMediaKeepsAvailableSubtitleLanguageCodes(t *testing.T) {
 	}
 }
 
+func TestParseMediaDetectsYouTubeMeshVideoAs360(t *testing.T) {
+	raw := map[string]any{
+		"formats": []any{
+			map[string]any{
+				"format_id":   "248",
+				"format_note": "1080s, mesh",
+				"vcodec":      "vp9",
+			},
+		},
+	}
+
+	media := parseMedia(raw, "https://www.youtube.com/watch?v=example")
+	if !media.Is360 {
+		t.Fatal("mesh format was not detected as spherical video")
+	}
+}
+
+func TestVideoSelectorPrefersEquirectangularHLSFor360Video(t *testing.T) {
+	req := models.DownloadRequest{
+		Mode:      models.ModeVideoAudio,
+		Container: "mkv",
+		MaxHeight: 1080,
+		Is360:     true,
+	}
+
+	got := videoAudioSelector(req)
+	want := "bv*[protocol=m3u8_native][height<=?1080]+ba/bv*[protocol=m3u8_native][height<=?1080]/b[height<=?1080]/b"
+	if got != want {
+		t.Fatalf("videoAudioSelector(360) = %q, want %q", got, want)
+	}
+}
+
 func testYtDlpService() *YtDlpService {
 	return &YtDlpService{settings: func() config.AppSettings { return config.AppSettings{} }}
 }

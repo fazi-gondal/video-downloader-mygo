@@ -118,6 +118,43 @@ func TestBuildRequestUsesSettingsVP9Preference(t *testing.T) {
 	}
 }
 
+func TestBuildRequestCarries360VideoFlag(t *testing.T) {
+	a := &App{
+		currentMedia:       &models.MediaInfo{Is360: true},
+		mode:               models.ModeVideoAudio,
+		container:          "mkv",
+		preferredContainer: "mkv",
+		audioTracksMode:    audioTracksNone,
+		subtitleMode:       subtitleModeNone,
+		selectedAudio:      map[string]*bool{},
+		selectedSubtitle:   map[string]*bool{},
+	}
+
+	if req := a.buildRequest("https://www.youtube.com/watch?v=example", "Example", "", "", 0); !req.Is360 {
+		t.Fatal("360 media flag was not copied to the download request")
+	}
+}
+
+func TestRebuildFormatOptionsHidesMeshStreamsFor360Video(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Is360: true,
+			Formats: []models.FormatInfo{
+				{ID: "248", IsVideo: true, Note: "1080s, mesh", Height: 1080, VCodec: "vp9"},
+				{ID: "614", IsVideo: true, Protocol: "m3u8_native", Height: 1080, VCodec: "vp09"},
+			},
+		},
+	}
+
+	a.rebuildFormatOptions()
+	if strings.Contains(strings.Join(a.videoFmtIDs, ","), "248") {
+		t.Fatalf("mesh video format remained available: %#v", a.videoFmtIDs)
+	}
+	if !strings.Contains(strings.Join(a.videoFmtIDs, ","), "614") {
+		t.Fatalf("equirectangular HLS video format was removed: %#v", a.videoFmtIDs)
+	}
+}
+
 func TestContainerSelectionLocksToMKVAndRestoresPreference(t *testing.T) {
 	a := &App{
 		container:          "webm",
