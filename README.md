@@ -57,6 +57,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 ### Multiple audio tracks
 
 - Default, All, and Custom audio-track modes.
+- One best Opus track is kept per language; bitrate/quality variants of the same language are not shown as separate tracks.
 - Human-readable language labels while preserving yt-dlp language/format IDs internally.
 - Individual audio-track labels include an approximate contribution to the final size when metadata permits.
 - Responsive three-column custom picker with a bounded vertical scroll area.

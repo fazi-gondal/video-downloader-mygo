@@ -687,12 +687,8 @@ func (a *App) mediaCard(c *ui.Context) {
 			ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
 		})
 		ui.Column(c).Gap(5).AlignItems(ui.End).Children(func() {
-			if count := len(highQualityOpusAudioTracks(m.AudioTracks)); count > 0 {
-				if count == 1 {
-					ui.Text(c, "1 audio track").FontSize(11).TextColor(t.Accent)
-				} else {
-					ui.Text(c, fmt.Sprintf("%d audio tracks", count)).FontSize(11).TextColor(t.Accent)
-				}
+			if count := len(highQualityOpusAudioTracks(m.AudioTracks)); count > 1 {
+				ui.Text(c, fmt.Sprintf("%d audio tracks", count)).FontSize(11).TextColor(t.Accent)
 			}
 			if subCount := len(subtitleLanguages(m)); subCount > 0 {
 				if subCount == 1 {
@@ -938,7 +934,7 @@ func (a *App) audioTracksControls(c *ui.Context) {
 		return
 	}
 	tracks := highQualityOpusAudioTracks(a.currentMedia.AudioTracks)
-	if len(tracks) == 0 {
+	if len(tracks) <= 1 {
 		return
 	}
 	t := c.Theme()
@@ -974,16 +970,7 @@ func highQualityOpusAudioTracks(tracks []models.AudioTrack) []models.AudioTrack 
 
 	bestByLang := make(map[string]models.AudioTrack)
 	for _, tr := range tracks {
-		langKey := strings.ToLower(strings.TrimSpace(tr.Language))
-		if langKey == "und" || langKey == "unknown" || langKey == "none" {
-			langKey = ""
-		}
-		if langKey == "" {
-			langKey = tr.ID
-		}
-		if tr.IsOriginalTrack() {
-			langKey += "\x00orig"
-		}
+		langKey := audioTrackLanguageKey(tr.Language)
 
 		current, exists := bestByLang[langKey]
 		if !exists {
@@ -1034,6 +1021,18 @@ func highQualityOpusAudioTracks(tracks []models.AudioTrack) []models.AudioTrack 
 	})
 
 	return result
+}
+
+func audioTrackLanguageKey(language string) string {
+	key := strings.ToLower(strings.TrimSpace(language))
+	key = strings.ReplaceAll(key, "_", "-")
+	if index := strings.IndexByte(key, '-'); index > 0 {
+		key = key[:index]
+	}
+	if key == "und" || key == "unknown" || key == "none" {
+		return ""
+	}
+	return key
 }
 
 func (a *App) audioTrackLanguage(track models.AudioTrack) string {

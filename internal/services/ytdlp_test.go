@@ -855,20 +855,24 @@ func TestParseMediaKeepsBestAudioFormatPerLanguage(t *testing.T) {
 		"title": "Example",
 		"formats": []any{
 			map[string]any{
-				"format_id": "140", "acodec": "mp4a.40.2", "vcodec": "none",
+				"format_id": "140", "format_note": "low", "acodec": "mp4a.40.2", "vcodec": "none",
 				"language": "en", "abr": 128.0,
 			},
 			map[string]any{
-				"format_id": "251", "acodec": "opus", "vcodec": "none",
+				"format_id": "251", "format_note": "high", "acodec": "opus", "vcodec": "none",
 				"language": "en", "abr": 160.0,
 			},
 			map[string]any{
-				"format_id": "250", "acodec": "opus", "vcodec": "none",
+				"format_id": "250", "format_note": "medium", "acodec": "opus", "vcodec": "none",
 				"language": "en", "abr": 70.0,
 			},
 			map[string]any{
 				"format_id": "249", "acodec": "opus", "vcodec": "none",
 				"abr": 50.0,
+			},
+			map[string]any{
+				"format_id": "250", "format_note": "medium", "acodec": "opus", "vcodec": "none",
+				"abr": 70.0,
 			},
 		},
 	}
@@ -880,8 +884,8 @@ func TestParseMediaKeepsBestAudioFormatPerLanguage(t *testing.T) {
 	if media.AudioTracks[0].ID != "251" {
 		t.Fatalf("English audio track = %q, want highest-quality Opus format 251", media.AudioTracks[0].ID)
 	}
-	if media.AudioTracks[1].ID != "249" {
-		t.Fatalf("default audio track = %q, want format 249", media.AudioTracks[1].ID)
+	if media.AudioTracks[1].ID != "250" {
+		t.Fatalf("default audio track = %q, want highest-quality format 250", media.AudioTracks[1].ID)
 	}
 }
 

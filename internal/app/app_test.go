@@ -508,6 +508,19 @@ func TestHighQualityOpusAudioTracks(t *testing.T) {
 	}
 }
 
+func TestHighQualityOpusAudioTracksCollapsesQualityVariantsWithoutLanguage(t *testing.T) {
+	tracks := []models.AudioTrack{
+		{ID: "low", Codec: "opus", Bitrate: 50, Note: "low"},
+		{ID: "medium", Codec: "opus", Bitrate: 70, Note: "medium"},
+		{ID: "high", Codec: "opus", Bitrate: 160, Note: "high"},
+	}
+
+	best := highQualityOpusAudioTracks(tracks)
+	if len(best) != 1 || best[0].ID != "high" {
+		t.Fatalf("quality variants = %#v, want only highest-quality track", best)
+	}
+}
+
 func TestSortSelectedAudioTrackIDsOriginalFirst(t *testing.T) {
 	a := &App{
 		currentMedia: &models.MediaInfo{

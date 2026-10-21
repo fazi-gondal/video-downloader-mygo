@@ -964,12 +964,9 @@ func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
 					track.Bitrate = fi.TBR
 				}
 				// A rich extraction returns several technical formats for the
-				// same logical language. Keep the best one in the picker rather
-				// than showing every bitrate/codec variant as a separate track.
-				key := track.Language
-				if note := strings.TrimSpace(track.Note); note != "" {
-					key += "\x00" + note
-				}
+				// same logical language. Keep only the best track per language;
+				// bitrate/quality notes are not separate audio languages.
+				key := audioTrackLanguageKey(track.Language)
 				if previous, exists := audioTrackIndexes[key]; exists {
 					if preferAudioTrack(track, m.AudioTracks[previous]) {
 						m.AudioTracks[previous] = track
@@ -984,6 +981,18 @@ func parseMedia(raw map[string]any, originalURL string) *models.MediaInfo {
 	parseSubs(raw["subtitles"], m.Subtitles)
 	parseSubs(raw["automatic_captions"], m.AutomaticCaptions)
 	return m
+}
+
+func audioTrackLanguageKey(language string) string {
+	key := strings.ToLower(strings.TrimSpace(language))
+	key = strings.ReplaceAll(key, "_", "-")
+	if index := strings.IndexByte(key, '-'); index > 0 {
+		key = key[:index]
+	}
+	if key == "und" || key == "unknown" || key == "none" {
+		return ""
+	}
+	return key
 }
 
 func is360Video(raw map[string]any) bool {
@@ -1012,13 +1021,13 @@ func is360Video(raw map[string]any) bool {
 }
 
 func preferAudioTrack(candidate, current models.AudioTrack) bool {
-	if candidate.IsOriginalTrack() != current.IsOriginalTrack() {
-		return candidate.IsOriginalTrack()
-	}
 	candidateOpus := strings.Contains(strings.ToLower(candidate.Codec), "opus")
 	currentOpus := strings.Contains(strings.ToLower(current.Codec), "opus")
 	if candidateOpus != currentOpus {
 		return candidateOpus
+	}
+	if candidate.IsOriginalTrack() != current.IsOriginalTrack() {
+		return candidate.IsOriginalTrack()
 	}
 	if candidate.Bitrate != current.Bitrate {
 		return candidate.Bitrate > current.Bitrate
