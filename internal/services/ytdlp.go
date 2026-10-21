@@ -548,6 +548,14 @@ func (s *YtDlpService) baseArgs() []string {
 	st := s.appSettings()
 	args := []string{
 		"--prefer-free-formats",
+		// Keep the normal client for broad format coverage, but add the embedded
+		// client fallback and exclude Android VR. This avoids stopping on the
+		// VisionOS cookie/bot check and preserves YouTube's equirectangular HLS
+		// streams for 360-degree videos.
+		"--extractor-args", "youtube:player_client=default,web_embedded,-android_vr",
+		// The embedded client works for the public formats used here without
+		// requiring an external JavaScript runtime on the user's machine.
+		"--no-js-runtimes",
 	}
 	if s.ffmpegPath != "" {
 		args = append(args, "--ffmpeg-location", s.ffmpegPath)

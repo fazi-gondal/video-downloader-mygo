@@ -48,6 +48,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - Explicit video or audio format choices are preserved when yt-dlp builds the final selector; reset to Auto to return to automatic container-aware selection.
 - VP9 preference is managed centrally from Settings and falls back automatically when VP9 is unavailable.
 - YouTube 360° videos prefer equirectangular streams; packed mesh streams are excluded from automatic and manual video choices.
+- YouTube downloads use a public embedded client by default and do not require browser cookies. Browser-cookie import remains optional in Network settings.
 - Combined final-size estimate based on the physical video/audio streams that will be downloaded, their sizes or bitrates, duration, and selected tracks.
 - Approximate estimates are marked with `~`; container overhead, metadata, thumbnails, subtitles, and remuxing can change the final file size.
 - Download folder picker.

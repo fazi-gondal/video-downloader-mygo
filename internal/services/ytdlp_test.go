@@ -389,14 +389,27 @@ func TestYtDlpDownloadPausePreservesPartialAndResumeReusesStaging(t *testing.T) 
 	}
 }
 
-func TestFetchFormatsArgsUsesYTDLPDefaults(t *testing.T) {
+func TestFetchFormatsArgsUsesCookieFreeYouTubeClient(t *testing.T) {
 	args := testYtDlpService().fetchFormatsArgs("https://example.test/video")
 
-	if hasArgument(args, "--extractor-args") {
-		t.Fatal("format extraction unexpectedly overrides yt-dlp extractor clients")
+	if got := argumentValue(args, "--extractor-args"); got != "youtube:player_client=default,web_embedded,-android_vr" {
+		t.Fatalf("YouTube extractor args = %q, want embedded fallback without cookies", got)
+	}
+	if hasArgument(args, "--cookies-from-browser") {
+		t.Fatal("default format extraction unexpectedly requests browser cookies")
+	}
+	if !hasArgument(args, "--no-js-runtimes") {
+		t.Fatal("default format extraction unexpectedly depends on an external JavaScript runtime")
 	}
 	if got := args[len(args)-1]; got != "https://example.test/video" {
 		t.Fatalf("URL = %q, want video URL", got)
+	}
+}
+
+func TestBaseArgsDoesNotRequestCookiesByDefault(t *testing.T) {
+	args := testYtDlpService().baseArgs()
+	if hasArgument(args, "--cookies-from-browser") {
+		t.Fatal("default yt-dlp arguments unexpectedly request browser cookies")
 	}
 }
 
@@ -552,8 +565,8 @@ func TestBuildDownloadArgsAudioSelectionModes(t *testing.T) {
 			if got := hasArgument(args, "--audio-multistreams"); got != tt.wantMultiStreams {
 				t.Fatalf("audio multistreams = %t, want %t", got, tt.wantMultiStreams)
 			}
-			if hasArgument(args, "--extractor-args") {
-				t.Fatal("audio selection unexpectedly overrides yt-dlp extractor clients")
+			if got := argumentValue(args, "--extractor-args"); got != "youtube:player_client=default,web_embedded,-android_vr" {
+				t.Fatalf("YouTube extractor args = %q, want embedded fallback", got)
 			}
 		})
 	}
