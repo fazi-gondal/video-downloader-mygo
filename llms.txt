@@ -2,6 +2,8 @@
 
 Video Downloader for MyGo is a native Go desktop application for downloading and converting media through yt-dlp and FFmpeg. It is a rewrite of https://github.com/fazi-gondal/Video-Downloader.
 
+Current release: `v3.0.0`.
+
 ## Stack
 
 - Go 1.27.2.
@@ -27,6 +29,7 @@ Use `go tool mygo dev` for live development. Use `go tool mygo build -platform w
 - Single-video results show a thumbnail and lead to download configuration.
 - Playlists provide entry selection and batch queueing.
 - Multiple audio tracks and any embedded subtitles force MKV in the UI and request.
+- Audio formats are grouped by language and reduced to one best-quality Opus track per language. The audio selector is hidden when only one language is available.
 - The configuration estimate sums selected physical stream payloads once; muxed fallback audio is not double-counted.
 - Custom multi-audio mode adds only checked tracks and shows approximate per-track contributions when available.
 - Subtitle custom lists contain available languages and retain language codes internally.
@@ -36,6 +39,10 @@ Use `go tool mygo dev` for live development. Use `go tool mygo build -platform w
 - Converter supports drag/drop, native file picking, remux where safe, and FFmpeg re-encoding.
 - Lossy converter audio supports 128/192/256/320 kbps; FLAC and WAV ignore bitrate because they are lossless.
 - History is persisted as JSON and supports search, filters, re-download, deletion, and opening output folders.
+- ARY Plus episode and series URLs are supported through native HLS/API handling, including platform redirects and DRM detection.
+- YouTube 360° media prefers equirectangular streams and excludes packed mesh formats.
+- YouTube downloads do not request browser cookies by default; cookie import is opt-in through Settings.
+- Pause/resume preserves partial downloads during the current app session.
 
 ## Configuration
 
@@ -57,3 +64,4 @@ Bundled helpers are downloaded into `resources/<platform>/bin` by `scripts/fetch
 - `internal/services/history.go`: JSON history persistence.
 - `internal/tools/resolve.go`: bundled/PATH executable resolution.
 - `internal/ui`: theme and embedded SVG icons.
+- `CHANGELOG.md`: user-visible release history.

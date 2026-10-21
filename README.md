@@ -5,6 +5,8 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/fazi-gondal/video-downloader-mygo/ci.yml?branch=main&label=CI)](https://github.com/fazi-gondal/video-downloader-mygo/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/fazi-gondal/video-downloader-mygo.svg)](https://pkg.go.dev/github.com/fazi-gondal/video-downloader-mygo)
 
+**Current release:** `v3.0.0`
+
 Native desktop video downloader built with [Go](https://go.dev/), [MyGo](https://mygo.egoist.dev/), [yt-dlp](https://github.com/yt-dlp/yt-dlp), and [FFmpeg](https://ffmpeg.org/). The application analyzes videos and playlists, lets users choose quality, audio, subtitles, and containers, manages downloads in a queue, converts local media, and stores download history.
 
 This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.com/fazi-gondal/Video-Downloader), the original Flet/Python application by Fazi Gondal.
@@ -58,6 +60,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 
 - Default, All, and Custom audio-track modes.
 - One best Opus track is kept per language; bitrate/quality variants of the same language are not shown as separate tracks.
+- The audio-track selector is shown only when the analyzed media provides multiple languages.
 - Human-readable language labels while preserving yt-dlp language/format IDs internally.
 - Individual audio-track labels include an approximate contribution to the final size when metadata permits.
 - Responsive three-column custom picker with a bounded vertical scroll area.
@@ -424,10 +427,12 @@ The CI job uses the Go version from `go.mod`, does not modify dependencies, and 
 
 1. Update `version` in `mygo.json`.
 2. Run the local tests and builds.
-3. Create a matching tag, for example:
+3. Update `CHANGELOG.md` and review the release checklist in [BUILD.md](BUILD.md).
+4. Create a matching tag, for example:
 
 ```bash
-git tag v2.2.0
+git tag v3.0.0
+git push origin v3.0.0
 ```
 
 The workflow checks that the tag matches `mygo.json`, downloads platform tools, uses the pinned MyGo CLI, builds Windows and Linux from Ubuntu, builds macOS from macOS, and uploads the generated artifacts to a draft GitHub release.
@@ -510,6 +515,7 @@ Check these first:
 ## Project files
 
 - [BUILD.md](BUILD.md): development, packaging, release, signing, and bundled-tool instructions.
+- [CHANGELOG.md](CHANGELOG.md): user-visible release history.
 - [resources/README.md](resources/README.md): resource layout and helper-binary behavior.
 - [.github/workflows/ci.yml](.github/workflows/ci.yml): test and packaging smoke checks.
 - [.github/workflows/release.yml](.github/workflows/release.yml): tagged multi-platform release workflow.

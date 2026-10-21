@@ -1,7 +1,7 @@
 {
   "name": "Video Downloader",
   "identifier": "com.fazigondal.videodownloader",
-  "version": "2.2.1",
+  "version": "3.0.0",
   "copyright": "© 2026 Fazi Gondal",
   "out": "build",
   "linux": {

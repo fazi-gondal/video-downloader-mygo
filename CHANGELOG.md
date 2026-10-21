@@ -4,6 +4,35 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-21
+
+### Added
+
+- Native MyGo desktop screens for Home, Downloads, Converter, History, Settings, and About with refreshed navigation, thumbnails, status pills, empty states, and responsive layouts.
+- ARY Plus episode and series support, including canonical series and share URLs, platform redirects, HLS quality selection, thumbnails, duration metadata, and DRM detection.
+- Pause and resume for active downloads, preserving yt-dlp partial files and staging directories during the current application session.
+- YouTube 360° handling that prefers equirectangular streams and excludes packed mesh formats from automatic and manual video choices.
+- Central VP9 preference in Settings with automatic fallback when VP9 is unavailable.
+- Creator-uploaded subtitle selection with custom language grids, SRT conversion, MKV embedding, and subtitle-only HTTP 429 warnings.
+- Download progress metrics for bytes, approximate totals, speed, ETA, and post-processing state.
+- FFmpeg-backed conversion queue with remux and container-aware re-encode support, including lossy audio bitrate choices from 128 kbps through 320 kbps.
+
+### Changed
+
+- Audio tracks are now grouped by language and reduced to one best-quality Opus track per language; low, medium, and high variants of the same language are no longer shown as separate tracks.
+- The audio-track selector is shown only when analyzed media provides multiple languages.
+- YouTube downloads do not request browser cookies by default; browser-cookie import remains an explicit Network setting.
+- Multiple audio tracks or embedded subtitles automatically require MKV, while format and size estimates account for physical payloads only once.
+- Release packaging uses the pinned MyGo tool and verified platform-specific yt-dlp and FFmpeg resources.
+
+### Fixed
+
+- Prevented duplicate audio choices caused by technical quality or format-note variants.
+- Preserved explicit one-sided video or audio format selections when building yt-dlp selectors.
+- Prevented muxed fallback audio from being counted twice in size estimates.
+- Improved cancellation cleanup, conversion finalization, background task updates, and bounded thumbnail/history retention.
+- Improved validation and defensive copying for settings, download state, and conversion state.
+
 ## [2.2.1] - 2026-10-19
 
 ### Changed

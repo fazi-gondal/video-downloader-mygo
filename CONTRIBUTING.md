@@ -22,11 +22,13 @@ cd video-downloader-mygo
 Run the app with:
 
 ```bash
+go run .
 ```
 
 Use MyGo live development mode when iterating on the native UI:
 
 ```bash
+go tool mygo dev
 ```
 
 Use the existing models, services, and UI primitives before adding a dependency. Do not replace native mygo inputs with a web frontend without an explicit design decision.
@@ -46,7 +48,15 @@ For UI changes, preserve keyboard access, scrolling behavior, native controls, a
 ## Testing checklist
 
 ```bash
+gofmt -w <changed-go-files>
+go test ./... -count=1
+go vet ./...
+go build ./...
+git diff --check
 ```
+
+Run `go mod verify` when dependency files change. Run the MyGo packaging smoke
+builds when changing resources, packaging, or platform-specific behavior.
 
 For packaging/resource changes, also run:
 
@@ -60,6 +70,19 @@ For helper-script changes, run:
 ```bash
 bash -n scripts/fetch-tools.sh
 ```
+
+## Release preparation
+
+The application version is defined in `mygo.json`. For the current release:
+
+- Application metadata version: `3.0.0`.
+- Release tag: `v3.0.0`.
+- About page version: `v3.0.0`.
+- Release notes: `CHANGELOG.md`.
+
+Before creating a release tag, run the verification and packaging checks in
+`BUILD.md`, confirm that downloaded helper binaries and private settings are not
+tracked, and verify that the tag exactly matches `mygo.json`.
 
 Use `go test -race ./...` when a C compiler is available. A missing GCC toolchain is an environment limitation, not a reason to change production builds away from `CGO_ENABLED=0`.
 

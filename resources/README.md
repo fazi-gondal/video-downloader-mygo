@@ -2,6 +2,10 @@
 
 This directory contains shared application assets and optional platform-specific helper executables. MyGo copies the resources that match the target platform into the packaged application.
 
+The application release is currently `v3.0.0`. The application version is defined
+in the repository root `mygo.json`; the helper versions below are independent and
+must be changed only when the bundled toolchain is intentionally upgraded.
+
 ## Directory layout
 
 ```text
@@ -66,6 +70,9 @@ The helper downloads:
 The helper requires `curl`, `unzip`, and `tar`/`xz` for the archive type. On Windows, run it from Git Bash or WSL; do not run this Bash script with Windows PowerShell directly.
 
 ## Version controls
+
+`mygo.json` controls the Video Downloader application version. The variables in
+this section control only the bundled yt-dlp and FFmpeg helper versions.
 
 The script supports:
 
