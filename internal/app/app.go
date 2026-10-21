@@ -908,7 +908,6 @@ func (a *App) configPanel(c *ui.Context) {
 			if a.hasSubtitles() {
 				a.subtitleControls(c)
 			}
-			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, "Prefer VP9 video (MKV)")
 		}
 		a.syncContainerSelection()
 		if estimate := a.estimatedSizeText(); estimate != "" {

@@ -46,7 +46,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - MP4, MKV, and WebM container selection when the selected media allows it.
 - Format explorer with format ID, resolution, frame rate, codec, and size information.
 - Explicit video or audio format choices are preserved when yt-dlp builds the final selector; reset to Auto to return to automatic container-aware selection.
-- VP9 preference option.
+- VP9 preference is managed centrally from Settings and falls back automatically when VP9 is unavailable.
 - Combined final-size estimate based on the physical video/audio streams that will be downloaded, their sizes or bitrates, duration, and selected tracks.
 - Approximate estimates are marked with `~`; container overhead, metadata, thumbnails, subtitles, and remuxing can change the final file size.
 - Download folder picker.
@@ -293,7 +293,6 @@ The configuration page is scrollable. It contains:
 - Container.
 - Audio-track mode.
 - Subtitle mode.
-- VP9 preference.
 - Estimated final size.
 - Advanced format selection when formats have been loaded.
 
@@ -361,7 +360,7 @@ Current settings fields are:
 | `multi_audio` | boolean | Enable all available audio tracks by default. |
 | `embed_thumbnail` | boolean | Embed thumbnail metadata where supported. |
 | `embed_metadata` | boolean | Embed metadata and chapters. |
-| `prefer_vp9_video` | boolean | Prefer VP9 video and MKV-compatible output. |
+| `prefer_vp9_video` | boolean | Prefer VP9 video when available; yt-dlp falls back automatically when it is unavailable. |
 | `theme_mode` | string | `system`, `dark`, or `light`. |
 
 The Settings page is the preferred way to edit this file. It validates numeric ranges, proxy schemes, headers, cookies-browser input, subtitle languages, and theme values before writing.

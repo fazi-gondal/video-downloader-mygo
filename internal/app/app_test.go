@@ -89,6 +89,36 @@ func TestBuildRequestPreservesSubtitleCodesForYTDLP(t *testing.T) {
 	}
 }
 
+func TestBuildRequestUsesSettingsVP9Preference(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{name: "enabled", want: true},
+		{name: "fallback disabled", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &App{
+				settings:           config.AppSettings{PreferVP9Video: tt.want},
+				settingsDraftReady: false,
+				mode:               models.ModeVideoAudio,
+				container:          "mp4",
+				preferredContainer: "mp4",
+				audioTracksMode:    audioTracksNone,
+				subtitleMode:       subtitleModeNone,
+				selectedAudio:      map[string]*bool{},
+				selectedSubtitle:   map[string]*bool{},
+			}
+
+			req := a.buildRequest("https://www.youtube.com/watch?v=example", "Example", "", "", 0)
+			if req.PreferVP9 != tt.want {
+				t.Fatalf("request PreferVP9 = %t, want %t", req.PreferVP9, tt.want)
+			}
+		})
+	}
+}
+
 func TestContainerSelectionLocksToMKVAndRestoresPreference(t *testing.T) {
 	a := &App{
 		container:          "webm",
@@ -525,4 +555,3 @@ func TestHighQualityOpusAudioTracksPrioritizesOriginal(t *testing.T) {
 		t.Fatalf("remaining tracks = [%q, %q], want [251-ar, 251-de]", best[1].ID, best[2].ID)
 	}
 }
-

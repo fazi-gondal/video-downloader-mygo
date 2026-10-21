@@ -176,6 +176,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			ui.Checkbox(c, &a.settingsDraft.EmbedThumbnail, "Embed thumbnail")
 			ui.Checkbox(c, &a.settingsDraft.EmbedMetadata, "Embed metadata and chapters")
 			ui.Checkbox(c, &a.settingsDraft.MultiAudio, "Download multiple audio tracks when available")
+			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, "Prefer VP9 video when available (fallback automatically)")
 		})
 
 		settingsCard(c, "Subtitles", "Use comma-separated yt-dlp language codes, such as en, ur, or all.", func() {
@@ -198,7 +199,6 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 
 		settingsCard(c, "Conversion", "Defaults used by the local FFmpeg converter.", func() {
 			ui.Checkbox(c, &a.settingsDraft.KeepOriginals, "Keep originals after conversion")
-			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, "Prefer VP9 video (MKV)")
 		})
 
 		settingsCard(c, "Dependencies", "The executable paths currently resolved by the app.", func() {
