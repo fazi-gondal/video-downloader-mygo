@@ -105,6 +105,7 @@ type DownloadRequest struct {
 	EmbedThumbnail        bool
 	EmbedMetadata         bool
 	PreferVP9             bool
+	NoCookies             bool // do not attach configured browser cookies to this request
 
 	// Playlist context
 	PlaylistTitle string

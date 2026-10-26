@@ -501,7 +501,11 @@ func (a *App) dashboardPage(c *ui.Context) {
 		if a.currentMedia != nil {
 			a.mediaCard(c)
 			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
-				if ui.PrimaryButton(c, "Continue to download options").Clicked() {
+				if a.isDirectSocialMedia() {
+					if ui.PrimaryButton(c, "Download HD").Clicked() {
+						a.startSocialDownload()
+					}
+				} else if ui.PrimaryButton(c, "Continue to download options").Clicked() {
 					a.page = PageConfig
 				}
 			})
@@ -685,6 +689,9 @@ func (a *App) mediaCard(c *ui.Context) {
 				meta += " · " + m.Extractor
 			}
 			ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
+			if platform := services.SocialPlatform(mediaURL(m)); platform != "" {
+				ui.Text(c, platform+" · best available HD source · cookies not used").FontSize(11).TextColor(t.Accent)
+			}
 		})
 		ui.Column(c).Gap(5).AlignItems(ui.End).Children(func() {
 			if count := len(highQualityOpusAudioTracks(m.AudioTracks)); count > 1 {
@@ -1244,13 +1251,58 @@ func (a *App) startDownload() {
 	if a.currentMedia == nil {
 		return
 	}
-	req := a.buildRequest(a.currentMedia.WebpageURL, a.currentMedia.Title, a.currentMedia.Thumbnail, "", 0)
+	req := a.buildRequest(mediaURL(a.currentMedia), a.currentMedia.Title, a.currentMedia.Thumbnail, "", 0)
 	if task := a.manager.Enqueue(req); task == nil {
 		a.showToast("Could not queue download: download manager is shut down")
 		return
 	}
 	a.page = PageDownloads
 	a.showToast("Queued: " + a.currentMedia.Title)
+}
+
+func (a *App) isDirectSocialMedia() bool {
+	return a.currentMedia != nil && services.IsSocialMediaURL(mediaURL(a.currentMedia))
+}
+
+func (a *App) startSocialDownload() {
+	if !a.isDirectSocialMedia() {
+		return
+	}
+	req := a.buildSocialRequest()
+	if task := a.manager.Enqueue(req); task == nil {
+		a.showToast("Could not queue download: download manager is shut down")
+		return
+	}
+	a.page = PageDownloads
+	a.showToast("Queued HD download: " + req.Title)
+}
+
+func (a *App) buildSocialRequest() models.DownloadRequest {
+	if a.currentMedia == nil {
+		return models.DownloadRequest{}
+	}
+	settings := a.settingsDraftSnapshot()
+	return models.DownloadRequest{
+		URL:            mediaURL(a.currentMedia),
+		Title:          a.currentMedia.Title,
+		Mode:           models.ModeVideoAudio,
+		OutputDir:      settings.DownloadDir,
+		Container:      "mp4",
+		NoCookies:      true,
+		ThumbnailURL:   a.currentMedia.Thumbnail,
+		EmbedThumbnail: false,
+		EmbedMetadata:  false,
+	}
+}
+
+func mediaURL(media *models.MediaInfo) string {
+	if media == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(media.WebpageURL); value != "" {
+		return value
+	}
+	return strings.TrimSpace(media.OriginalURL)
 }
 
 func (a *App) startPlaylistDownloads() {

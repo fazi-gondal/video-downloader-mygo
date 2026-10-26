@@ -413,6 +413,89 @@ func TestBaseArgsDoesNotRequestCookiesByDefault(t *testing.T) {
 	}
 }
 
+func TestSocialPlatformRecognizesSupportedHostsOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "TikTok", url: "https://www.tiktok.com/@creator/video/123", want: "TikTok"},
+		{name: "TikTok short host", url: "https://vm.tiktok.com/ZM123/", want: "TikTok"},
+		{name: "Instagram", url: "https://www.instagram.com/reel/abc/", want: "Instagram"},
+		{name: "X", url: "https://x.com/user/status/123", want: "X"},
+		{name: "Twitter alias", url: "https://mobile.twitter.com/user/status/123", want: "X"},
+		{name: "untrusted suffix", url: "https://notinstagram.com/reel/abc", want: ""},
+		{name: "invalid scheme", url: "file:///tmp/video.mp4", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SocialPlatform(tt.url); got != tt.want {
+				t.Fatalf("SocialPlatform(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSocialDownloadUsesBestVideoAudioWithoutCookies(t *testing.T) {
+	service := &YtDlpService{settings: func() config.AppSettings {
+		return config.AppSettings{CookiesBrowser: "chrome"}
+	}}
+	req := models.DownloadRequest{
+		URL:       "https://www.tiktok.com/@creator/video/123",
+		Mode:      models.ModeVideoAudio,
+		Container: "mp4",
+		NoCookies: true,
+		OutputDir: t.TempDir(),
+	}
+
+	args := service.buildDownloadArgs(req)
+	if got := formatArgument(args); got != "bv*[format_note!*=?watermarked]+ba/b[format_note!*=?watermarked]/bv*+ba/b" {
+		t.Fatalf("social format selector = %q, want best video/audio selector", got)
+	}
+	if hasArgument(args, "--cookies-from-browser") {
+		t.Fatal("social download unexpectedly requests browser cookies")
+	}
+	if !hasArgument(args, "--no-playlist") {
+		t.Fatal("social download must remain a single-video download")
+	}
+	if got := argumentValue(args, "--merge-output-format"); got != "mp4" {
+		t.Fatalf("social merge format = %q, want mp4", got)
+	}
+}
+
+func TestSocialFormatExtractionIgnoresConfiguredCookies(t *testing.T) {
+	service := &YtDlpService{settings: func() config.AppSettings {
+		return config.AppSettings{
+			CookiesBrowser: "chrome",
+			CustomHeaders:  map[string]string{"Cookie": "session=secret", "X-Test": "ok"},
+		}
+	}}
+	args := service.fetchFormatsArgs("https://www.instagram.com/reel/abc/")
+	if hasArgument(args, "--cookies-from-browser") {
+		t.Fatal("social metadata extraction unexpectedly requests browser cookies")
+	}
+	if hasArgument(args, "Cookie:session=secret") {
+		t.Fatal("social metadata extraction unexpectedly forwards a Cookie header")
+	}
+	if !hasArgument(args, "X-Test:ok") {
+		t.Fatal("non-cookie custom headers should remain available for social extraction")
+	}
+}
+
+func TestSocialAnalyzeFetchesSingleVideoMetadataWithoutCookies(t *testing.T) {
+	service := &YtDlpService{settings: func() config.AppSettings {
+		return config.AppSettings{CookiesBrowser: "chrome"}
+	}}
+	args := service.analyzeArgs("https://x.com/creator/status/123")
+	if !hasArgument(args, "--no-playlist") {
+		t.Fatal("social metadata analysis must remain a single-video extraction")
+	}
+	if hasArgument(args, "--cookies-from-browser") {
+		t.Fatal("social metadata analysis unexpectedly requests browser cookies")
+	}
+}
+
 func TestBuildDownloadArgsAudioOnlyUsesSelectedFormat(t *testing.T) {
 	service := testYtDlpService()
 	req := models.DownloadRequest{

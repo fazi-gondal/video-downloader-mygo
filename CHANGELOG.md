@@ -4,6 +4,14 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+### Added
+
+- Direct TikTok, Instagram, and X/Twitter video downloads: analyze a link to see metadata, then use the single **Download HD** action without entering the normal quality-selection page.
+
+### Changed
+
+- Social-video downloads use the best available video/audio source, MP4 output, single-video mode, and a cookie-free request. Watermarks already embedded in source pixels are not removed.
+
 ## [3.0.0] - 2026-10-21
 
 ### Added

@@ -135,6 +135,41 @@ func TestBuildRequestCarries360VideoFlag(t *testing.T) {
 	}
 }
 
+func TestBuildSocialRequestUsesDirectBestHDDefaults(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Title:      "Example social video",
+			WebpageURL: "https://x.com/creator/status/123",
+			Thumbnail:  "https://cdn.example/thumb.jpg",
+		},
+		settings: config.AppSettings{DownloadDir: "downloads"},
+	}
+
+	if !a.isDirectSocialMedia() {
+		t.Fatal("social media URL was not recognized by the app")
+	}
+	req := a.buildSocialRequest()
+	if req.Mode != models.ModeVideoAudio {
+		t.Fatalf("social request mode = %q, want video plus audio", req.Mode)
+	}
+	if req.Container != "mp4" || req.MaxHeight != 0 {
+		t.Fatalf("social request quality/container = %q/%d, want best MP4", req.Container, req.MaxHeight)
+	}
+	if !req.NoCookies {
+		t.Fatal("social request must disable configured cookies")
+	}
+	if req.SubtitleSelectionMode != "" || req.AudioSelectionMode != "" {
+		t.Fatalf("social request unexpectedly carries selection options: subtitles=%q audio=%q", req.SubtitleSelectionMode, req.AudioSelectionMode)
+	}
+}
+
+func TestMediaURLFallsBackToOriginalURL(t *testing.T) {
+	media := &models.MediaInfo{OriginalURL: "https://www.instagram.com/reel/abc/"}
+	if got := mediaURL(media); got != media.OriginalURL {
+		t.Fatalf("mediaURL() = %q, want original URL %q", got, media.OriginalURL)
+	}
+}
+
 func TestRebuildFormatOptionsHidesMeshStreamsFor360Video(t *testing.T) {
 	a := &App{
 		currentMedia: &models.MediaInfo{

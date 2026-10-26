@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,14 +101,7 @@ func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
 	if IsAryPlusURL(url) {
 		return s.analyzeAryPlus(ctx, url)
 	}
-	args := s.baseArgs()
-	args = append(args,
-		"--dump-single-json",
-		"--flat-playlist",
-		"--no-download",
-		"--no-warnings",
-		url,
-	)
+	args := s.analyzeArgs(url)
 	out, err := s.run(ctx, args)
 	if err != nil {
 		return nil, err
@@ -120,6 +114,20 @@ func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
 		return parsePlaylist(raw, url), nil
 	}
 	return parseMedia(raw, url), nil
+}
+
+func (s *YtDlpService) analyzeArgs(url string) []string {
+	args := s.baseArgsForURL(url, IsSocialMediaURL(url))
+	args = append(args,
+		"--dump-single-json",
+		"--flat-playlist",
+		"--no-download",
+		"--no-warnings",
+	)
+	if IsSocialMediaURL(url) {
+		args = append(args, "--no-playlist")
+	}
+	return append(args, url)
 }
 
 // FetchFormats does a full extraction of a single video (formats + tracks).
@@ -181,7 +189,7 @@ func (s *YtDlpService) fetchFormatsAryPlus(ctx context.Context, rawURL string) (
 }
 
 func (s *YtDlpService) fetchFormatsArgs(url string) []string {
-	args := s.baseArgs()
+	args := s.baseArgsForURL(url, IsSocialMediaURL(url))
 	return append(args,
 		"--dump-single-json",
 		"--no-download",
@@ -198,6 +206,9 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		ctx = context.Background()
 	}
 	req := task.Request
+	if IsSocialMediaURL(req.URL) {
+		req.NoCookies = true
+	}
 	if IsAryPlusEpisodeURL(req.URL) {
 		if ep, err := ResolveAryPlusEpisode(ctx, req.URL); err == nil {
 			if ep.PlatformID == "1" {
@@ -545,6 +556,14 @@ func subtitleDownloadEnabled(req models.DownloadRequest, settings config.AppSett
 }
 
 func (s *YtDlpService) baseArgs() []string {
+	return s.baseArgsForURL("", false)
+}
+
+func (s *YtDlpService) baseArgsForRequest(req models.DownloadRequest) []string {
+	return s.baseArgsForURL(req.URL, req.NoCookies || IsSocialMediaURL(req.URL))
+}
+
+func (s *YtDlpService) baseArgsForURL(rawURL string, noCookies bool) []string {
 	st := s.appSettings()
 	args := []string{
 		"--prefer-free-formats",
@@ -563,7 +582,7 @@ func (s *YtDlpService) baseArgs() []string {
 	if st.Proxy != "" {
 		args = append(args, "--proxy", st.Proxy)
 	}
-	if st.CookiesBrowser != "" {
+	if !noCookies && st.CookiesBrowser != "" {
 		args = append(args, "--cookies-from-browser", st.CookiesBrowser)
 	}
 	keys := make([]string, 0, len(st.CustomHeaders))
@@ -572,6 +591,9 @@ func (s *YtDlpService) baseArgs() []string {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
+		if noCookies && strings.EqualFold(strings.TrimSpace(key), "cookie") {
+			continue
+		}
 		if value := strings.TrimSpace(st.CustomHeaders[key]); key != "" && value != "" {
 			args = append(args, "--add-header", key+":"+value)
 		}
@@ -585,8 +607,34 @@ func (s *YtDlpService) baseArgs() []string {
 	return args
 }
 
+// SocialPlatform returns the supported public social platform for a URL.
+// These URLs intentionally use the cookie-free path so downloads do not
+// depend on a browser profile or a local cookies file.
+func SocialPlatform(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
+	switch {
+	case host == "tiktok.com" || strings.HasSuffix(host, ".tiktok.com"):
+		return "TikTok"
+	case host == "instagram.com" || strings.HasSuffix(host, ".instagram.com"):
+		return "Instagram"
+	case host == "x.com" || strings.HasSuffix(host, ".x.com") || host == "twitter.com" || strings.HasSuffix(host, ".twitter.com"):
+		return "X"
+	default:
+		return ""
+	}
+}
+
+// IsSocialMediaURL reports whether rawURL is a supported public social-video URL.
+func IsSocialMediaURL(rawURL string) bool {
+	return SocialPlatform(rawURL) != ""
+}
+
 func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
-	args := s.baseArgs()
+	args := s.baseArgsForRequest(req)
 	st := s.appSettings()
 	subtitleMode, subtitleLangs := models.SubtitleSelectionNone, []string(nil)
 	if req.Mode != models.ModeAudioOnly {
@@ -609,6 +657,9 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		}
 	}
 	args = append(args, "-o", outTpl)
+	if IsSocialMediaURL(req.URL) {
+		args = append(args, "--no-playlist")
+	}
 
 	// Format selection
 	switch req.Mode {
@@ -721,6 +772,13 @@ func bestAudioSelector(req models.DownloadRequest) string {
 }
 
 func videoAudioSelector(req models.DownloadRequest) string {
+	if IsSocialMediaURL(req.URL) {
+		// TikTok exposes a lower-preference format explicitly marked
+		// "watermarked". The `?` keeps formats with no format_note eligible,
+		// while retaining a best video/audio fallback for Instagram and X, whose
+		// format metadata does not use the same note consistently.
+		return "bv*[format_note!*=?watermarked]+ba/b[format_note!*=?watermarked]/bv*+ba/b"
+	}
 	video := videoAudioVideoSelector(req)
 	selectionMode, selected := audioSelection(req)
 	if req.VideoFormatID != "" && req.AudioFormatID != "" && selectionMode == models.AudioSelectionNone {

@@ -6,8 +6,8 @@ Current release: `v3.0.0`.
 
 ## Stack
 
-- Go 1.27.2.
-- MyGo v0.5.5, pinned as `tool github.com/egoist/mygo/cmd/mygo` in `go.mod`.
+- Go 1.27.3.
+- MyGo v0.6.4, pinned as `tool github.com/egoist/mygo/cmd/mygo` in `go.mod`.
 - Native MyGo UI; no web frontend or Bun build.
 - yt-dlp for extraction/downloads.
 - FFmpeg and FFprobe for merge, remux, subtitle embedding, conversion, and probing.
@@ -26,6 +26,8 @@ Use `go tool mygo dev` for live development. Use `go tool mygo build -platform w
 ## Main behavior
 
 - Home analyzes a video or playlist URL.
+- TikTok, Instagram, and X/Twitter single-video URLs show metadata first and then a direct `Download HD` action instead of the normal quality/configuration page.
+- Social-video requests use the best available video/audio selector, MP4 output, `--no-playlist`, and no configured browser cookies. The downloader cannot remove a watermark already baked into the source pixels.
 - Single-video results show a thumbnail and lead to download configuration.
 - Playlists provide entry selection and batch queueing.
 - Multiple audio tracks and any embedded subtitles force MKV in the UI and request.
