@@ -103,7 +103,7 @@ jobs:
           test -d "build/${{ matrix.out }}" || test -d build
           case "${{ matrix.platform }}" in
             windows/*)
-              test -n "$(find build -type f -name '*Setup*.exe' -print -quit)"
+              test -n "$(find build -type f -iname '*setup*.exe' -print -quit)"
               ;;
             linux/*)
               test -n "$(find build -type f -name '*.tar.gz' -print -quit)"
