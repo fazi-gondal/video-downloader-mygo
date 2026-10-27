@@ -145,10 +145,10 @@ func TestBuildSocialRequestUsesDirectBestHDDefaults(t *testing.T) {
 		settings: config.AppSettings{DownloadDir: "downloads"},
 	}
 
-	if !a.isDirectSocialMedia() {
+	if !a.isDirectHDMedia() {
 		t.Fatal("social media URL was not recognized by the app")
 	}
-	req := a.buildSocialRequest()
+	req := a.buildDirectHDRequest()
 	if req.Mode != models.ModeVideoAudio {
 		t.Fatalf("social request mode = %q, want video plus audio", req.Mode)
 	}
@@ -160,6 +160,27 @@ func TestBuildSocialRequestUsesDirectBestHDDefaults(t *testing.T) {
 	}
 	if req.SubtitleSelectionMode != "" || req.AudioSelectionMode != "" {
 		t.Fatalf("social request unexpectedly carries selection options: subtitles=%q audio=%q", req.SubtitleSelectionMode, req.AudioSelectionMode)
+	}
+}
+
+func TestBuildYouTubeShortRequestUsesDirectBestHDDefaults(t *testing.T) {
+	a := &App{
+		currentMedia: &models.MediaInfo{
+			Title:      "Example short",
+			WebpageURL: "https://www.youtube.com/shorts/short-id",
+		},
+		settings: config.AppSettings{DownloadDir: "downloads"},
+	}
+
+	if !a.isDirectHDMedia() {
+		t.Fatal("YouTube Shorts URL was not recognized by the app")
+	}
+	req := a.buildDirectHDRequest()
+	if req.URL != a.currentMedia.WebpageURL || req.Container != "mp4" || req.MaxHeight != 0 {
+		t.Fatalf("YouTube Shorts request = %#v, want original URL, best quality, and mp4", req)
+	}
+	if !req.NoCookies {
+		t.Fatal("YouTube Shorts request must disable configured cookies")
 	}
 }
 

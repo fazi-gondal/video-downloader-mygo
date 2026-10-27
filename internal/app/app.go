@@ -501,9 +501,9 @@ func (a *App) dashboardPage(c *ui.Context) {
 		if a.currentMedia != nil {
 			a.mediaCard(c)
 			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
-				if a.isDirectSocialMedia() {
+				if a.isDirectHDMedia() {
 					if ui.PrimaryButton(c, "Download HD").Clicked() {
-						a.startSocialDownload()
+						a.startDirectHDDownload()
 					}
 				} else if ui.PrimaryButton(c, "Continue to download options").Clicked() {
 					a.page = PageConfig
@@ -689,7 +689,7 @@ func (a *App) mediaCard(c *ui.Context) {
 				meta += " · " + m.Extractor
 			}
 			ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
-			if platform := services.SocialPlatform(mediaURL(m)); platform != "" {
+			if platform := services.DirectDownloadPlatform(mediaURL(m)); platform != "" {
 				ui.Text(c, platform+" · best available HD source · cookies not used").FontSize(11).TextColor(t.Accent)
 			}
 		})
@@ -1260,15 +1260,15 @@ func (a *App) startDownload() {
 	a.showToast("Queued: " + a.currentMedia.Title)
 }
 
-func (a *App) isDirectSocialMedia() bool {
-	return a.currentMedia != nil && services.IsSocialMediaURL(mediaURL(a.currentMedia))
+func (a *App) isDirectHDMedia() bool {
+	return a.currentMedia != nil && services.IsOneClickDownloadURL(mediaURL(a.currentMedia))
 }
 
-func (a *App) startSocialDownload() {
-	if !a.isDirectSocialMedia() {
+func (a *App) startDirectHDDownload() {
+	if !a.isDirectHDMedia() {
 		return
 	}
-	req := a.buildSocialRequest()
+	req := a.buildDirectHDRequest()
 	if task := a.manager.Enqueue(req); task == nil {
 		a.showToast("Could not queue download: download manager is shut down")
 		return
@@ -1277,7 +1277,7 @@ func (a *App) startSocialDownload() {
 	a.showToast("Queued HD download: " + req.Title)
 }
 
-func (a *App) buildSocialRequest() models.DownloadRequest {
+func (a *App) buildDirectHDRequest() models.DownloadRequest {
 	if a.currentMedia == nil {
 		return models.DownloadRequest{}
 	}

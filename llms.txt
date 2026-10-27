@@ -26,8 +26,9 @@ Use `go tool mygo dev` for live development. Use `go tool mygo build -platform w
 ## Main behavior
 
 - Home analyzes a video or playlist URL.
-- TikTok, Instagram, and X/Twitter single-video URLs show metadata first and then a direct `Download HD` action instead of the normal quality/configuration page.
-- Social-video requests use the best available video/audio selector, MP4 output, `--no-playlist`, and no configured browser cookies. The downloader cannot remove a watermark already baked into the source pixels.
+- TikTok, Instagram, X/Twitter, and YouTube Shorts URLs show metadata first and then a direct `Download HD` action instead of the normal quality/configuration page.
+- Direct social/Shorts requests use the best available video/audio selector, MP4 output, `--no-playlist`, and no configured browser cookies. The downloader cannot remove a watermark already baked into the source pixels.
+- Final filenames use media titles without appended yt-dlp video IDs; playlist entries retain their playlist index.
 - Single-video results show a thumbnail and lead to download configuration.
 - Playlists provide entry selection and batch queueing.
 - Multiple audio tracks and any embedded subtitles force MKV in the UI and request.

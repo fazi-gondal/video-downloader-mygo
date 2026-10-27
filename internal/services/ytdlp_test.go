@@ -437,6 +437,93 @@ func TestSocialPlatformRecognizesSupportedHostsOnly(t *testing.T) {
 	}
 }
 
+func TestYouTubeShortURLRecognition(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{name: "canonical", url: "https://www.youtube.com/shorts/abc123", want: true},
+		{name: "mobile", url: "https://m.youtube.com/shorts/abc123?feature=share", want: true},
+		{name: "watch video", url: "https://www.youtube.com/watch?v=abc123", want: false},
+		{name: "shorts without id", url: "https://www.youtube.com/shorts/", want: false},
+		{name: "lookalike host", url: "https://notyoutube.com/shorts/abc123", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsYouTubeShortURL(tt.url); got != tt.want {
+				t.Fatalf("IsYouTubeShortURL(%q) = %t, want %t", tt.url, got, tt.want)
+			}
+		})
+	}
+	if got := DirectDownloadPlatform("https://www.youtube.com/shorts/abc123"); got != "YouTube Shorts" {
+		t.Fatalf("DirectDownloadPlatform(YouTube Shorts) = %q, want YouTube Shorts", got)
+	}
+	if IsOneClickDownloadURL("https://www.youtube.com/watch?v=abc123") {
+		t.Fatal("regular YouTube video unexpectedly uses the Shorts one-click flow")
+	}
+}
+
+func TestYouTubeShortAnalyzeUsesSingleVideoCookieFreeArgs(t *testing.T) {
+	service := &YtDlpService{settings: func() config.AppSettings {
+		return config.AppSettings{CookiesBrowser: "chrome"}
+	}}
+	args := service.analyzeArgs("https://www.youtube.com/shorts/abc123")
+	if !hasArgument(args, "--no-playlist") {
+		t.Fatal("YouTube Shorts metadata analysis must remain a single-video extraction")
+	}
+	if hasArgument(args, "--cookies-from-browser") {
+		t.Fatal("YouTube Shorts metadata analysis unexpectedly requests browser cookies")
+	}
+}
+
+func TestOneClickURLUsesRegularBestSelectorForYouTubeShorts(t *testing.T) {
+	req := models.DownloadRequest{
+		URL:       "https://www.youtube.com/shorts/abc123",
+		Mode:      models.ModeVideoAudio,
+		Container: "mp4",
+	}
+	got := videoAudioSelector(req)
+	if strings.Contains(got, "watermarked") {
+		t.Fatalf("YouTube Shorts selector unexpectedly uses social watermark filter: %q", got)
+	}
+	if got != "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b" {
+		t.Fatalf("YouTube Shorts selector = %q, want best MP4 selector", got)
+	}
+}
+
+func TestDownloadOutputTemplatesDoNotContainVideoIDs(t *testing.T) {
+	service := testYtDlpService()
+	tests := []struct {
+		name          string
+		req           models.DownloadRequest
+		wantSubstring string
+	}{
+		{
+			name:          "single video",
+			req:           models.DownloadRequest{URL: "https://www.youtube.com/watch?v=abc", Mode: models.ModeVideoAudio, Container: "mp4", OutputDir: t.TempDir()},
+			wantSubstring: "%(title).200B.%(ext)s",
+		},
+		{
+			name:          "playlist entry",
+			req:           models.DownloadRequest{URL: "https://www.youtube.com/watch?v=abc", Mode: models.ModeVideoAudio, Container: "mp4", PlaylistTitle: "Playlist", PlaylistIndex: 1, OutputDir: t.TempDir()},
+			wantSubstring: "%(playlist_index)02d - %(title).150B.%(ext)s",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := service.buildDownloadArgs(tt.req)
+			output := argumentValue(args, "-o")
+			if !strings.Contains(output, tt.wantSubstring) {
+				t.Fatalf("output template = %q, want %q", output, tt.wantSubstring)
+			}
+			if strings.Contains(output, "%(id)") {
+				t.Fatalf("output template still contains a video ID placeholder: %q", output)
+			}
+		})
+	}
+}
+
 func TestSocialDownloadUsesBestVideoAudioWithoutCookies(t *testing.T) {
 	service := &YtDlpService{settings: func() config.AppSettings {
 		return config.AppSettings{CookiesBrowser: "chrome"}

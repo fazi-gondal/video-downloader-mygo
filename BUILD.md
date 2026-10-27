@@ -12,9 +12,10 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
   workflows that require one; it is not bundled by the current release.
 - Optional `ARYPLUS_API_KEY` to override the default client key when downloading
   from ARY Plus through the native extractor.
-- TikTok, Instagram, and X/Twitter downloads do not require a cookies file or
-  browser-cookie configuration. The social flow uses yt-dlp's best available
-  video/audio selection and does not expose manual quality controls.
+- TikTok, Instagram, X/Twitter, and YouTube Shorts downloads do not require a
+  cookies file or browser-cookie configuration. The direct flow uses yt-dlp's
+  best available video/audio selection and does not expose manual quality
+  controls. Final filenames use the media title without an appended video ID.
 - Bash, curl, unzip, and tar/xz when using `scripts/fetch-tools.sh`.
 - On Windows, Git Bash or WSL is required to run the Bash helper script. The Go application itself runs natively from PowerShell or Command Prompt.
 

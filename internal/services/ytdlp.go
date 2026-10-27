@@ -117,14 +117,14 @@ func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
 }
 
 func (s *YtDlpService) analyzeArgs(url string) []string {
-	args := s.baseArgsForURL(url, IsSocialMediaURL(url))
+	args := s.baseArgsForURL(url, isCookieFreeURL(url))
 	args = append(args,
 		"--dump-single-json",
 		"--flat-playlist",
 		"--no-download",
 		"--no-warnings",
 	)
-	if IsSocialMediaURL(url) {
+	if IsOneClickDownloadURL(url) {
 		args = append(args, "--no-playlist")
 	}
 	return append(args, url)
@@ -189,7 +189,7 @@ func (s *YtDlpService) fetchFormatsAryPlus(ctx context.Context, rawURL string) (
 }
 
 func (s *YtDlpService) fetchFormatsArgs(url string) []string {
-	args := s.baseArgsForURL(url, IsSocialMediaURL(url))
+	args := s.baseArgsForURL(url, isCookieFreeURL(url))
 	return append(args,
 		"--dump-single-json",
 		"--no-download",
@@ -206,7 +206,7 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		ctx = context.Background()
 	}
 	req := task.Request
-	if IsSocialMediaURL(req.URL) {
+	if isCookieFreeURL(req.URL) {
 		req.NoCookies = true
 	}
 	if IsAryPlusEpisodeURL(req.URL) {
@@ -560,7 +560,7 @@ func (s *YtDlpService) baseArgs() []string {
 }
 
 func (s *YtDlpService) baseArgsForRequest(req models.DownloadRequest) []string {
-	return s.baseArgsForURL(req.URL, req.NoCookies || IsSocialMediaURL(req.URL))
+	return s.baseArgsForURL(req.URL, req.NoCookies || isCookieFreeURL(req.URL))
 }
 
 func (s *YtDlpService) baseArgsForURL(rawURL string, noCookies bool) []string {
@@ -633,6 +633,39 @@ func IsSocialMediaURL(rawURL string) bool {
 	return SocialPlatform(rawURL) != ""
 }
 
+// IsYouTubeShortURL reports whether rawURL is a YouTube Shorts URL.
+func IsYouTubeShortURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
+	if host != "youtube.com" && host != "m.youtube.com" {
+		return false
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	return len(parts) >= 2 && strings.EqualFold(parts[0], "shorts") && strings.TrimSpace(parts[1]) != ""
+}
+
+// DirectDownloadPlatform returns the platform that supports the one-click
+// best-available HD download flow.
+func DirectDownloadPlatform(rawURL string) string {
+	if IsYouTubeShortURL(rawURL) {
+		return "YouTube Shorts"
+	}
+	return SocialPlatform(rawURL)
+}
+
+// IsOneClickDownloadURL reports whether a URL should skip manual quality
+// controls and use the direct best-available download flow.
+func IsOneClickDownloadURL(rawURL string) bool {
+	return DirectDownloadPlatform(rawURL) != ""
+}
+
+func isCookieFreeURL(rawURL string) bool {
+	return IsSocialMediaURL(rawURL) || IsYouTubeShortURL(rawURL)
+}
+
 func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	args := s.baseArgsForRequest(req)
 	st := s.appSettings()
@@ -643,9 +676,9 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	embedSubtitles := subtitleMode != models.SubtitleSelectionNone
 
 	_ = os.MkdirAll(req.OutputDir, 0o750)
-	outTpl := filepath.Join(req.OutputDir, "%(title).200B [%(id)s].%(ext)s")
+	outTpl := filepath.Join(req.OutputDir, "%(title).200B.%(ext)s")
 	if req.PlaylistTitle != "" {
-		outTpl = filepath.Join(req.OutputDir, "%(playlist_title).100B", "%(playlist_index)02d - %(title).150B [%(id)s].%(ext)s")
+		outTpl = filepath.Join(req.OutputDir, "%(playlist_title).100B", "%(playlist_index)02d - %(title).150B.%(ext)s")
 	}
 	if req.Title != "" && isDirectStreamURL(req.URL) {
 		cleanTitle := sanitizeFilename(req.Title)
@@ -657,7 +690,7 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		}
 	}
 	args = append(args, "-o", outTpl)
-	if IsSocialMediaURL(req.URL) {
+	if IsOneClickDownloadURL(req.URL) {
 		args = append(args, "--no-playlist")
 	}
 

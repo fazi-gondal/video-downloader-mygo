@@ -35,7 +35,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 
 - Native MyGo desktop UI with the operating system title bar.
 - URL analysis for individual videos and playlists through yt-dlp.
-- Direct social-video downloads for TikTok, Instagram, and X/Twitter. The metadata card provides a one-click best-available HD download without a quality picker and without browser cookies.
+- Direct one-click HD downloads for TikTok, Instagram, X/Twitter, and YouTube Shorts. The metadata card provides the download action without a quality picker and without browser cookies.
 - ARY Plus episode and series downloads through the bundled yt-dlp plugin.
 - Video thumbnail loading with bounded, validated image decoding.
 - Human-readable media title, uploader, duration, extractor, audio-track, and subtitle information.
@@ -52,7 +52,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - VP9 preference is managed centrally from Settings and falls back automatically when VP9 is unavailable.
 - YouTube 360° videos prefer equirectangular streams; packed mesh streams are excluded from automatic and manual video choices.
 - YouTube downloads use a public embedded client by default and do not require browser cookies. Browser-cookie import remains optional in Network settings.
-- TikTok, Instagram, and X/Twitter downloads always bypass configured browser cookies and download the best available video/audio stream as MP4. A watermark already embedded in a source video cannot be removed by the downloader.
+- TikTok, Instagram, X/Twitter, and YouTube Shorts downloads bypass configured browser cookies and download the best available video/audio stream as MP4. A watermark already embedded in a source video cannot be removed by the downloader.
 - Combined final-size estimate based on the physical video/audio streams that will be downloaded, their sizes or bitrates, duration, and selected tracks.
 - Approximate estimates are marked with `~`; container overhead, metadata, thumbnails, subtitles, and remuxing can change the final file size.
 - Download folder picker.
@@ -290,10 +290,14 @@ to override the default client API configuration.
 
 For a single video, the result card shows its thumbnail, title, uploader, duration, extractor, available audio tracks, and available subtitles. For a playlist, use **Select all**, **Select none**, or click individual checkboxes. Individual checkbox changes are committed immediately, so the tick remains visible when the list redraws.
 
-For a TikTok, Instagram, or X/Twitter video, the result card is also the
-download screen: review the metadata and click **Download HD**. The app skips
-the normal quality picker, uses the best available video/audio source, writes
-an MP4, and does not use configured browser cookies.
+For a TikTok, Instagram, X/Twitter, or YouTube Shorts video, the result card is
+also the download screen: review the metadata and click **Download HD**. The
+app skips the normal quality picker, uses the best available video/audio
+source, writes an MP4, and does not use configured browser cookies.
+
+Downloaded filenames use the media title and extension. The app does not append
+yt-dlp video IDs to final filenames; playlist entries retain their playlist
+index to keep entries distinguishable.
 
 ### 2. Open download options
 
