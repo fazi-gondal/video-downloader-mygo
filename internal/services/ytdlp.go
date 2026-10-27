@@ -678,19 +678,30 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 	_ = os.MkdirAll(req.OutputDir, 0o750)
 	outTpl := filepath.Join(req.OutputDir, "%(title).200B.%(ext)s")
 	if req.PlaylistTitle != "" {
-		outTpl = filepath.Join(req.OutputDir, "%(playlist_title).100B", "%(playlist_index)02d - %(title).150B.%(ext)s")
+		cleanPlaylist := sanitizeFilename(req.PlaylistTitle)
+		if cleanPlaylist == "" {
+			cleanPlaylist = "Playlist"
+		}
+		if req.PlaylistIndex > 0 {
+			outTpl = filepath.Join(req.OutputDir, cleanPlaylist, fmt.Sprintf("%02d - %%(title).150B.%%(ext)s", req.PlaylistIndex))
+		} else {
+			outTpl = filepath.Join(req.OutputDir, cleanPlaylist, "%(title).150B.%(ext)s")
+		}
 	}
 	if req.Title != "" && isDirectStreamURL(req.URL) {
 		cleanTitle := sanitizeFilename(req.Title)
 		if req.PlaylistTitle != "" {
 			cleanPlaylist := sanitizeFilename(req.PlaylistTitle)
+			if cleanPlaylist == "" {
+				cleanPlaylist = "Playlist"
+			}
 			outTpl = filepath.Join(req.OutputDir, cleanPlaylist, cleanTitle+".%(ext)s")
 		} else {
 			outTpl = filepath.Join(req.OutputDir, cleanTitle+".%(ext)s")
 		}
 	}
 	args = append(args, "-o", outTpl)
-	if IsOneClickDownloadURL(req.URL) {
+	if req.PlaylistTitle != "" || IsOneClickDownloadURL(req.URL) {
 		args = append(args, "--no-playlist")
 	}
 

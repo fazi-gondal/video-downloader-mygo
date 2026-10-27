@@ -506,8 +506,8 @@ func TestDownloadOutputTemplatesDoNotContainVideoIDs(t *testing.T) {
 		},
 		{
 			name:          "playlist entry",
-			req:           models.DownloadRequest{URL: "https://www.youtube.com/watch?v=abc", Mode: models.ModeVideoAudio, Container: "mp4", PlaylistTitle: "Playlist", PlaylistIndex: 1, OutputDir: t.TempDir()},
-			wantSubstring: "%(playlist_index)02d - %(title).150B.%(ext)s",
+			req:           models.DownloadRequest{URL: "https://www.youtube.com/watch?v=abc", Mode: models.ModeVideoAudio, Container: "mp4", PlaylistTitle: "My Playlist", PlaylistIndex: 1, OutputDir: t.TempDir()},
+			wantSubstring: filepath.Join("My Playlist", "01 - %(title).150B.%(ext)s"),
 		},
 	}
 	for _, tt := range tests {
@@ -519,6 +519,9 @@ func TestDownloadOutputTemplatesDoNotContainVideoIDs(t *testing.T) {
 			}
 			if strings.Contains(output, "%(id)") {
 				t.Fatalf("output template still contains a video ID placeholder: %q", output)
+			}
+			if tt.req.PlaylistTitle != "" && !hasArgument(args, "--no-playlist") {
+				t.Fatal("playlist entry download is missing --no-playlist")
 			}
 		})
 	}
