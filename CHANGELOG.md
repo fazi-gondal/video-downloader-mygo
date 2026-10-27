@@ -4,20 +4,12 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-27
+
 ### Added
 
 - Direct TikTok, Instagram, X/Twitter, and YouTube Shorts downloads: analyze a link to see metadata, then use the single **Download HD** action without entering the normal quality-selection page.
-
-### Changed
-
-- Social-video downloads use the best available video/audio source, MP4 output, single-video mode, and a cookie-free request. Watermarks already embedded in source pixels are not removed.
-- Final filenames use the media title without an appended yt-dlp video ID; playlist entries retain their playlist index.
-
-## [3.0.0] - 2026-10-21
-
-### Added
-
-- Native MyGo desktop screens for Home, Downloads, Converter, History, Settings, and About with refreshed navigation, thumbnails, status pills, empty states, and responsive layouts.
+- Native MyGo desktop screens for Home, Downloads, Converter, History, Settings, and About with refreshed navigation, embedded SVG icons, thumbnails, status pills, empty states, and responsive layouts.
 - ARY Plus episode and series support, including canonical series and share URLs, platform redirects, HLS quality selection, thumbnails, duration metadata, and DRM detection.
 - Pause and resume for active downloads, preserving yt-dlp partial files and staging directories during the current application session.
 - YouTube 360° handling that prefers equirectangular streams and excludes packed mesh formats from automatic and manual video choices.
@@ -28,11 +20,16 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ### Changed
 
+- YouTube playlist downloads now download into a folder named after the playlist title.
+- Multi-track audio and subtitle selection prioritizes original audio first (if selected) and English subtitles first (if selected), falling back to alphabetical sorting.
+- Windows background execution hides CMD console windows during video downloads, format conversions, and metadata probing.
+- Social-video downloads use the best available video/audio source, MP4 output, single-video mode, and a cookie-free request. Watermarks already embedded in source pixels are not removed.
+- Final filenames use the media title without an appended yt-dlp video ID; playlist entries retain their playlist index.
 - Audio tracks are now grouped by language and reduced to one best-quality Opus track per language; low, medium, and high variants of the same language are no longer shown as separate tracks.
 - The audio-track selector is shown only when analyzed media provides multiple languages.
 - YouTube downloads do not request browser cookies by default; browser-cookie import remains an explicit Network setting.
 - Multiple audio tracks or embedded subtitles automatically require MKV, while format and size estimates account for physical payloads only once.
-- Release packaging uses the pinned MyGo tool and verified platform-specific yt-dlp and FFmpeg resources.
+- Release packaging uses MyGo v0.7.1 and verified platform-specific yt-dlp and FFmpeg resources.
 
 ### Fixed
 
