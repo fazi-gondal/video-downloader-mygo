@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
@@ -42,20 +43,23 @@ const (
 )
 
 type App struct {
-	winMu              sync.RWMutex
-	win                *mygo.Window
-	pendingMu          sync.Mutex
-	pendingUpdates     []func()
-	settingsRepo       *config.SettingsRepository
-	settingsMu         sync.RWMutex
-	settings           config.AppSettings // worker-visible snapshot, protected by settingsMu
-	settingsDraft      config.AppSettings // editable UI state, accessed on the main thread
-	settingsDraftReady bool
-	ffmpeg             *services.FFmpegService
-	ytdlp              *services.YtDlpService
-	manager            *services.DownloadManager
-	conv               *services.ConversionService
-	history            *services.HistoryService
+	winMu                     sync.RWMutex
+	win                       *mygo.Window
+	pendingMu                 sync.Mutex
+	pendingUpdates            []func()
+	settingsRepo              *config.SettingsRepository
+	settingsMu                sync.RWMutex
+	settings                  config.AppSettings // worker-visible snapshot, protected by settingsMu
+	settingsDraft             config.AppSettings // editable UI state, accessed on the main thread
+	settingsDraftReady        bool
+	settingsSlidersReady      bool
+	maxConcurrentSlider       float64
+	concurrentFragmentsSlider float64
+	ffmpeg                    *services.FFmpegService
+	ytdlp                     *services.YtDlpService
+	manager                   *services.DownloadManager
+	conv                      *services.ConversionService
+	history                   *services.HistoryService
 
 	page string
 
@@ -160,10 +164,14 @@ func (a *App) setSettings(settings config.AppSettings) {
 
 func (a *App) ensureSettingsDraft() {
 	if a.settingsDraftReady {
+		if !a.settingsSlidersReady {
+			a.syncPerformanceSliders(a.settingsDraft)
+		}
 		return
 	}
 	a.settingsDraft = a.settingsSnapshot()
 	a.settingsDraftReady = true
+	a.syncPerformanceSliders(a.settingsDraft)
 }
 
 func (a *App) settingsDraftSnapshot() config.AppSettings {
@@ -181,6 +189,13 @@ func (a *App) applySettings(settings config.AppSettings) {
 	a.setSettings(settings)
 	a.settingsDraft = cloneAppSettings(settings)
 	a.settingsDraftReady = true
+	a.syncPerformanceSliders(settings)
+}
+
+func (a *App) syncPerformanceSliders(settings config.AppSettings) {
+	a.maxConcurrentSlider = float64(min(max(settings.MaxConcurrent, 1), 16))
+	a.concurrentFragmentsSlider = float64(min(max(settings.ConcurrentFragments, 1), 32))
+	a.settingsSlidersReady = true
 }
 
 func New() *App {
@@ -220,6 +235,7 @@ func New() *App {
 		thumbnailLoading:     map[string]bool{},
 		thumbnailFailures:    map[string]bool{},
 	}
+	a.syncPerformanceSliders(settings)
 	var headerLines []string
 	for key, value := range settings.CustomHeaders {
 		headerLines = append(headerLines, key+": "+value)
@@ -424,7 +440,7 @@ func (a *App) View(c *ui.Context) {
 				ui.SidebarItem(c, PageSettings, appui.IconSettings, "Settings")
 				ui.SidebarItem(c, PageAbout, appui.IconAbout, "About")
 			})
-		}).Width(212)
+		}).Width(212).Material(glass.Glass{Clarity: 0.2})
 		ui.Column(c).Grow(1).FillHeight().Background(t.Background).Children(func() {
 			a.topBar(c)
 			ui.Column(c).Grow(1).Padding(16).Children(func() {
@@ -457,7 +473,7 @@ func (a *App) topBar(c *ui.Context) {
 		PageHistory: "History", PageSettings: "Settings", PageAbout: "About",
 		PageConfig: "Download options",
 	}
-	ui.Row(c).Height(44).FillWidth().Padding(0, 16).AlignItems(ui.Center).Background(t.Surface).Children(func() {
+	ui.Row(c).Height(44).FillWidth().Padding(0, 16).AlignItems(ui.Center).Material(glass.Glass{Clarity: 0.2}).Children(func() {
 		ui.Text(c, titles[a.page]).FontSize(15).Bold()
 		ui.Spacer(c).Grow(1)
 		if a.playlistActive {
@@ -485,7 +501,7 @@ func (a *App) toastBar(c *ui.Context) {
 	}
 	t := c.Theme()
 	ui.Row(c).FillWidth().Justify(ui.Center).Padding(0, 0, 16, 0).Children(func() {
-		ui.Row(c).Background(t.Surface).Padding(8, 14).Radius(8).Children(func() {
+		ui.Row(c).Material(glass.Glass{Clarity: 0.3}).Border(1, t.Border).Padding(8, 14).Radius(8).Children(func() {
 			ui.Text(c, a.toastMsg).FontSize(13)
 		})
 	})
@@ -559,7 +575,7 @@ func (a *App) dashboardHero(c *ui.Context) {
 
 func (a *App) dashboardSearch(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().MaxWidth(720).Background(t.Surface).Border(1, t.Border).Radius(12).Padding(6, 8).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().MaxWidth(720).Material(glass.Glass{Clarity: 0.25}).Border(1, t.Border).Radius(12).Padding(6, 8).Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Icon(c, appui.IconLink).FontSize(18).TextColor(t.TextMuted).Width(20)
 		ui.TextInput(c, &a.urlInput).Label("Video URL").Placeholder("Paste video or playlist URL…").Grow(1).OnSubmit(a.startAnalyze)
 		btn := ui.PrimaryButton(c, "Analyze")
@@ -693,7 +709,7 @@ func (a *App) rememberThumbnailLocked(url string) {
 func (a *App) mediaCard(c *ui.Context) {
 	t := c.Theme()
 	m := a.currentMedia
-	ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Border).Padding(14, 16).Radius(14).Gap(14).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Padding(14, 16).Radius(14).Gap(14).AlignItems(ui.Center).Children(func() {
 		a.thumbnailElement(c, m.Thumbnail, 152, 86, appui.IconVideo)
 		ui.Column(c).Grow(1).Gap(4).Children(func() {
 			ui.Text(c, m.Title).FontSize(16).Bold().MaxWidth(720)
@@ -880,7 +896,7 @@ func isMeshVideoFormat(format models.FormatInfo) bool {
 func (a *App) configPanel(c *ui.Context) {
 	t := c.Theme()
 	a.syncContainerSelection()
-	ui.Column(c).FillWidth().Background(t.Surface).Padding(14).Radius(10).Gap(10).Children(func() {
+	ui.Column(c).FillWidth().Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Padding(14).Radius(10).Gap(10).Children(func() {
 		ui.Text(c, "Download options").FontSize(13).Bold()
 		ui.Row(c).Gap(8).Children(func() {
 			a.modeBtn(c, models.ModeVideoAudio, "Video + Audio")
@@ -1895,7 +1911,7 @@ func (a *App) downloadsPage(c *ui.Context) {
 		})
 		ui.List(c, &a.dlListState, len(tasks), func(i int) {
 			task := tasks[i]
-			ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Border).Padding(10, 12).Radius(12).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Padding(10, 12).Radius(12).Gap(12).AlignItems(ui.Center).Children(func() {
 				a.thumbnailElement(c, task.Request.ThumbnailURL, 112, 63, downloadFallbackIcon(task.Request.Mode))
 				ui.Column(c).Grow(1).Gap(5).Children(func() {
 					ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
@@ -1985,7 +2001,7 @@ func statusPill(c *ui.Context, state models.DownloadState) {
 func emptyState(c *ui.Context, icon *ui.SVG, title, detail string) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-		ui.Box(c).Size(56, 56).Background(t.Surface).Border(1, t.Border).Radius(18).Center().Children(func() {
+		ui.Box(c).Size(56, 56).Material(glass.Glass{Clarity: 0.3}).Border(1, t.Border).Radius(18).Center().Children(func() {
 			ui.Icon(c, icon).FontSize(24).TextColor(t.Accent)
 		})
 		ui.Text(c, title).FontSize(16).Bold()
@@ -2115,7 +2131,7 @@ func (a *App) converterPage(c *ui.Context) {
 			return
 		}
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Stretch).Children(func() {
-			ui.Column(c).Grow(7).Background(t.Surface).Border(1, t.Border).Padding(14).Radius(14).Gap(10).Children(func() {
+			ui.Column(c).Grow(7).Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Padding(14).Radius(14).Gap(10).Children(func() {
 				// Drop zone + path + Browse
 				drop := ui.Column(c).FillWidth().Padding(16).Radius(8).
 					Border(1, t.Border).AlignItems(ui.Center).Gap(6)
@@ -2223,7 +2239,7 @@ func (a *App) converterPage(c *ui.Context) {
 					}()
 				}
 			})
-			ui.Column(c).Grow(5).Background(t.Surface).Border(1, t.Border).Padding(14).Radius(14).Gap(8).Children(func() {
+			ui.Column(c).Grow(5).Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Padding(14).Radius(14).Gap(8).Children(func() {
 				ui.Text(c, "Conversion queue").FontSize(14).Bold()
 				a.convJobsMu.Lock()
 				jobs := append([]models.ConversionJobSnapshot(nil), a.convJobs...)
@@ -2370,7 +2386,7 @@ func (a *App) historyPage(c *ui.Context) {
 		}
 		ui.List(c, &a.histListState, len(filtered), func(i int) {
 			e := filtered[i]
-			ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Border).Padding(10, 12).Radius(12).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Padding(10, 12).Radius(12).Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(40, 40).Background(t.SurfaceHover).Radius(10).Center().Children(func() {
 					if e.Mode == string(models.ModeAudioOnly) {
 						ui.Icon(c, appui.IconMusic).FontSize(19).TextColor(t.Accent)

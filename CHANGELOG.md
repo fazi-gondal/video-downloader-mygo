@@ -4,6 +4,26 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-10-28
+
+### Added
+
+- Glass material styling across major application surfaces, rendered by MyGo on
+  Windows, macOS, and Linux.
+- Discrete Settings sliders for concurrent downloads (1–16) and concurrent
+  fragments (1–32), with live values and settings import/save synchronization.
+
+### Changed
+
+- Pressing Enter in the Home URL field now starts media analysis.
+- User-provided URLs passed to yt-dlp must be HTTP(S) URLs with a host; option-like
+  inputs are rejected.
+
+### Fixed
+
+- Duration probing now has a five-second timeout so a stalled FFprobe process
+  cannot block conversion indefinitely.
+
 ## [3.1.0] - 2026-10-28
 
 ### Fixed

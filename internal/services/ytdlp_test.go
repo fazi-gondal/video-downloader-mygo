@@ -111,6 +111,84 @@ func testYtDlpHelperService(t *testing.T) *YtDlpService {
 	}
 }
 
+func TestValidateYtDlpURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{name: "https URL", url: "https://example.test/video"},
+		{name: "http URL", url: "http://localhost:8080/video"},
+		{name: "leading and trailing whitespace", url: "  https://example.test/video  "},
+		{name: "empty", url: "", wantErr: true},
+		{name: "option-like argument", url: "--help", wantErr: true},
+		{name: "unsupported scheme", url: "file:///tmp/video.mp4", wantErr: true},
+		{name: "missing scheme", url: "example.test/video", wantErr: true},
+		{name: "missing host", url: "https:///video", wantErr: true},
+		{name: "malformed escape", url: "https://example.test/%zz", wantErr: true},
+		{name: "invalid port", url: "https://example.test:invalid/video", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateYtDlpURL(tt.url)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateYtDlpURL(%q) error = %v, want error: %t", tt.url, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestYtDlpOperationsRejectInvalidUserURLsBeforeRunning(t *testing.T) {
+	service := &YtDlpService{
+		ytdlpPath: filepath.Join(t.TempDir(), "missing-yt-dlp"),
+		settings:  func() config.AppSettings { return config.AppSettings{} },
+	}
+	tests := []struct {
+		name        string
+		wantErrText string
+		run         func() error
+	}{
+		{
+			name:        "analyze",
+			wantErrText: "must not begin with '-'",
+			run: func() error {
+				_, err := service.Analyze(context.Background(), "--help")
+				return err
+			},
+		},
+		{
+			name:        "fetch formats",
+			wantErrText: "must use http or https",
+			run: func() error {
+				_, err := service.FetchFormats(context.Background(), "file:///tmp/video.mp4")
+				return err
+			},
+		},
+		{
+			name:        "download",
+			wantErrText: "must include a host",
+			run: func() error {
+				task := models.NewDownloadTask(models.DownloadRequest{
+					URL:       "https:///missing-host/video",
+					OutputDir: t.TempDir(),
+				})
+				_, err := service.Download(context.Background(), task, nil)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
+				t.Fatalf("operation error = %v, want validation error containing %q", err, tt.wantErrText)
+			}
+		})
+	}
+}
+
 func TestYtDlpDownloadDrainsStdoutAndStderrConcurrently(t *testing.T) {
 	service := testYtDlpHelperService(t)
 	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: t.TempDir()})

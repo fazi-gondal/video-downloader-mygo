@@ -18,6 +18,8 @@ import (
 	"github.com/fazi-gondal/video-downloader-mygo/internal/tools"
 )
 
+const ffprobeDurationTimeout = 5 * time.Second
+
 // FFmpegService locates ffmpeg/ffprobe and runs conversions.
 type FFmpegService struct {
 	ffmpeg     string
@@ -261,9 +263,10 @@ func (s *FFmpegService) probeDuration(ctx context.Context, path string) float64 
 	if s.ffprobe == "" {
 		return 0
 	}
-	cmd := exec.CommandContext(ctx, s.ffprobe, "-v", "error", "-show_entries", "format=duration", // #nosec G204 -- ffprobe receives argv directly without a shell.
+	probeCtx, cancel := context.WithTimeout(ctx, ffprobeDurationTimeout)
+	defer cancel()
+	cmd := s.commandContext(probeCtx, s.ffprobe, "-v", "error", "-show_entries", "format=duration", // #nosec G204 -- ffprobe receives argv directly without a shell.
 		"-of", "default=noprint_wrappers=1:nokey=1", path)
-	prepareBackgroundCmd(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return 0
@@ -532,4 +535,3 @@ func (s *FFmpegService) cacheRemuxDecision(key string, info os.FileInfo, result 
 		result:  result,
 	}
 }
-

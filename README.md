@@ -5,7 +5,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/fazi-gondal/video-downloader-mygo/ci.yml?branch=main&label=CI)](https://github.com/fazi-gondal/video-downloader-mygo/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/fazi-gondal/video-downloader-mygo.svg)](https://pkg.go.dev/github.com/fazi-gondal/video-downloader-mygo)
 
-**Current release:** `v3.1.0`
+**Current release:** `v3.1.1`
 
 Native desktop video downloader built with [Go](https://go.dev/), [MyGo](https://mygo.egoist.dev/), [yt-dlp](https://github.com/yt-dlp/yt-dlp), and [FFmpeg](https://ffmpeg.org/). The application analyzes videos and playlists, lets users choose quality, audio, subtitles, and containers, manages downloads in a queue, converts local media, and stores download history.
 
@@ -34,7 +34,12 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 ### Home and media analysis
 
 - Native MyGo desktop UI with the operating system title bar.
+- MyGo Glass surfaces across the navigation, toolbar, settings cards, and
+  primary panels. The built-in material is rendered on Windows, macOS, and
+  Linux; its translucency lets content beneath each surface show through.
 - URL analysis for individual videos and playlists through yt-dlp.
+- Press **Enter** in the Home URL field to start analysis without clicking the
+  Analyze button.
 - Direct one-click HD downloads for TikTok, Instagram, X/Twitter, and YouTube Shorts. The metadata card provides the download action without a quality picker and without browser cookies.
 - ARY Plus episode and series downloads through the bundled yt-dlp plugin.
 - Video thumbnail loading with bounded, validated image decoding.
@@ -57,6 +62,8 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - Approximate estimates are marked with `~`; container overhead, metadata, thumbnails, subtitles, and remuxing can change the final file size.
 - Download folder picker.
 - Thumbnail and metadata embedding options.
+- Settings sliders for concurrent downloads (1–16) and per-download fragments
+  (1–32); changes take effect after saving.
 
 ### Multiple audio tracks
 
@@ -117,6 +124,8 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 - History search and filters for all, video, audio, and errors.
 - Re-download, open-folder, delete-entry, refresh, and clear-all actions.
 - Settings for download folder, concurrency, fragments, proxy, cookies, rate limiting, headers, subtitles, multi-audio, metadata, thumbnails, VP9, theme, and conversion defaults.
+- Glass-backed settings cards, including discrete performance sliders with
+  current values shown.
 - Light, dark, and system theme choices.
 - About page with project links, technology list, and license information.
 
@@ -285,9 +294,13 @@ endpoint.
 ### 1. Analyze a URL
 
 1. Open the application.
-2. Paste a video or playlist URL into the Home input.
-3. Select **Analyze**.
+2. Paste a valid HTTP(S) video or playlist URL into the Home input.
+3. Press **Enter** or select **Analyze**.
 4. Wait for yt-dlp to return the media metadata.
+
+The app accepts HTTP and HTTPS URLs with a host for yt-dlp analysis and
+downloads. ARY Plus episode and series URLs remain supported through the
+application's dedicated resolver.
 
 For a single video, the result card shows its thumbnail, title, uploader, duration, extractor, available audio tracks, and available subtitles. For a playlist, use **Select all**, **Select none**, or click individual checkboxes. Individual checkbox changes are committed immediately, so the tick remains visible when the list redraws.
 
@@ -443,8 +456,8 @@ The CI job uses the Go version from `go.mod`, does not modify dependencies, and 
 4. Create a matching tag, for example:
 
 ```bash
-git tag v3.1.0
-git push origin v3.1.0
+git tag v3.1.1
+git push origin v3.1.1
 ```
 
 The workflow checks that the tag matches `mygo.json`, downloads platform tools, uses the pinned MyGo CLI, builds Windows and Linux from Ubuntu, builds macOS from macOS, and uploads the generated artifacts to a draft GitHub release.
