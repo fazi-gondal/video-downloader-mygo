@@ -2,10 +2,18 @@ package services
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+func requireAryPlusAPIKey(t *testing.T) {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY")) == "" {
+		t.Skip("ARYPLUS_API_KEY is not configured")
+	}
+}
 
 func TestAryPlusURLMatching(t *testing.T) {
 	tests := []struct {
@@ -86,6 +94,7 @@ func TestSanitizeFilename(t *testing.T) {
 }
 
 func TestResolveAryPlusEpisodeLive(t *testing.T) {
+	requireAryPlusAPIKey(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -113,6 +122,7 @@ func TestResolveAryPlusEpisodeLive(t *testing.T) {
 }
 
 func TestFetchAryPlusSeriesPlaylistLive(t *testing.T) {
+	requireAryPlusAPIKey(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 

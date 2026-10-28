@@ -28,6 +28,11 @@ type TaskEvent struct {
 	Error error
 }
 
+type queuedDownload struct {
+	task       *models.DownloadTask
+	generation uint64
+}
+
 type downloadEngine interface {
 	Download(context.Context, *models.DownloadTask, func(models.ProgressInfo)) (string, error)
 }
@@ -46,7 +51,7 @@ type DownloadManager struct {
 	stopped      bool
 	tasks        map[string]*models.DownloadTask
 	mu           sync.Mutex
-	queue        chan *models.DownloadTask
+	queue        chan queuedDownload
 	events       chan TaskEvent
 	shutdown     chan struct{}
 	resize       chan struct{}
@@ -65,7 +70,7 @@ func NewDownloadManager(engine *YtDlpService, maxWorkers int) *DownloadManager {
 		engine:     engine,
 		maxWorkers: maxWorkers,
 		tasks:      make(map[string]*models.DownloadTask),
-		queue:      make(chan *models.DownloadTask, 256),
+		queue:      make(chan queuedDownload, 256),
 		events:     make(chan TaskEvent, 2048),
 		shutdown:   make(chan struct{}),
 		resize:     make(chan struct{}),
@@ -161,7 +166,7 @@ func (m *DownloadManager) EnqueueContext(ctx context.Context, req models.Downloa
 	m.mu.Unlock()
 
 	select {
-	case m.queue <- task:
+	case m.queue <- queuedDownload{task: task, generation: task.QueueGeneration()}:
 		m.emit(EventTaskQueued, task, nil)
 		m.emit(EventTaskState, task, nil)
 		return task, nil
@@ -249,7 +254,7 @@ func (m *DownloadManager) ResumeContext(ctx context.Context, id string) (*models
 	m.mu.Unlock()
 
 	select {
-	case m.queue <- task:
+	case m.queue <- queuedDownload{task: task, generation: task.QueueGeneration()}:
 		m.emit(EventTaskState, task, nil)
 		return task, nil
 	case <-ctx.Done():
@@ -302,7 +307,7 @@ func (m *DownloadManager) RetryContext(ctx context.Context, id string) (*models.
 	m.mu.Unlock()
 
 	select {
-	case m.queue <- task:
+	case m.queue <- queuedDownload{task: task, generation: task.QueueGeneration()}:
 		m.emit(EventTaskState, task, nil)
 		return task, nil
 	case <-ctx.Done():
@@ -424,8 +429,12 @@ func (m *DownloadManager) worker() {
 			return
 		case <-resize:
 			continue
-		case task := <-m.queue:
+		case item := <-m.queue:
+			task := item.task
 			if task == nil {
+				continue
+			}
+			if task.QueueGeneration() != item.generation {
 				continue
 			}
 			if task.Cancelled() {

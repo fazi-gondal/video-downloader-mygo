@@ -112,8 +112,8 @@ Tool names are:
 The application includes native Go support for ARY Plus (`aryplus.tv`) episode URLs
 and series playlists, including the YouTube and Dailymotion platform redirects.
 Episode metadata, series episodes, and direct HLS stream sources are resolved
-directly via Go HTTP client requests using the standard client API key, with
-optional overrides via `ARYPLUS_API_KEY` and `ARYPLUS_API_BASE`. Direct HLS
+directly via Go HTTP client requests using the runtime-only `ARYPLUS_API_KEY`
+and optional `ARYPLUS_API_BASE`. Direct HLS
 streams are downloaded and merged by the bundled tools without requiring any
 external plugins.
 

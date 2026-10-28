@@ -19,7 +19,6 @@ import (
 
 const (
 	aryPlusDefaultAPIBase = "https://be.aryplus.tv"
-	aryPlusDefaultAPIKey  = "ak_37515186786306625012043079404171"
 )
 
 var (
@@ -65,10 +64,7 @@ func aryPlusAPIBase() string {
 }
 
 func aryPlusAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY")); key != "" {
-		return key
-	}
-	return aryPlusDefaultAPIKey
+	return strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY"))
 }
 
 func aryPlusCallAPI(ctx context.Context, endpoint string, query url.Values) (map[string]any, error) {
@@ -82,7 +78,11 @@ func aryPlusCallAPI(ctx context.Context, endpoint string, query url.Values) (map
 		return nil, fmt.Errorf("create ARY Plus request: %w", err)
 	}
 
-	req.Header.Set("x-api-key", aryPlusAPIKey())
+	apiKey := aryPlusAPIKey()
+	if apiKey == "" {
+		return nil, errors.New("ARYPLUS_API_KEY is not configured")
+	}
+	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("Referer", "https://aryplus.tv/")
 	req.Header.Set("Origin", "https://aryplus.tv")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")

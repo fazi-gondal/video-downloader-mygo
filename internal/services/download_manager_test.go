@@ -34,6 +34,26 @@ type pauseDownloadEngine struct {
 	runs    atomic.Int32
 }
 
+type pendingResumeDownloadEngine struct {
+	firstStarted chan struct{}
+	release      chan struct{}
+	secondRuns   atomic.Int32
+}
+
+func (e *pendingResumeDownloadEngine) Download(_ context.Context, task *models.DownloadTask, _ func(models.ProgressInfo)) (string, error) {
+	if task.Request.URL == "first" {
+		select {
+		case <-e.firstStarted:
+		default:
+			close(e.firstStarted)
+		}
+		<-e.release
+		return "first.mp4", nil
+	}
+	e.secondRuns.Add(1)
+	return "second.mp4", nil
+}
+
 func (e *pauseDownloadEngine) Download(ctx context.Context, _ *models.DownloadTask, onProgress func(models.ProgressInfo)) (string, error) {
 	run := e.runs.Add(1)
 	select {
@@ -235,6 +255,52 @@ func TestDownloadManagerPauseAndResume(t *testing.T) {
 		t.Fatalf("engine runs = %d, want at least 2", engine.runs.Load())
 	}
 	manager.Shutdown()
+}
+
+func TestDownloadManagerDoesNotRunStalePausedQueueEntry(t *testing.T) {
+	engine := &pendingResumeDownloadEngine{
+		firstStarted: make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	manager := NewDownloadManager(&YtDlpService{}, 1)
+	manager.engine = engine
+	defer manager.Shutdown()
+
+	if _, err := manager.EnqueueContext(context.Background(), models.DownloadRequest{URL: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-engine.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first task did not start")
+	}
+	second, err := manager.EnqueueContext(context.Background(), models.DownloadRequest{URL: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Pause(second.ID)
+	deadline := time.Now().Add(time.Second)
+	for second.StateValue() != models.StatePaused && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if second.StateValue() != models.StatePaused {
+		t.Fatalf("second state after pause = %q, want paused", second.StateValue())
+	}
+	if _, err := manager.ResumeContext(context.Background(), second.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(engine.release)
+
+	deadline = time.Now().Add(time.Second)
+	for second.StateValue() != models.StateCompleted && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if second.StateValue() != models.StateCompleted {
+		t.Fatalf("second state after resume = %q, want completed", second.StateValue())
+	}
+	if got := engine.secondRuns.Load(); got != 1 {
+		t.Fatalf("second task engine runs = %d, want 1", got)
+	}
 }
 
 func TestDownloadManagerResizesWorkerPool(t *testing.T) {

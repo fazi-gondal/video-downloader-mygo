@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -435,7 +436,7 @@ func promoteStagedDownload(stagingDir, outputDir, selectedPath string) (string, 
 		if err != nil {
 			return err
 		}
-		destination := filepath.Join(outputDir, rel)
+		destination := uniquePromotedPath(filepath.Join(outputDir, rel))
 		if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
 			return err
 		}
@@ -451,6 +452,28 @@ func promoteStagedDownload(stagingDir, outputDir, selectedPath string) (string, 
 		return "", fmt.Errorf("finalize yt-dlp output: %w", err)
 	}
 	return promotedPath, nil
+}
+
+func uniquePromotedPath(path string) string {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return path
+	} else if err != nil {
+		return path
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return path
+	}
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(filepath.Base(path), ext)
+	dir := filepath.Dir(path)
+	for index := 2; ; index++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, index, ext))
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate
+		} else if err != nil {
+			return path
+		}
+	}
 }
 
 func relativeStagingPath(stagingDir, path string) (string, bool) {

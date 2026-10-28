@@ -145,10 +145,11 @@ type DownloadTask struct {
 	StartedAt   *time.Time
 	FinishedAt  *time.Time
 
-	cancelCh       chan struct{}
-	pauseRequested bool
-	stagingDir     string
-	mu             sync.Mutex
+	cancelCh        chan struct{}
+	pauseRequested  bool
+	stagingDir      string
+	queueGeneration uint64
+	mu              sync.Mutex
 }
 
 // DownloadTaskSnapshot is an immutable view of a task suitable for UI and
@@ -307,6 +308,7 @@ func (t *DownloadTask) ResetForRetry() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.cancelCh = make(chan struct{})
+	t.queueGeneration++
 	t.pauseRequested = false
 	t.Error = ""
 	t.ErrorDetail = ""
@@ -323,11 +325,21 @@ func (t *DownloadTask) ResetForResume() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.cancelCh = make(chan struct{})
+	t.queueGeneration++
 	t.pauseRequested = false
 	t.Error = ""
 	t.ErrorDetail = ""
 	t.FinishedAt = nil
 	t.State = StatePending
+}
+
+// QueueGeneration identifies the current enqueue attempt. A paused or retried
+// task can leave an older item in the bounded channel; workers discard that
+// stale item instead of running the task twice.
+func (t *DownloadTask) QueueGeneration() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.queueGeneration
 }
 
 func (t *DownloadTask) SetState(s DownloadState) {

@@ -325,7 +325,7 @@ func (a *App) pumpDownloadEvents() {
 				if a.history != nil {
 					a.historyLoaded = false
 				}
-				if a.playlistActive {
+				if a.playlistActive && task.Request.PlaylistTitle != "" {
 					if task.State == models.StateCompleted {
 						a.playlistDone++
 					} else {
@@ -1252,12 +1252,18 @@ func (a *App) startDownload() {
 		return
 	}
 	req := a.buildRequest(mediaURL(a.currentMedia), a.currentMedia.Title, a.currentMedia.Thumbnail, "", 0)
-	if task := a.manager.Enqueue(req); task == nil {
-		a.showToast("Could not queue download: download manager is shut down")
-		return
-	}
 	a.page = PageDownloads
-	a.showToast("Queued: " + a.currentMedia.Title)
+	a.showToast("Queueing: " + a.currentMedia.Title)
+	go func() {
+		_, err := a.manager.EnqueueContext(context.Background(), req)
+		a.updateOnMain(func() {
+			if err != nil {
+				a.showToast("Could not queue download: " + err.Error())
+				return
+			}
+			a.showToast("Queued: " + req.Title)
+		})
+	}()
 }
 
 func (a *App) isDirectHDMedia() bool {
@@ -1269,12 +1275,18 @@ func (a *App) startDirectHDDownload() {
 		return
 	}
 	req := a.buildDirectHDRequest()
-	if task := a.manager.Enqueue(req); task == nil {
-		a.showToast("Could not queue download: download manager is shut down")
-		return
-	}
 	a.page = PageDownloads
-	a.showToast("Queued HD download: " + req.Title)
+	a.showToast("Queueing HD download: " + req.Title)
+	go func() {
+		_, err := a.manager.EnqueueContext(context.Background(), req)
+		a.updateOnMain(func() {
+			if err != nil {
+				a.showToast("Could not queue download: " + err.Error())
+				return
+			}
+			a.showToast("Queued HD download: " + req.Title)
+		})
+	}()
 }
 
 func (a *App) buildDirectHDRequest() models.DownloadRequest {
@@ -1309,26 +1321,44 @@ func (a *App) startPlaylistDownloads() {
 	if a.currentPlaylist == nil {
 		return
 	}
-	n := 0
+	requests := make([]models.DownloadRequest, 0, len(a.currentPlaylist.Entries))
 	for i, ent := range a.currentPlaylist.Entries {
 		if !a.selectedEntries[i] || ent.URL == "" {
 			continue
 		}
-		req := a.buildRequest(ent.URL, ent.Title, ent.Thumbnail, a.currentPlaylist.Title, ent.Index)
-		if a.manager.Enqueue(req) != nil {
-			n++
-		}
+		requests = append(requests, a.buildRequest(ent.URL, ent.Title, ent.Thumbnail, a.currentPlaylist.Title, ent.Index))
 	}
-	if n == 0 {
+	if len(requests) == 0 {
 		a.showToast("No videos selected")
 		return
 	}
-	a.playlistQueued = n
+	a.playlistQueued = len(requests)
 	a.playlistDone = 0
 	a.playlistFailed = 0
 	a.playlistActive = true
 	a.page = PageDownloads
-	a.showToast(fmt.Sprintf("Queued %d videos", n))
+	a.showToast(fmt.Sprintf("Queueing %d videos", len(requests)))
+	go func() {
+		for _, req := range requests {
+			_, err := a.manager.EnqueueContext(context.Background(), req)
+			if err != nil {
+				a.updateOnMain(func() {
+					a.playlistFailed++
+					if a.playlistDone+a.playlistFailed >= a.playlistQueued {
+						a.playlistActive = false
+					}
+					a.showToast("Could not queue playlist item: " + err.Error())
+				})
+			}
+		}
+		a.updateOnMain(func() {
+			if a.playlistDone+a.playlistFailed >= a.playlistQueued {
+				a.playlistActive = false
+			} else {
+				a.showToast(fmt.Sprintf("Queued %d videos", a.playlistQueued-a.playlistFailed))
+			}
+		})
+	}()
 }
 
 func (a *App) containerSelectionLocked() bool {
@@ -2151,9 +2181,17 @@ func (a *App) converterPage(c *ui.Context) {
 						}
 					}
 					settings := a.settingsDraftSnapshot()
-					if a.conv.Enqueue(models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, AudioBitrateKbps: a.convAudioBitrateKbps, KeepOriginal: settings.KeepOriginals}) == nil {
-						a.showToast("Could not queue conversion: conversion service is shut down")
-					}
+					req := models.ConversionRequest{Source: src, TargetFormat: a.convFormat, Kind: a.convKind, Mode: mode, AudioBitrateKbps: a.convAudioBitrateKbps, KeepOriginal: settings.KeepOriginals}
+					go func() {
+						_, err := a.conv.EnqueueContext(context.Background(), req)
+						a.updateOnMain(func() {
+							if err != nil {
+								a.showToast("Could not queue conversion: " + err.Error())
+								return
+							}
+							a.showToast("Queued conversion: " + filepath.Base(req.Source))
+						})
+					}()
 				}
 			})
 			ui.Column(c).Grow(5).Background(t.Surface).Border(1, t.Border).Padding(14).Radius(14).Gap(8).Children(func() {
@@ -2332,12 +2370,19 @@ func (a *App) historyPage(c *ui.Context) {
 				}
 				if e.URL != "" && ui.Button(c.Key("hist-redo-"+e.ID), "Download again").Clicked() {
 					settings := a.settingsDraftSnapshot()
-					if a.manager.Enqueue(models.DownloadRequest{URL: e.URL, Title: e.Title, Mode: historyMode(e.Mode), OutputDir: settings.DownloadDir, Container: e.Container, AudioFormat: e.AudioFmt}) == nil {
-						a.showToast("Could not queue download: download manager is shut down")
-						return
-					}
+					req := models.DownloadRequest{URL: e.URL, Title: e.Title, Mode: historyMode(e.Mode), OutputDir: settings.DownloadDir, Container: e.Container, AudioFormat: e.AudioFmt}
 					a.page = PageDownloads
-					a.showToast("Queued: " + e.Title)
+					a.showToast("Queueing: " + e.Title)
+					go func() {
+						_, err := a.manager.EnqueueContext(context.Background(), req)
+						a.updateOnMain(func() {
+							if err != nil {
+								a.showToast("Could not queue download: " + err.Error())
+								return
+							}
+							a.showToast("Queued: " + req.Title)
+						})
+					}()
 				}
 				if ui.Button(c.Key("hist-delete-"+e.ID), "Delete").Clicked() {
 					if err := a.history.Delete(e.ID); err != nil {

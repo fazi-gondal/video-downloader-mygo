@@ -126,7 +126,7 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 
 - Go **1.27.3** or a compatible Go 1.27 toolchain. The version is declared in `go.mod`.
 - Git.
-- MyGo CLI **v0.6.4**, pinned as a Go tool in `go.mod`.
+- MyGo CLI **v0.7.1**, pinned as a Go tool in `go.mod`.
 - A C compiler is not required for normal MyGo builds; CI sets `CGO_ENABLED=0`.
 
 ### Runtime requirements
@@ -276,8 +276,8 @@ Runtime lookup order is:
 
 The bundled ARY Plus extractor supports aryplus.tv episode URLs and series
 playlists, multi-quality HLS streams up to 4K, thumbnails, and DRM checks.
-Optionally, set `ARYPLUS_API_KEY` or `ARYPLUS_API_BASE` in the environment
-to override the default client API configuration.
+Set `ARYPLUS_API_KEY` in the environment for ARY Plus API access. You may set
+`ARYPLUS_API_BASE` to use a compatible API endpoint. Never commit the API key.
 
 ## Using the application
 

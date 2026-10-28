@@ -527,6 +527,57 @@ func TestDownloadOutputTemplatesDoNotContainVideoIDs(t *testing.T) {
 	}
 }
 
+func TestPlaylistOutputUsesSanitizedTitleFolderAndIndex(t *testing.T) {
+	req := models.DownloadRequest{
+		URL:           "https://www.youtube.com/watch?v=abc",
+		Mode:          models.ModeVideoAudio,
+		Container:     "mp4",
+		PlaylistTitle: `My: Playlist/2026`,
+		PlaylistIndex: 7,
+		OutputDir:     t.TempDir(),
+	}
+	output := argumentValue(testYtDlpService().buildDownloadArgs(req), "-o")
+	want := filepath.Join(req.OutputDir, "My_ Playlist_2026", "07 - %(title).150B.%(ext)s")
+	if output != want {
+		t.Fatalf("playlist output template = %q, want %q", output, want)
+	}
+}
+
+func TestPromoteStagedDownloadAvoidsExistingTitleCollision(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	output := filepath.Join(root, "output")
+	if err := os.MkdirAll(staging, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(output, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(output, "Same title.mp4")
+	if err := os.WriteFile(existing, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(staging, "Same title.mp4")
+	if err := os.WriteFile(staged, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := promoteStagedDownload(staging, output, staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(output, "Same title (2).mp4")
+	if got != want {
+		t.Fatalf("promoted path = %q, want %q", got, want)
+	}
+	if data, err := os.ReadFile(existing); err != nil || string(data) != "old" {
+		t.Fatalf("existing output was changed: data=%q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(want); err != nil || string(data) != "new" {
+		t.Fatalf("new output = %q err=%v, want new content", data, err)
+	}
+}
+
 func TestSocialDownloadUsesBestVideoAudioWithoutCookies(t *testing.T) {
 	service := &YtDlpService{settings: func() config.AppSettings {
 		return config.AppSettings{CookiesBrowser: "chrome"}
@@ -1171,6 +1222,9 @@ func hasArgument(args []string, want string) bool {
 }
 
 func TestAryPlusExtraction(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY")) == "" {
+		t.Skip("ARYPLUS_API_KEY is not configured")
+	}
 	yt := tools.YtDlp()
 	if yt == "" {
 		t.Skip("yt-dlp binary not found")
