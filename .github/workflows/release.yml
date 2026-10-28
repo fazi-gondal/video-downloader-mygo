@@ -113,7 +113,7 @@ jobs:
           assets=()
           while IFS= read -r -d '' file; do
             case "$file" in
-              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage)
+              *.exe|*.dmg|*.zip|*.tar.gz|*.deb|*.AppImage|*/install.sh|install.sh)
                 assets+=("$file")
                 ;;
             esac

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -35,6 +36,8 @@ const (
 	maxYtDlpDiagnosticBytes = 1 << 20
 	progressEmitInterval    = 250 * time.Millisecond
 )
+
+var errPromotedPathExists = errors.New("promoted output path already exists")
 
 type boundedDiagnosticBuffer struct {
 	buf       bytes.Buffer
@@ -435,11 +438,8 @@ func promoteStagedDownload(stagingDir, outputDir, selectedPath string) (string, 
 		if err != nil {
 			return err
 		}
-		destination := filepath.Join(outputDir, rel)
-		if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
-			return err
-		}
-		if err := moveStagedFile(path, destination); err != nil {
+		destination, err := promoteStagedFile(path, filepath.Join(outputDir, rel))
+		if err != nil {
 			return err
 		}
 		if selectedRel != "" && rel == selectedRel {
@@ -451,6 +451,45 @@ func promoteStagedDownload(stagingDir, outputDir, selectedPath string) (string, 
 		return "", fmt.Errorf("finalize yt-dlp output: %w", err)
 	}
 	return promotedPath, nil
+}
+
+func promoteStagedFile(source, path string) (string, error) {
+	for {
+		destination, err := uniquePromotedPath(path)
+		if err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
+			return "", err
+		}
+		err = moveStagedFile(source, destination)
+		if errors.Is(err, errPromotedPathExists) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return destination, nil
+	}
+}
+
+func uniquePromotedPath(path string) (string, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return path, nil
+	} else if err != nil {
+		return "", fmt.Errorf("check promoted output path %q: %w", path, err)
+	}
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(filepath.Base(path), ext)
+	dir := filepath.Dir(path)
+	for index := 2; ; index++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, index, ext))
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("check promoted output path %q: %w", candidate, err)
+		}
+	}
 }
 
 func relativeStagingPath(stagingDir, path string) (string, bool) {
@@ -469,13 +508,8 @@ func moveStagedFile(source, destination string) error {
 	if err != nil {
 		return err
 	}
-	if info, err := os.Stat(destination); err == nil {
-		if info.IsDir() {
-			return fmt.Errorf("destination %q is a directory", destination)
-		}
-		// yt-dlp normally skips an existing output. Preserve that behavior
-		// while removing the duplicate staged file.
-		return os.Remove(source)
+	if _, err := os.Stat(destination); err == nil {
+		return errPromotedPathExists
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -485,8 +519,8 @@ func moveStagedFile(source, destination string) error {
 	// prevents two concurrent promotions from replacing each other's output.
 	if err := os.Link(source, destination); err == nil {
 		return os.Remove(source)
-	} else if _, statErr := os.Stat(destination); statErr == nil {
-		return os.Remove(source)
+	} else if errors.Is(err, os.ErrExist) {
+		return errPromotedPathExists
 	}
 
 	// Fall back for filesystems without hard-link support while retaining
@@ -498,8 +532,8 @@ func moveStagedFile(source, destination string) error {
 	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, sourceInfo.Mode().Perm()) // #nosec G304 -- destination is derived from a validated staging-relative path.
 	if err != nil {
 		_ = sourceFile.Close()
-		if _, statErr := os.Stat(destination); statErr == nil {
-			return os.Remove(source)
+		if errors.Is(err, os.ErrExist) {
+			return errPromotedPathExists
 		}
 		return err
 	}

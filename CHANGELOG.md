@@ -4,6 +4,14 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-28
+
+### Fixed
+
+- Settings files that omit fields now retain their defaults, including keeping source files after conversion unless the user explicitly disables that option.
+- Playlist completion tracking works for untitled playlists and does not count late task events from earlier batches.
+- Concurrent downloads with the same output name retain distinct files, and output-path lookup errors are reported instead of reusing an existing path.
+
 ## [3.0.0] - 2026-10-27
 
 ### Added

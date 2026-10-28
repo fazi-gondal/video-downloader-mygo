@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -19,6 +20,42 @@ func TestSettingsRepositoryLoadMissingUsesDefaults(t *testing.T) {
 	want := DefaultSettings()
 	if got.DownloadDir != want.DownloadDir || got.MaxConcurrent != want.MaxConcurrent || got.ThemeMode != want.ThemeMode {
 		t.Fatalf("Load() defaults = %#v, want fields from %#v", got, want)
+	}
+}
+
+func TestSettingsRepositoryLoadPartialSettingsPreservesDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"download_dir":"downloads","max_concurrent":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := &SettingsRepository{path: path}
+
+	got, err := repo.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := DefaultSettings()
+	want.DownloadDir = "downloads"
+	want.MaxConcurrent = 2
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Load() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSettingsRepositoryLoadPreservesExplicitFalseValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	data := []byte(`{"download_dir":"downloads","keep_originals":false,"embed_thumbnail":false,"embed_metadata":false,"prefer_vp9_video":false}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := &SettingsRepository{path: path}
+
+	got, err := repo.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.KeepOriginals || got.EmbedThumbnail || got.EmbedMetadata || got.PreferVP9Video {
+		t.Fatalf("Load() changed explicit false values: %#v", got)
 	}
 }
 

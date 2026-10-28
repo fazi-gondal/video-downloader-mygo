@@ -2,7 +2,7 @@
 
 This directory contains shared application assets and optional platform-specific helper executables. MyGo copies the resources that match the target platform into the packaged application.
 
-The application release is currently `v3.0.0`. The application version is defined
+The application release is currently `v3.1.0`. The application version is defined
 in the repository root `mygo.json`; the helper versions below are independent and
 must be changed only when the bundled toolchain is intentionally upgraded.
 
@@ -112,8 +112,8 @@ Tool names are:
 The application includes native Go support for ARY Plus (`aryplus.tv`) episode URLs
 and series playlists, including the YouTube and Dailymotion platform redirects.
 Episode metadata, series episodes, and direct HLS stream sources are resolved
-directly via Go HTTP client requests using the standard client API key, with
-optional overrides via `ARYPLUS_API_KEY` and `ARYPLUS_API_BASE`. Direct HLS
+directly via Go HTTP client requests using the runtime-only `ARYPLUS_API_KEY`
+and optional `ARYPLUS_API_BASE`. Direct HLS
 streams are downloaded and merged by the bundled tools without requiring any
 external plugins.
 

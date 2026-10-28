@@ -5,7 +5,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/fazi-gondal/video-downloader-mygo/ci.yml?branch=main&label=CI)](https://github.com/fazi-gondal/video-downloader-mygo/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/fazi-gondal/video-downloader-mygo.svg)](https://pkg.go.dev/github.com/fazi-gondal/video-downloader-mygo)
 
-**Current release:** `v3.0.0`
+**Current release:** `v3.1.0`
 
 Native desktop video downloader built with [Go](https://go.dev/), [MyGo](https://mygo.egoist.dev/), [yt-dlp](https://github.com/yt-dlp/yt-dlp), and [FFmpeg](https://ffmpeg.org/). The application analyzes videos and playlists, lets users choose quality, audio, subtitles, and containers, manages downloads in a queue, converts local media, and stores download history.
 
@@ -126,7 +126,7 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 
 - Go **1.27.3** or a compatible Go 1.27 toolchain. The version is declared in `go.mod`.
 - Git.
-- MyGo CLI **v0.6.4**, pinned as a Go tool in `go.mod`.
+- MyGo CLI **v0.7.1**, pinned as a Go tool in `go.mod`.
 - A C compiler is not required for normal MyGo builds; CI sets `CGO_ENABLED=0`.
 
 ### Runtime requirements
@@ -276,8 +276,8 @@ Runtime lookup order is:
 
 The bundled ARY Plus extractor supports aryplus.tv episode URLs and series
 playlists, multi-quality HLS streams up to 4K, thumbnails, and DRM checks.
-Optionally, set `ARYPLUS_API_KEY` or `ARYPLUS_API_BASE` in the environment
-to override the default client API configuration.
+Set `ARYPLUS_API_KEY` in the environment for ARY Plus API access. You may set
+`ARYPLUS_API_BASE` to use a compatible API endpoint. Never commit the API key.
 
 ## Using the application
 
@@ -442,8 +442,8 @@ The CI job uses the Go version from `go.mod`, does not modify dependencies, and 
 4. Create a matching tag, for example:
 
 ```bash
-git tag v3.0.0
-git push origin v3.0.0
+git tag v3.1.0
+git push origin v3.1.0
 ```
 
 The workflow checks that the tag matches `mygo.json`, downloads platform tools, uses the pinned MyGo CLI, builds Windows and Linux from Ubuntu, builds macOS from macOS, and uploads the generated artifacts to a draft GitHub release.

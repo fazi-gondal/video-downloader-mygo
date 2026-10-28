@@ -527,6 +527,144 @@ func TestDownloadOutputTemplatesDoNotContainVideoIDs(t *testing.T) {
 	}
 }
 
+func TestPlaylistOutputUsesSanitizedTitleFolderAndIndex(t *testing.T) {
+	req := models.DownloadRequest{
+		URL:           "https://www.youtube.com/watch?v=abc",
+		Mode:          models.ModeVideoAudio,
+		Container:     "mp4",
+		PlaylistTitle: `My: Playlist/2026`,
+		PlaylistIndex: 7,
+		OutputDir:     t.TempDir(),
+	}
+	output := argumentValue(testYtDlpService().buildDownloadArgs(req), "-o")
+	want := filepath.Join(req.OutputDir, "My_ Playlist_2026", "07 - %(title).150B.%(ext)s")
+	if output != want {
+		t.Fatalf("playlist output template = %q, want %q", output, want)
+	}
+}
+
+func TestPromoteStagedDownloadAvoidsExistingTitleCollision(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	output := filepath.Join(root, "output")
+	if err := os.MkdirAll(staging, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(output, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(output, "Same title.mp4")
+	if err := os.WriteFile(existing, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(staging, "Same title.mp4")
+	if err := os.WriteFile(staged, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := promoteStagedDownload(staging, output, staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(output, "Same title (2).mp4")
+	if got != want {
+		t.Fatalf("promoted path = %q, want %q", got, want)
+	}
+	if data, err := os.ReadFile(existing); err != nil || string(data) != "old" {
+		t.Fatalf("existing output was changed: data=%q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(want); err != nil || string(data) != "new" {
+		t.Fatalf("new output = %q err=%v, want new content", data, err)
+	}
+}
+
+func TestPromoteStagedDownloadConcurrentSameNameCreatesDistinctOutputs(t *testing.T) {
+	const count = 16
+	root := t.TempDir()
+	output := filepath.Join(root, "output")
+	if err := os.MkdirAll(output, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		path    string
+		payload string
+		err     error
+	}
+	results := make([]result, count)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(count)
+	for i := range count {
+		staging := filepath.Join(root, fmt.Sprintf("staging-%d", i))
+		if err := os.MkdirAll(staging, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		source := filepath.Join(staging, "Same title.mp4")
+		payload := fmt.Sprintf("payload-%d", i)
+		if err := os.WriteFile(source, []byte(payload), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		go func(i int, staging, source, payload string) {
+			defer wg.Done()
+			<-start
+			path, err := promoteStagedDownload(staging, output, source)
+			results[i] = result{path: path, payload: payload, err: err}
+		}(i, staging, source, payload)
+	}
+	close(start)
+	wg.Wait()
+
+	paths := make(map[string]bool, count)
+	for _, result := range results {
+		if result.err != nil {
+			t.Fatalf("promoteStagedDownload() error = %v", result.err)
+		}
+		if paths[result.path] {
+			t.Fatalf("multiple promotions reported the same output path %q", result.path)
+		}
+		paths[result.path] = true
+		data, err := os.ReadFile(result.path)
+		if err != nil {
+			t.Fatalf("read promoted output %q: %v", result.path, err)
+		}
+		if string(data) != result.payload {
+			t.Fatalf("output %q = %q, want %q", result.path, data, result.payload)
+		}
+	}
+}
+
+func TestUniquePromotedPathPropagatesLookupErrors(t *testing.T) {
+	_, err := uniquePromotedPath(filepath.Join(t.TempDir(), "bad\x00name.mp4"))
+	if err == nil {
+		t.Fatal("uniquePromotedPath() error = nil, want path lookup error")
+	}
+}
+
+func TestMoveStagedFileKeepsSourceWhenDestinationExists(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "staged.mp4")
+	destination := filepath.Join(root, "output.mp4")
+	if err := os.WriteFile(source, []byte("staged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := moveStagedFile(source, destination)
+	if !errors.Is(err, errPromotedPathExists) {
+		t.Fatalf("moveStagedFile() error = %v, want occupied destination error", err)
+	}
+	if data, err := os.ReadFile(source); err != nil || string(data) != "staged" {
+		t.Fatalf("staged source after collision = %q, err=%v; want source retained", data, err)
+	}
+	if data, err := os.ReadFile(destination); err != nil || string(data) != "existing" {
+		t.Fatalf("existing destination after collision = %q, err=%v; want unchanged", data, err)
+	}
+}
+
 func TestSocialDownloadUsesBestVideoAudioWithoutCookies(t *testing.T) {
 	service := &YtDlpService{settings: func() config.AppSettings {
 		return config.AppSettings{CookiesBrowser: "chrome"}
@@ -1171,6 +1309,9 @@ func hasArgument(args []string, want string) bool {
 }
 
 func TestAryPlusExtraction(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY")) == "" {
+		t.Skip("ARYPLUS_API_KEY is not configured")
+	}
 	yt := tools.YtDlp()
 	if yt == "" {
 		t.Skip("yt-dlp binary not found")
