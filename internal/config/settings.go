@@ -107,11 +107,11 @@ func (r *SettingsRepository) Load() (AppSettings, error) {
 			return DefaultSettings(), fmt.Errorf("secure settings permissions: %w", err)
 		}
 	}
-	var s AppSettings
+	s := DefaultSettings()
 	if err := json.Unmarshal(data, &s); err != nil {
 		return DefaultSettings(), fmt.Errorf("decode settings: %w", err)
 	}
-	// Fill defaults for missing fields
+	// Preserve legacy normalization for explicitly invalid values.
 	def := DefaultSettings()
 	if s.DownloadDir == "" {
 		s.DownloadDir = def.DownloadDir
