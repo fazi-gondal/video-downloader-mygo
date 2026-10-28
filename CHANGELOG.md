@@ -8,6 +8,8 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ### Fixed
 
+- ARY Plus downloads use the built-in public client key when no environment override is set.
+- Pasting a link and pressing Enter now starts analysis from the URL field.
 - Settings files that omit fields now retain their defaults, including keeping source files after conversion unless the user explicitly disables that option.
 - Playlist completion tracking works for untitled playlists and does not count late task events from earlier batches.
 - Concurrent downloads with the same output name retain distinct files, and output-path lookup errors are reported instead of reusing an existing path.

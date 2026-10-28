@@ -561,32 +561,39 @@ func (a *App) dashboardSearch(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).FillWidth().MaxWidth(720).Background(t.Surface).Border(1, t.Border).Radius(12).Padding(6, 8).Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Icon(c, appui.IconLink).FontSize(18).TextColor(t.TextMuted).Width(20)
-		ui.TextInput(c, &a.urlInput).Placeholder("Paste video or playlist URL…").Grow(1)
+		ui.TextInput(c, &a.urlInput).Label("Video URL").Placeholder("Paste video or playlist URL…").Grow(1).OnSubmit(a.startAnalyze)
 		btn := ui.PrimaryButton(c, "Analyze")
 		if a.analyzing {
 			btn.Disabled(true)
 		}
 		if btn.Clicked() && !a.analyzing {
-			a.analyzing = true
-			a.analyzeError = ""
-			a.currentMedia = nil
-			a.currentPlaylist = nil
-			a.selectedEntries = map[int]bool{}
-			a.selectedAudio = map[string]*bool{}
-			a.selectedSubtitle = map[string]*bool{}
-			a.selectedVideoFormat = ""
-			a.selectedAudioFormat = ""
-			a.selectedVideoLabel = "Auto (best for resolution)"
-			a.selectedAudioLabel = "Auto (Opus / best)"
-			a.videoFmtLabels = nil
-			a.videoFmtIDs = nil
-			a.audioFmtLabels = nil
-			a.audioFmtIDs = nil
-			a.formatsOpen = false
-			a.invalidate()
-			go a.doAnalyze(strings.TrimSpace(a.urlInput))
+			a.startAnalyze()
 		}
 	})
+}
+
+func (a *App) startAnalyze() {
+	if a.analyzing {
+		return
+	}
+	a.analyzing = true
+	a.analyzeError = ""
+	a.currentMedia = nil
+	a.currentPlaylist = nil
+	a.selectedEntries = map[int]bool{}
+	a.selectedAudio = map[string]*bool{}
+	a.selectedSubtitle = map[string]*bool{}
+	a.selectedVideoFormat = ""
+	a.selectedAudioFormat = ""
+	a.selectedVideoLabel = "Auto (best for resolution)"
+	a.selectedAudioLabel = "Auto (Opus / best)"
+	a.videoFmtLabels = nil
+	a.videoFmtIDs = nil
+	a.audioFmtLabels = nil
+	a.audioFmtIDs = nil
+	a.formatsOpen = false
+	a.invalidate()
+	go a.doAnalyze(strings.TrimSpace(a.urlInput))
 }
 
 func (a *App) thumbnailElement(c *ui.Context, url string, width, height float32, fallback *ui.SVG) ui.Element {

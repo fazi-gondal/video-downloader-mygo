@@ -10,8 +10,8 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 - FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
 - A supported yt-dlp JavaScript runtime such as Deno on `PATH` for extractor
   workflows that require one; it is not bundled by the current release.
-- `ARYPLUS_API_KEY` when downloading from ARY Plus through the native extractor.
-  The key is runtime-only and must not be stored in the repository.
+- ARY Plus uses the built-in public client key. `ARYPLUS_API_KEY` can override
+  it at runtime, and `ARYPLUS_API_BASE` can select a compatible API endpoint.
 - TikTok, Instagram, X/Twitter, and YouTube Shorts downloads do not require a
   cookies file or browser-cookie configuration. The direct flow uses yt-dlp's
   best available video/audio selection and does not expose manual quality

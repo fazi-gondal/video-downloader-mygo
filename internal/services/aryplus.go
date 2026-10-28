@@ -19,6 +19,7 @@ import (
 
 const (
 	aryPlusDefaultAPIBase = "https://be.aryplus.tv"
+	aryPlusDefaultAPIKey  = "ak_37515186786306625012043079404171"
 )
 
 var (
@@ -64,7 +65,10 @@ func aryPlusAPIBase() string {
 }
 
 func aryPlusAPIKey() string {
-	return strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY"))
+	if key := strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY")); key != "" {
+		return key
+	}
+	return aryPlusDefaultAPIKey
 }
 
 func aryPlusCallAPI(ctx context.Context, endpoint string, query url.Values) (map[string]any, error) {
