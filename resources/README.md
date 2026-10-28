@@ -2,7 +2,7 @@
 
 This directory contains shared application assets and optional platform-specific helper executables. MyGo copies the resources that match the target platform into the packaged application.
 
-The application release is currently `v3.0.0`. The application version is defined
+The application release is currently `v3.1.0`. The application version is defined
 in the repository root `mygo.json`; the helper versions below are independent and
 must be changed only when the bundled toolchain is intentionally upgraded.
 

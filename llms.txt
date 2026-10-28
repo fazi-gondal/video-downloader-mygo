@@ -2,7 +2,7 @@
 
 Video Downloader for MyGo is a native Go desktop application for downloading and converting media through yt-dlp and FFmpeg. It is a rewrite of https://github.com/fazi-gondal/Video-Downloader.
 
-Current release: `v3.0.0`.
+Current release: `v3.1.0`.
 
 ## Stack
 
