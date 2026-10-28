@@ -75,9 +75,9 @@ bash -n scripts/fetch-tools.sh
 
 The application version is defined in `mygo.json`. For the current release:
 
-- Application metadata version: `3.1.0`.
-- Release tag: `v3.1.0`.
-- About page version: `v3.1.0`.
+- Application metadata version: `3.1.1`.
+- Release tag: `v3.1.1`.
+- About page version: `v3.1.1`.
 - Release notes: `CHANGELOG.md`.
 
 Before creating a release tag, run the verification and packaging checks in

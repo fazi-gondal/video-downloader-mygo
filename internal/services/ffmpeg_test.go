@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
@@ -25,6 +26,36 @@ func TestFFmpegHelperProcess(t *testing.T) {
 	}
 	fmt.Fprintln(os.Stdout, "out_time_ms=1000")
 	os.Exit(0)
+}
+
+func TestFFprobeDurationHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_FFPROBE_DURATION_HELPER") != "1" {
+		return
+	}
+	time.Sleep(8 * time.Second)
+}
+
+func TestProbeDurationTimesOut(t *testing.T) {
+	service := &FFmpegService{ffprobe: "fake-ffprobe"}
+	service.command = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestFFprobeDurationHelperProcess$")
+		cmd.Env = append(os.Environ(), "GO_WANT_FFPROBE_DURATION_HELPER=1")
+		return cmd
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+	defer cancel()
+	started := time.Now()
+	if got := service.probeDuration(ctx, "source.mp4"); got != 0 {
+		t.Fatalf("probeDuration() = %v, want zero after probe timeout", got)
+	}
+	elapsed := time.Since(started)
+	if elapsed < ffprobeDurationTimeout-100*time.Millisecond {
+		t.Fatalf("probeDuration() returned after %v, want it to wait for its timeout of %v", elapsed, ffprobeDurationTimeout)
+	}
+	if elapsed > 6*time.Second {
+		t.Fatalf("probeDuration() took %v, want it to stop near its %v timeout", elapsed, ffprobeDurationTimeout)
+	}
 }
 
 func TestConvertCancellationPreservesOriginalFile(t *testing.T) {

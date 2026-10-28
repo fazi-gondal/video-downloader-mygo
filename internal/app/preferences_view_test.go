@@ -172,3 +172,45 @@ func TestSettingsSnapshotCanBeReadWhileUpdated(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+func TestPerformanceSlidersFollowAppliedSettings(t *testing.T) {
+	a := &App{}
+	settings := config.DefaultSettings()
+	settings.MaxConcurrent = 12
+	settings.ConcurrentFragments = 7
+
+	a.applySettings(settings)
+
+	if a.maxConcurrentSlider != 12 {
+		t.Fatalf("downloads slider = %v, want 12", a.maxConcurrentSlider)
+	}
+	if a.concurrentFragmentsSlider != 7 {
+		t.Fatalf("fragments slider = %v, want 7", a.concurrentFragmentsSlider)
+	}
+
+	settings.MaxConcurrent = 3
+	settings.ConcurrentFragments = 15
+	a.applySettings(settings)
+
+	if a.maxConcurrentSlider != 3 {
+		t.Fatalf("downloads slider after settings update = %v, want 3", a.maxConcurrentSlider)
+	}
+	if a.concurrentFragmentsSlider != 15 {
+		t.Fatalf("fragments slider after settings update = %v, want 15", a.concurrentFragmentsSlider)
+	}
+}
+
+func TestPerformanceSlidersClampLoadedValuesToTheirRanges(t *testing.T) {
+	a := &App{}
+	a.syncPerformanceSliders(config.AppSettings{
+		MaxConcurrent:       0,
+		ConcurrentFragments: 40,
+	})
+
+	if a.maxConcurrentSlider != 1 {
+		t.Fatalf("downloads slider = %v, want lower bound 1", a.maxConcurrentSlider)
+	}
+	if a.concurrentFragmentsSlider != 32 {
+		t.Fatalf("fragments slider = %v, want upper bound 32", a.concurrentFragmentsSlider)
+	}
+}

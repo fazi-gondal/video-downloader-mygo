@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
@@ -136,12 +137,6 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 	a.ensureSettingsDraft()
 	t := c.Theme()
 	page := ui.Scroll(c).Grow(1).Gap(14)
-	maxConcurrent := ui.Local(page, "refined-max-concurrent", func() string {
-		return strconv.Itoa(a.settingsDraft.MaxConcurrent)
-	})
-	concurrentFragments := ui.Local(page, "refined-concurrent-fragments", func() string {
-		return strconv.Itoa(a.settingsDraft.ConcurrentFragments)
-	})
 
 	page.Children(func() {
 		ui.Column(c).Gap(3).Children(func() {
@@ -167,9 +162,9 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			})
 		})
 
-		settingsCard(c, "Performance", "Control parallel downloads without changing the native text inputs.", func() {
-			settingsTextRow(c, "Downloads", maxConcurrent, "1–16")
-			settingsTextRow(c, "Fragments", concurrentFragments, "1–32")
+		settingsCard(c, "Performance", "Choose how many downloads or fragments may run in parallel.", func() {
+			performanceSliderRow(c, "Downloads", "Maximum concurrent downloads", &a.maxConcurrentSlider, 1, 16)
+			performanceSliderRow(c, "Fragments", "Concurrent fragments per download", &a.concurrentFragmentsSlider, 1, 32)
 		})
 
 		settingsCard(c, "Media defaults", "These options are applied to new download requests.", func() {
@@ -218,8 +213,8 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			if ui.PrimaryButton(c, "Save settings").Clicked() {
 				draft := refinedSettingsDraft{
 					settings:       a.settingsDraftSnapshot(),
-					maxConcurrent:  *maxConcurrent,
-					concurrentFrag: *concurrentFragments,
+					maxConcurrent:  strconv.Itoa(int(a.maxConcurrentSlider)),
+					concurrentFrag: strconv.Itoa(int(a.concurrentFragmentsSlider)),
 					rateLimit:      a.settingsRateLimit,
 					headers:        a.settingsHeaders,
 					subtitleLangs:  a.settingsSubtitleLangs,
@@ -252,13 +247,13 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 func (a *App) refinedAboutPage(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).FillWidth().Center().Gap(10).Padding(24, 12).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(700).Material(glass.Glass{Clarity: 0.2}).Border(1, c.Theme().Border).Radius(16).Center().Gap(10).Padding(24, 12).Children(func() {
 			ui.Box(c).Size(72, 72).Background(t.Accent).Radius(22).Center().Children(func() {
 				ui.Icon(c, appui.IconDownload).FontSize(34).TextColor(ui.Color{R: 255, G: 255, B: 255, A: 255})
 			})
 			ui.Text(c, "Video Downloader").FontSize(24).Bold()
 			ui.Text(c, "MyGo native desktop app").FontSize(13).TextColor(t.TextMuted)
-			ui.Text(c, "v3.1.0").FontSize(12).TextColor(t.Accent)
+			ui.Text(c, "v3.1.1").FontSize(12).TextColor(t.Accent)
 			ui.Text(c, "Rewritten from the Flet + Python original by Fazi Gondal.").FontSize(13).TextColor(t.TextMuted).MaxWidth(480)
 
 			ui.Row(c).Gap(8).Wrap().Justify(ui.Center).Children(func() {
@@ -279,7 +274,7 @@ func (a *App) refinedAboutPage(c *ui.Context) {
 
 func settingsCard(c *ui.Context, title, subtitle string, children func()) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Background(t.Surface).Border(1, t.Border).Radius(12).Padding(14, 16).Gap(9).Children(func() {
+	ui.Column(c).FillWidth().Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Radius(12).Padding(14, 16).Gap(9).Children(func() {
 		ui.Text(c, title).FontSize(14).Bold()
 		if subtitle != "" {
 			ui.Text(c, subtitle).FontSize(11).TextColor(t.TextMuted).MaxWidth(680)
@@ -288,11 +283,12 @@ func settingsCard(c *ui.Context, title, subtitle string, children func()) {
 	})
 }
 
-func settingsTextRow(c *ui.Context, label string, value *string, placeholder string) {
+func performanceSliderRow(c *ui.Context, label, accessibleLabel string, value *float64, min, max float64) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Material(glass.Glass{Clarity: 0.45}).Border(1, t.Border).Radius(10).Padding(10, 12).Gap(12).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Width(86)
-		ui.TextInput(c, value).Width(110).Placeholder(placeholder)
+		ui.StepSlider(c, value, min, max, 1).Label(accessibleLabel).Grow(1)
+		ui.Text(c, strconv.Itoa(int(*value))).FontSize(13).Bold().TextColor(t.Accent).Width(28)
 	})
 }
 

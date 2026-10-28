@@ -104,6 +104,9 @@ func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
 	if IsAryPlusURL(url) {
 		return s.analyzeAryPlus(ctx, url)
 	}
+	if err := validateYtDlpURL(url); err != nil {
+		return nil, err
+	}
 	args := s.analyzeArgs(url)
 	out, err := s.run(ctx, args)
 	if err != nil {
@@ -139,6 +142,13 @@ func (s *YtDlpService) FetchFormats(ctx context.Context, url string) (*models.Me
 	if IsAryPlusURL(url) {
 		return s.fetchFormatsAryPlus(ctx, url)
 	}
+	if err := validateYtDlpURL(url); err != nil {
+		return nil, err
+	}
+	return s.fetchFormats(ctx, url)
+}
+
+func (s *YtDlpService) fetchFormats(ctx context.Context, url string) (*models.MediaInfo, error) {
 	args := s.fetchFormatsArgs(url)
 	out, err := s.run(ctx, args)
 	if err != nil {
@@ -170,7 +180,7 @@ func (s *YtDlpService) fetchFormatsAryPlus(ctx context.Context, rawURL string) (
 		return s.FetchFormats(ctx, "https://www.dailymotion.com/video/"+ep.VideoID)
 	}
 
-	media, err := s.FetchFormats(ctx, ep.VideoSource)
+	media, err := s.fetchFormats(ctx, ep.VideoSource)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +201,28 @@ func (s *YtDlpService) fetchFormatsAryPlus(ctx context.Context, rawURL string) (
 	return media, nil
 }
 
+func validateYtDlpURL(rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return errors.New("media URL is empty")
+	}
+	if strings.HasPrefix(rawURL, "-") {
+		return errors.New("media URL must not begin with '-'")
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid media URL: %w", err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return errors.New("media URL must use http or https")
+	}
+	if parsed.Hostname() == "" {
+		return errors.New("media URL must include a host")
+	}
+	return nil
+}
+
 func (s *YtDlpService) fetchFormatsArgs(url string) []string {
 	args := s.baseArgsForURL(url, isCookieFreeURL(url))
 	return append(args,
@@ -209,10 +241,17 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		ctx = context.Background()
 	}
 	req := task.Request
+	req.URL = strings.TrimSpace(req.URL)
+	isAryPlusEpisode := IsAryPlusEpisodeURL(req.URL)
+	if !isAryPlusEpisode {
+		if err := validateYtDlpURL(req.URL); err != nil {
+			return "", err
+		}
+	}
 	if isCookieFreeURL(req.URL) {
 		req.NoCookies = true
 	}
-	if IsAryPlusEpisodeURL(req.URL) {
+	if isAryPlusEpisode {
 		if ep, err := ResolveAryPlusEpisode(ctx, req.URL); err == nil {
 			if ep.PlatformID == "1" {
 				req.URL = "https://www.youtube.com/watch?v=" + ep.VideoID
