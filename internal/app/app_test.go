@@ -474,6 +474,33 @@ func TestPlaylistEntryCheckboxCommitsSelection(t *testing.T) {
 	}
 }
 
+func TestDashboardSearchEnterStartsAnalysis(t *testing.T) {
+	a := &App{
+		urlInput:     " ",
+		analyzeError: "previous error",
+		currentMedia: &models.MediaInfo{},
+	}
+	tester := ui.NewTester(func(c *ui.Context) {
+		a.dashboardSearch(c)
+	}, 800, 80)
+
+	if err := tester.Click("Video URL"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Key(0, ui.KeyEnter)
+	tester.Frame()
+
+	if !a.analyzing {
+		t.Fatal("pressing Enter did not start analysis")
+	}
+	if a.analyzeError != "" {
+		t.Fatalf("analysis error = %q, want cleared error", a.analyzeError)
+	}
+	if a.currentMedia != nil {
+		t.Fatal("starting analysis did not clear the previous media")
+	}
+}
+
 func TestRecordPlaylistTaskTracksUntitledPlaylistEntries(t *testing.T) {
 	a := &App{
 		playlistActive:  true,

@@ -2,6 +2,10 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +16,32 @@ func requireAryPlusAPIKey(t *testing.T) {
 	t.Helper()
 	if strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY")) == "" {
 		t.Skip("ARYPLUS_API_KEY is not configured")
+	}
+}
+
+func TestAryPlusCallAPIUsesDefaultAPIKey(t *testing.T) {
+	var gotAPIKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]bool{"ok": true}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("ARYPLUS_API_BASE", server.URL)
+	t.Setenv("ARYPLUS_API_KEY", "")
+
+	result, err := aryPlusCallAPI(context.Background(), "/test", url.Values{})
+	if err != nil {
+		t.Fatalf("aryPlusCallAPI() error = %v", err)
+	}
+	if result["ok"] != true {
+		t.Errorf("aryPlusCallAPI() result = %v, want ok=true", result)
+	}
+	if gotAPIKey != aryPlusDefaultAPIKey {
+		t.Errorf("x-api-key header was not set to the built-in default")
 	}
 }
 

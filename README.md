@@ -276,8 +276,9 @@ Runtime lookup order is:
 
 The bundled ARY Plus extractor supports aryplus.tv episode URLs and series
 playlists, multi-quality HLS streams up to 4K, thumbnails, and DRM checks.
-Set `ARYPLUS_API_KEY` in the environment for ARY Plus API access. You may set
-`ARYPLUS_API_BASE` to use a compatible API endpoint. Never commit the API key.
+ARY Plus API access uses the built-in public client key; you may override it
+with `ARYPLUS_API_KEY` and set `ARYPLUS_API_BASE` to use a compatible API
+endpoint.
 
 ## Using the application
 
