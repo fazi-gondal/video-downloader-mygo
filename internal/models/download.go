@@ -112,6 +112,7 @@ type DownloadRequest struct {
 	PlaylistIndex int
 
 	// UI-only
+	PlaylistBatchID           uint64
 	ThumbnailURL              string
 	ExpectedSizeBytes         int64
 	ExpectedSizeIsApproximate bool

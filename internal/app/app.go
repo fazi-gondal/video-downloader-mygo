@@ -89,6 +89,7 @@ type App struct {
 
 	playlistQueued, playlistDone, playlistFailed int
 	playlistActive                               bool
+	playlistBatchID                              uint64
 
 	tasksMu sync.Mutex
 	tasks   []models.DownloadTaskSnapshot
@@ -306,6 +307,22 @@ func (a *App) showToast(msg string) {
 	a.invalidate()
 }
 
+func (a *App) recordPlaylistTask(task models.DownloadTaskSnapshot) bool {
+	if !a.playlistActive || task.Request.PlaylistBatchID == 0 || task.Request.PlaylistBatchID != a.playlistBatchID {
+		return false
+	}
+	if task.State == models.StateCompleted {
+		a.playlistDone++
+	} else {
+		a.playlistFailed++
+	}
+	if a.playlistDone+a.playlistFailed >= a.playlistQueued {
+		a.playlistActive = false
+		return true
+	}
+	return false
+}
+
 func (a *App) pumpDownloadEvents() {
 	for ev := range a.manager.Events() {
 		if ev.Task == nil {
@@ -325,16 +342,8 @@ func (a *App) pumpDownloadEvents() {
 				if a.history != nil {
 					a.historyLoaded = false
 				}
-				if a.playlistActive && task.Request.PlaylistTitle != "" {
-					if task.State == models.StateCompleted {
-						a.playlistDone++
-					} else {
-						a.playlistFailed++
-					}
-					if a.playlistDone+a.playlistFailed >= a.playlistQueued {
-						a.playlistActive = false
-						a.showToast(fmt.Sprintf("Playlist done: %d ok, %d failed", a.playlistDone, a.playlistFailed))
-					}
+				if a.recordPlaylistTask(task) {
+					a.showToast(fmt.Sprintf("Playlist done: %d ok, %d failed", a.playlistDone, a.playlistFailed))
 				}
 				if task.State == models.StateCancelled {
 					a.showToast("Download cancelled")
@@ -1332,6 +1341,14 @@ func (a *App) startPlaylistDownloads() {
 		a.showToast("No videos selected")
 		return
 	}
+	a.playlistBatchID++
+	if a.playlistBatchID == 0 {
+		a.playlistBatchID++
+	}
+	batchID := a.playlistBatchID
+	for i := range requests {
+		requests[i].PlaylistBatchID = batchID
+	}
 	a.playlistQueued = len(requests)
 	a.playlistDone = 0
 	a.playlistFailed = 0
@@ -1343,15 +1360,20 @@ func (a *App) startPlaylistDownloads() {
 			_, err := a.manager.EnqueueContext(context.Background(), req)
 			if err != nil {
 				a.updateOnMain(func() {
-					a.playlistFailed++
-					if a.playlistDone+a.playlistFailed >= a.playlistQueued {
-						a.playlistActive = false
+					if a.playlistActive && a.playlistBatchID == batchID {
+						a.playlistFailed++
+						if a.playlistDone+a.playlistFailed >= a.playlistQueued {
+							a.playlistActive = false
+						}
 					}
 					a.showToast("Could not queue playlist item: " + err.Error())
 				})
 			}
 		}
 		a.updateOnMain(func() {
+			if a.playlistBatchID != batchID {
+				return
+			}
 			if a.playlistDone+a.playlistFailed >= a.playlistQueued {
 				a.playlistActive = false
 			} else {

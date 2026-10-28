@@ -474,6 +474,52 @@ func TestPlaylistEntryCheckboxCommitsSelection(t *testing.T) {
 	}
 }
 
+func TestRecordPlaylistTaskTracksUntitledPlaylistEntries(t *testing.T) {
+	a := &App{
+		playlistActive:  true,
+		playlistBatchID: 7,
+		playlistQueued:  2,
+	}
+
+	if complete := a.recordPlaylistTask(models.DownloadTaskSnapshot{
+		Request: models.DownloadRequest{PlaylistBatchID: 7},
+		State:   models.StateCompleted,
+	}); complete {
+		t.Fatal("first task unexpectedly completed the playlist")
+	}
+	if a.playlistDone != 1 || a.playlistFailed != 0 || !a.playlistActive {
+		t.Fatalf("after first task: done=%d failed=%d active=%t, want 1/0/true", a.playlistDone, a.playlistFailed, a.playlistActive)
+	}
+
+	if complete := a.recordPlaylistTask(models.DownloadTaskSnapshot{
+		Request: models.DownloadRequest{PlaylistBatchID: 7},
+		State:   models.StateError,
+	}); !complete {
+		t.Fatal("last task did not complete the playlist")
+	}
+	if a.playlistDone != 1 || a.playlistFailed != 1 || a.playlistActive {
+		t.Fatalf("after final task: done=%d failed=%d active=%t, want 1/1/false", a.playlistDone, a.playlistFailed, a.playlistActive)
+	}
+}
+
+func TestRecordPlaylistTaskIgnoresPreviousBatch(t *testing.T) {
+	a := &App{
+		playlistActive:  true,
+		playlistBatchID: 8,
+		playlistQueued:  1,
+	}
+
+	if complete := a.recordPlaylistTask(models.DownloadTaskSnapshot{
+		Request: models.DownloadRequest{PlaylistBatchID: 7},
+		State:   models.StateCompleted,
+	}); complete {
+		t.Fatal("task from previous batch unexpectedly completed the active playlist")
+	}
+	if a.playlistDone != 0 || a.playlistFailed != 0 || !a.playlistActive {
+		t.Fatalf("previous batch affected active playlist: done=%d failed=%d active=%t", a.playlistDone, a.playlistFailed, a.playlistActive)
+	}
+}
+
 func TestSubtitleLanguagesFiltersUndeterminedAndUnknown(t *testing.T) {
 	media := &models.MediaInfo{
 		Subtitles: map[string][]models.SubtitleTrack{
