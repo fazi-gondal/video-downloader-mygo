@@ -29,6 +29,24 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - [Contributing](#contributing)
 - [License](#license)
 
+### Screenshots
+
+### Main Window & URL Extraction
+| Light Mode | Dark Mode |
+| :---: | :---: |
+| ![home](/resources/home.png) | ![home](/resources/home-dark.png) |
+
+### Download Configuration & Multi-Track Selection
+| History | Multi-Audio & Subtitle Picker |
+| :---: | :---: |
+|![history](/resources/history-dark.png) | ![audio](/resources/audio.png) |
+
+### Format Explorer Table & Settings
+| Format Explorer | Settings & Dependency Inspector |
+| :---: | :---: |
+| ![convert](/resources/convert.png) | ![setting](/resources/setting-dark.png) |
+
+
 ## Features
 
 ### Home and media analysis
