@@ -7,7 +7,7 @@ Current release: `v3.1.1`.
 ## Stack
 
 - Go 1.27.3.
-- MyGo v0.7.1, pinned as `tool github.com/egoist/mygo/cmd/mygo` in `go.mod`.
+- MyGo v0.7.3, pinned as `tool github.com/egoist/mygo/cmd/mygo` in `go.mod`.
 - Native MyGo UI; no web frontend or Bun build.
 - yt-dlp for extraction/downloads.
 - FFmpeg and FFprobe for merge, remux, subtitle embedding, conversion, and probing.

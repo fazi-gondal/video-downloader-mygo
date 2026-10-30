@@ -59,7 +59,7 @@ All notable user-visible changes are recorded here. Release tags use the version
 - The audio-track selector is shown only when analyzed media provides multiple languages.
 - YouTube downloads do not request browser cookies by default; browser-cookie import remains an explicit Network setting.
 - Multiple audio tracks or embedded subtitles automatically require MKV, while format and size estimates account for physical payloads only once.
-- Release packaging uses MyGo v0.7.1 and verified platform-specific yt-dlp and FFmpeg resources.
+- Release packaging uses MyGo v0.7.3 and verified platform-specific yt-dlp and FFmpeg resources.
 
 ### Fixed
 

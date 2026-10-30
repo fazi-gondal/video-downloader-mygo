@@ -6,7 +6,7 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 
 - Go 1.27.3, as declared in `go.mod`.
 - Git.
-- MyGo v0.7.1 through the pinned Go tool in `go.mod`.
+- MyGo v0.7.3 through the pinned Go tool in `go.mod`.
 - FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
 - A supported yt-dlp JavaScript runtime such as Deno on `PATH` for extractor
   workflows that require one; it is not bundled by the current release.
