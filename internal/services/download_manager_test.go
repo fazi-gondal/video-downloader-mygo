@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -255,6 +257,77 @@ func TestDownloadManagerPauseAndResume(t *testing.T) {
 		t.Fatalf("engine runs = %d, want at least 2", engine.runs.Load())
 	}
 	manager.Shutdown()
+}
+
+func TestDownloadManagerPauseAllPreservesRestorablePartial(t *testing.T) {
+	stagingDir := filepath.Join(t.TempDir(), ".mygo-download-partial")
+	if err := os.Mkdir(stagingDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := &pauseDownloadEngine{started: make(chan struct{})}
+	manager := NewDownloadManager(&YtDlpService{}, 1)
+	manager.engine = engine
+	task, err := manager.EnqueueContext(context.Background(), models.DownloadRequest{URL: "https://example.test/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-engine.started:
+	case <-time.After(time.Second):
+		t.Fatal("download did not start")
+	}
+	task.SetStagingDir(stagingDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.PauseAll(ctx); err != nil {
+		t.Fatalf("PauseAll() error = %v", err)
+	}
+	snapshot := task.Snapshot()
+	if snapshot.State != models.StatePaused || snapshot.StagingDir != stagingDir {
+		t.Fatalf("paused snapshot = %q/%q, want paused with staging path %q", snapshot.State, snapshot.StagingDir, stagingDir)
+	}
+
+	manager.Shutdown()
+	if _, err := os.Stat(stagingDir); err != nil {
+		t.Fatalf("staging directory after shutdown = %v, want it preserved", err)
+	}
+
+	restoredManager := NewDownloadManager(&YtDlpService{}, 1)
+	resumeEngine := &pauseDownloadEngine{started: make(chan struct{})}
+	restoredManager.engine = resumeEngine
+	restored := models.RestorePausedDownloadTask(snapshot)
+	if err := restoredManager.RestorePausedTask(restored); err != nil {
+		t.Fatalf("RestorePausedTask() error = %v", err)
+	}
+	if _, err := restoredManager.ResumeContext(context.Background(), restored.ID); err != nil {
+		t.Fatalf("ResumeContext() after restoring task error = %v", err)
+	}
+	select {
+	case <-resumeEngine.started:
+	case <-time.After(time.Second):
+		t.Fatal("restored download did not resume")
+	}
+	restoredManager.Pause(restored.ID)
+	deadline := time.Now().Add(time.Second)
+	for restored.StateValue() != models.StatePaused && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if restored.StateValue() != models.StatePaused {
+		t.Fatalf("restored task state after second pause = %q, want paused", restored.StateValue())
+	}
+	if _, err := restoredManager.ResumeContext(context.Background(), restored.ID); err != nil {
+		t.Fatalf("second ResumeContext() error = %v", err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for restored.StateValue() != models.StateCompleted && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if restored.StateValue() != models.StateCompleted {
+		t.Fatalf("restored task state after completion = %q, want completed", restored.StateValue())
+	}
+	restoredManager.Shutdown()
 }
 
 func TestDownloadManagerDoesNotRunStalePausedQueueEntry(t *testing.T) {

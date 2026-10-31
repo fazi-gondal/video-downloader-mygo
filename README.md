@@ -115,7 +115,8 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 ### Download queue
 
 - Concurrent worker queue with configurable worker count.
-- Pause, resume, cancel, retry, and clear-finished actions. Paused yt-dlp partial files are preserved within the session and resumed instead of restarting from zero.
+- Pause, resume, cancel, retry, and clear-finished actions. Paused yt-dlp partial files are preserved and resumed instead of restarting from zero, including after closing and reopening the app.
+- Closing while downloads are pending or active prompts you to keep downloading, pause and close, or cancel downloads and close. Paused tasks reappear in the Downloads list on the next launch.
 - Thumbnail cards with video/audio fallback icons.
 - Status pills for preparing, pending, downloading, processing, paused, completed, failed, and cancelled states.
 - Determinate progress from downloaded/total bytes or percentage.
@@ -383,6 +384,7 @@ Open **Converter**, drop a media file onto the drop zone or select **Browse**, c
 ### 6. Review history and settings
 
 - **History** stores terminal download records in a JSON file and supports search, filters, re-download, deletion, and opening the output folder.
+- Paused downloads and their recovery data are stored locally in `downloads.json` alongside app data; choose **Pause and close** to safely stop active transfers for later resumption.
 - **Settings** controls defaults and validates values before saving.
 - **About** contains project, source, technology, and license links.
 

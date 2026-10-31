@@ -1,6 +1,9 @@
 package models
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDownloadTaskPauseAndResumePreserveProgressAndStaging(t *testing.T) {
 	task := NewDownloadTask(DownloadRequest{Title: "example"})
@@ -26,5 +29,26 @@ func TestDownloadTaskPauseAndResumePreserveProgressAndStaging(t *testing.T) {
 	}
 	if task.PauseRequested() || task.Cancelled() {
 		t.Fatal("resume reset retained pause cancellation")
+	}
+}
+
+func TestRestorePausedDownloadTaskPreservesRequestProgressAndStaging(t *testing.T) {
+	want := DownloadTaskSnapshot{
+		ID:         "restored-task",
+		Request:    DownloadRequest{URL: "https://example.test/video", Title: "Example", MaxHeight: 720},
+		Progress:   ProgressInfo{DownloadedBytes: 70, TotalBytes: 100, Percent: 70},
+		CreatedAt:  time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		StagingDir: "partial-download",
+	}
+
+	got := RestorePausedDownloadTask(want).Snapshot()
+	if got.ID != want.ID || got.State != StatePaused {
+		t.Fatalf("restored task identity/state = %q/%q, want %q/%q", got.ID, got.State, want.ID, StatePaused)
+	}
+	if got.Request.URL != want.Request.URL || got.Request.MaxHeight != want.Request.MaxHeight {
+		t.Fatalf("restored request = %+v, want URL and quality from %+v", got.Request, want.Request)
+	}
+	if got.Progress != want.Progress || got.StagingDir != want.StagingDir || !got.CreatedAt.Equal(want.CreatedAt) {
+		t.Fatalf("restored progress/staging/time = %+v/%q/%v", got.Progress, got.StagingDir, got.CreatedAt)
 	}
 }

@@ -191,9 +191,13 @@ func (h *HistoryService) Delete(id string) error {
 func (h *HistoryService) Close() error { return nil }
 
 func atomicWriteHistoryFile(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".history.json.tmp-*")
+	return atomicWriteFile(path, data, "history")
+}
+
+func atomicWriteFile(path string, data []byte, label string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("create history temporary file: %w", err)
+		return fmt.Errorf("create %s temporary file: %w", label, err)
 	}
 	tmpPath := tmp.Name()
 	closed := false
@@ -206,42 +210,42 @@ func atomicWriteHistoryFile(path string, data []byte) error {
 
 	if runtime.GOOS != "windows" {
 		if err := tmp.Chmod(0o600); err != nil {
-			return fmt.Errorf("set history temporary file permissions: %w", err)
+			return fmt.Errorf("set %s temporary file permissions: %w", label, err)
 		}
 	}
 	if _, err := tmp.Write(data); err != nil {
-		return fmt.Errorf("write history temporary file: %w", err)
+		return fmt.Errorf("write %s temporary file: %w", label, err)
 	}
 	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync history temporary file: %w", err)
+		return fmt.Errorf("sync %s temporary file: %w", label, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close history temporary file: %w", err)
+		return fmt.Errorf("close %s temporary file: %w", label, err)
 	}
 	closed = true
 	if runtime.GOOS == "windows" {
-		return replaceWindowsHistoryFile(tmpPath, path)
+		return replaceWindowsFile(tmpPath, path, label)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace history file: %w", err)
+		return fmt.Errorf("replace %s file: %w", label, err)
 	}
 	return nil
 }
 
-func replaceWindowsHistoryFile(tmpPath, path string) error {
+func replaceWindowsFile(tmpPath, path, label string) error {
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		return fmt.Errorf("replace history file: destination is a directory")
+		return fmt.Errorf("replace %s file: destination is a directory", label)
 	}
 	backup := path + ".bak"
 	_ = os.Remove(backup)
 	if err := os.Rename(path, backup); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("stage existing history file: %w", err)
+		return fmt.Errorf("stage existing %s file: %w", label, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		if restoreErr := os.Rename(backup, path); restoreErr != nil && !errors.Is(restoreErr, fs.ErrNotExist) {
-			return fmt.Errorf("replace history file: %w (restore failed: %v)", err, restoreErr)
+			return fmt.Errorf("replace %s file: %w (restore failed: %v)", label, err, restoreErr)
 		}
-		return fmt.Errorf("replace history file: %w", err)
+		return fmt.Errorf("replace %s file: %w", label, err)
 	}
 	_ = os.Remove(backup)
 	return nil

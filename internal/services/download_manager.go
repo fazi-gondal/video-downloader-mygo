@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 )
@@ -350,6 +352,92 @@ func (m *DownloadManager) Snapshots() []models.DownloadTaskSnapshot {
 	return out
 }
 
+// RestorePausedTask adds a task loaded from disk without starting a worker.
+func (m *DownloadManager) RestorePausedTask(task *models.DownloadTask) error {
+	if task == nil {
+		return errors.New("cannot restore a nil download task")
+	}
+	snapshot := task.Snapshot()
+	if snapshot.ID == "" || snapshot.State != models.StatePaused {
+		return errors.New("restored download task must have an ID and be paused")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopped {
+		return ErrDownloadManagerClosed
+	}
+	if _, exists := m.tasks[snapshot.ID]; exists {
+		return fmt.Errorf("download task %q is already registered", snapshot.ID)
+	}
+	m.tasks[snapshot.ID] = task
+	return nil
+}
+
+// PauseAll requests that active downloads stop while keeping their partial
+// files. It returns after every task is paused or terminal.
+func (m *DownloadManager) PauseAll(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, task := range m.All() {
+		m.Pause(task.ID)
+	}
+
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		allStopped := true
+		for _, task := range m.Snapshots() {
+			if !task.State.IsTerminal() && task.State != models.StatePaused {
+				allStopped = false
+				break
+			}
+		}
+		if allStopped {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// CancelAll permanently cancels tasks and discards any paused partial files.
+func (m *DownloadManager) CancelAll() {
+	for _, task := range m.All() {
+		m.Cancel(task.ID)
+	}
+}
+
+// WaitForTerminal waits until no task is active or paused.
+func (m *DownloadManager) WaitForTerminal(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		allTerminal := true
+		for _, task := range m.Snapshots() {
+			if !task.State.IsTerminal() {
+				allTerminal = false
+				break
+			}
+		}
+		if allTerminal {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // ClearFinished removes terminal tasks from the in-memory queue. History is
 // persisted separately, so clearing the downloads screen does not erase the
 // user's history.
@@ -364,7 +452,8 @@ func (m *DownloadManager) ClearFinished() {
 }
 
 // Shutdown is safe to call more than once. It cancels active downloads,
-// marks queued tasks cancelled, and waits for every worker to exit.
+// marks queued tasks cancelled, preserves paused tasks, and waits for every
+// worker to exit.
 func (m *DownloadManager) Shutdown() {
 	m.shutdownOnce.Do(func() {
 		m.mu.Lock()
@@ -379,17 +468,12 @@ func (m *DownloadManager) Shutdown() {
 
 		m.cancel()
 		for _, task := range tasks {
-			if task.StateValue().IsTerminal() {
+			state := task.StateValue()
+			if task.StateValue().IsTerminal() || state == models.StatePaused {
 				continue
 			}
-			state := task.StateValue()
 			task.Cancel()
-			if state == models.StatePaused {
-				if cleaner, ok := m.engine.(partialDownloadCleaner); ok {
-					cleaner.DiscardPartial(task)
-				}
-			}
-			if state == models.StatePending || state == models.StatePaused {
+			if state == models.StatePending {
 				task.SetState(models.StateCancelled)
 				m.emit(EventTaskState, task, nil)
 				m.emit(EventTaskFinished, task, nil)

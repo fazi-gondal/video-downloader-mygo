@@ -162,6 +162,7 @@ type DownloadTaskSnapshot struct {
 	State       DownloadState
 	Progress    ProgressInfo
 	OutputPath  string
+	StagingDir  string
 	Error       string
 	ErrorDetail string
 	CreatedAt   time.Time
@@ -177,6 +178,24 @@ func NewDownloadTask(req DownloadRequest) *DownloadTask {
 		State:     StatePending,
 		CreatedAt: time.Now(),
 		cancelCh:  make(chan struct{}),
+	}
+}
+
+// RestorePausedDownloadTask recreates a persisted task without enqueueing it.
+func RestorePausedDownloadTask(snapshot DownloadTaskSnapshot) *DownloadTask {
+	return &DownloadTask{
+		ID:          snapshot.ID,
+		Request:     cloneDownloadRequest(snapshot.Request),
+		State:       StatePaused,
+		Progress:    snapshot.Progress,
+		OutputPath:  snapshot.OutputPath,
+		Error:       snapshot.Error,
+		ErrorDetail: snapshot.ErrorDetail,
+		CreatedAt:   snapshot.CreatedAt,
+		StartedAt:   cloneTime(snapshot.StartedAt),
+		FinishedAt:  nil,
+		cancelCh:    make(chan struct{}),
+		stagingDir:  snapshot.StagingDir,
 	}
 }
 
@@ -249,6 +268,7 @@ func (t *DownloadTask) Snapshot() DownloadTaskSnapshot {
 		State:       t.State,
 		Progress:    t.Progress,
 		OutputPath:  t.OutputPath,
+		StagingDir:  t.stagingDir,
 		Error:       t.Error,
 		ErrorDetail: t.ErrorDetail,
 		CreatedAt:   t.CreatedAt,

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -60,6 +61,9 @@ type App struct {
 	manager                   *services.DownloadManager
 	conv                      *services.ConversionService
 	history                   *services.HistoryService
+	resumeStore               *services.ResumeStore
+	closePrompting            atomic.Bool
+	closeApproved             atomic.Bool
 
 	page string
 
@@ -262,12 +266,26 @@ func New() *App {
 		log.Println("history:", err)
 	}
 	a.history = hist
+	resumeStore, err := services.NewResumeStore()
+	if err != nil {
+		log.Println("download recovery:", err)
+		a.toastMsg = "Download recovery is unavailable: " + err.Error()
+		a.toastUntil = time.Now().Add(5 * time.Second)
+	} else {
+		a.resumeStore = resumeStore
+		if err := a.restoreResumableDownloads(); err != nil {
+			log.Println("download recovery:", err)
+			a.toastMsg = "Could not restore paused downloads: " + err.Error()
+			a.toastUntil = time.Now().Add(5 * time.Second)
+		}
+	}
 	go a.pumpDownloadEvents()
 	go a.pumpConversionEvents()
 	return a
 }
 
 func (a *App) SetWindow(w *mygo.Window) {
+	w.OnClose(a.handleWindowClose)
 	a.winMu.Lock()
 	a.win = w
 	a.pendingMu.Lock()
@@ -277,6 +295,120 @@ func (a *App) SetWindow(w *mygo.Window) {
 	a.winMu.Unlock()
 	for _, fn := range pending {
 		w.Update(fn)
+	}
+}
+
+func (a *App) restoreResumableDownloads() error {
+	snapshots, err := a.resumeStore.Load()
+	if err != nil {
+		return err
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.ID == "" || snapshot.Request.URL == "" {
+			log.Printf("download recovery: skipping invalid task record %q", snapshot.ID)
+			continue
+		}
+		task := models.RestorePausedDownloadTask(snapshot)
+		if err := a.manager.RestorePausedTask(task); err != nil {
+			log.Printf("download recovery: could not restore task %q: %v", snapshot.ID, err)
+		}
+	}
+	a.tasksMu.Lock()
+	a.tasks = a.manager.Snapshots()
+	a.tasksMu.Unlock()
+	return nil
+}
+
+func (a *App) persistResumableDownloads() error {
+	if a.manager == nil {
+		return nil
+	}
+	if a.resumeStore == nil {
+		return fmt.Errorf("download recovery store is unavailable")
+	}
+	snapshots := a.manager.Snapshots()
+	resumable := snapshots[:0]
+	for _, snapshot := range snapshots {
+		if !snapshot.State.IsTerminal() {
+			resumable = append(resumable, snapshot)
+		}
+	}
+	return a.resumeStore.Save(resumable)
+}
+
+func (a *App) handleWindowClose(e *mygo.CloseEvent) {
+	if a.closeApproved.Load() || a.manager == nil || !a.hasUnfinishedDownloads() {
+		return
+	}
+	e.PreventDefault()
+	if !a.closePrompting.CompareAndSwap(false, true) {
+		return
+	}
+	go a.promptCloseWithDownloads()
+}
+
+func (a *App) hasUnfinishedDownloads() bool {
+	for _, snapshot := range a.manager.Snapshots() {
+		if !snapshot.State.IsTerminal() {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) promptCloseWithDownloads() {
+	result, err := mygo.Dialog.Message(mygo.MessageOptions{
+		Parent:        a.window(),
+		Type:          mygo.MessageQuestion,
+		Title:         "Downloads need attention",
+		Message:       "Some downloads are active or paused. What would you like to do before closing?",
+		Detail:        "Paused downloads can be resumed the next time you open the app.",
+		Buttons:       []string{"Keep downloading", "Pause and close", "Cancel downloads and close"},
+		DefaultButton: 0,
+		CancelButton:  0,
+	})
+	if err != nil {
+		log.Println("close confirmation:", err)
+		a.closePrompting.Store(false)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	switch result.Button {
+	case 1:
+		if err := a.manager.PauseAll(ctx); err != nil {
+			mygo.Dialog.Error("Could not pause downloads", err.Error())
+			a.closePrompting.Store(false)
+			return
+		}
+		if err := a.persistResumableDownloads(); err != nil {
+			mygo.Dialog.Error("Could not save paused downloads", err.Error())
+			a.closePrompting.Store(false)
+			return
+		}
+	case 2:
+		a.manager.CancelAll()
+		if err := a.manager.WaitForTerminal(ctx); err != nil {
+			mygo.Dialog.Error("Could not stop downloads", err.Error())
+			a.closePrompting.Store(false)
+			return
+		}
+		if a.resumeStore != nil {
+			if err := a.resumeStore.Save(nil); err != nil {
+				mygo.Dialog.Error("Could not clear download recovery data", err.Error())
+				a.closePrompting.Store(false)
+				return
+			}
+		}
+	default:
+		a.closePrompting.Store(false)
+		return
+	}
+
+	a.closeApproved.Store(true)
+	if win := a.window(); win != nil {
+		win.Close()
 	}
 }
 
@@ -345,6 +477,14 @@ func (a *App) pumpDownloadEvents() {
 			continue
 		}
 		task := ev.Task.Snapshot()
+		if ev.Kind == services.EventTaskQueued || ev.Kind == services.EventTaskState || ev.Kind == services.EventTaskFinished {
+			if err := a.persistResumableDownloads(); err != nil {
+				log.Println("download recovery:", err)
+				a.updateOnMain(func() {
+					a.showToast("Could not save download recovery data")
+				})
+			}
+		}
 		if ev.Kind == services.EventTaskFinished && a.history != nil {
 			if err := a.history.Record(ev.Task); err != nil {
 				log.Println("history:", err)
