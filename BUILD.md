@@ -133,26 +133,26 @@ The platform directories are flattened/selected by MyGo during packaging. During
 
 - Application name: `Video Downloader`.
 - Identifier: `com.fazigondal.videodownloader`.
-- Version: `3.1.1`.
+- Version: `3.2.0`.
 - Output directory: `build`.
 - Linux maintainer metadata.
 
-When publishing a release, the Git tag must match the version: `mygo.json` version `3.1.1` requires tag `v3.1.1`.
+When publishing a release, the Git tag must match the version: `mygo.json` version `3.2.0` requires tag `v3.2.0`.
 
-## Version 3.1.1 release checklist
+## Version 3.2.0 release checklist
 
 Before creating the release tag:
 
-1. Confirm `mygo.json` contains version `3.1.1`.
-2. Confirm the About page displays `v3.1.1`.
+1. Confirm `mygo.json` contains version `3.2.0`.
+2. Confirm the About page displays `v3.2.0`.
 3. Update `CHANGELOG.md` with the release date and user-visible changes.
 4. Run the verification commands in this document and the packaging smoke builds.
 5. Review the working tree so downloaded helper binaries, credentials, cookies, and local settings are not included.
 6. Create and push the matching tag:
 
 ```bash
-git tag v3.1.1
-git push origin v3.1.1
+git tag v3.2.0
+git push origin v3.2.0
 ```
 
 The release workflow validates the tag against `mygo.json`, creates a draft GitHub Release, builds the supported packages, uploads the artifacts, and publishes the release only after all platform jobs succeed.

@@ -4,6 +4,20 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-10-31
+
+### Added
+
+- Closing with unfinished downloads offers to keep downloading, pause and close,
+  or cancel downloads and close.
+- Paused downloads persist their request, progress, and partial-file staging
+  paths and are restored in the Downloads list after restarting the app.
+
+### Changed
+
+- History retries preserve the original selected video quality and format
+  settings when those values are available.
+
 ## [3.1.1] - 2026-10-28
 
 ### Added
