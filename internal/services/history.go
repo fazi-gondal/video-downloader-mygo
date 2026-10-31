@@ -15,18 +15,22 @@ import (
 )
 
 type HistoryEntry struct {
-	ID         string `json:"id"`
-	URL        string `json:"url"`
-	Title      string `json:"title"`
-	Mode       string `json:"mode"`
-	Container  string `json:"container"`
-	AudioFmt   string `json:"audio_format"`
-	OutputDir  string `json:"output_dir"`
-	OutputPath string `json:"output_path"`
-	State      string `json:"state"`
-	Error      string `json:"error"`
-	CreatedAt  string `json:"created_at"`
-	FinishedAt string `json:"finished_at"`
+	ID            string `json:"id"`
+	URL           string `json:"url"`
+	Title         string `json:"title"`
+	Mode          string `json:"mode"`
+	Container     string `json:"container"`
+	MaxHeight     int    `json:"max_height,omitempty"`
+	MaxFPS        int    `json:"max_fps,omitempty"`
+	VideoFormatID string `json:"video_format_id,omitempty"`
+	AudioFormatID string `json:"audio_format_id,omitempty"`
+	AudioFmt      string `json:"audio_format"`
+	OutputDir     string `json:"output_dir"`
+	OutputPath    string `json:"output_path"`
+	State         string `json:"state"`
+	Error         string `json:"error"`
+	CreatedAt     string `json:"created_at"`
+	FinishedAt    string `json:"finished_at"`
 }
 
 type HistoryService struct {
@@ -122,7 +126,9 @@ func (h *HistoryService) Record(task *models.DownloadTask) error {
 	}
 	e := HistoryEntry{
 		ID: snapshot.ID, URL: req.URL, Title: req.Title, Mode: string(req.Mode),
-		Container: req.Container, AudioFmt: req.AudioFormat, OutputDir: req.OutputDir,
+		Container: req.Container, MaxHeight: req.MaxHeight, MaxFPS: req.MaxFPS,
+		VideoFormatID: req.VideoFormatID, AudioFormatID: req.AudioFormatID,
+		AudioFmt: req.AudioFormat, OutputDir: req.OutputDir,
 		OutputPath: snapshot.OutputPath, State: string(snapshot.State), Error: snapshot.Error,
 		CreatedAt: snapshot.CreatedAt.Format(time.RFC3339), FinishedAt: finished,
 	}

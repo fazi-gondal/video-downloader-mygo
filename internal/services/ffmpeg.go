@@ -275,6 +275,39 @@ func (s *FFmpegService) probeDuration(ctx context.Context, path string) float64 
 	return d
 }
 
+// ProbeVideoHeight returns the height of the first video stream in path.
+// It returns an error when FFprobe is unavailable, the file has no video
+// stream, or the probe fails.
+func (s *FFmpegService) ProbeVideoHeight(ctx context.Context, path string) (int, error) {
+	if s.ffprobe == "" {
+		return 0, fmt.Errorf("ffprobe not found")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, ffprobeDurationTimeout)
+	defer cancel()
+	cmd := s.commandContext(probeCtx, s.ffprobe,
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=height",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return 0, fmt.Errorf("probe video height: %s: %w", strings.TrimSpace(string(exitErr.Stderr)), err)
+		}
+		return 0, fmt.Errorf("probe video height: %w", err)
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || height < 1 {
+		return 0, fmt.Errorf("probe video height: invalid height %q", strings.TrimSpace(string(out)))
+	}
+	return height, nil
+}
+
 const maxAudioBitrateKbps = 320
 
 var losslessAudioFormats = map[string]struct{}{

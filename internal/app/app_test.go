@@ -10,6 +10,7 @@ import (
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
+	"github.com/fazi-gondal/video-downloader-mygo/internal/services"
 )
 
 func TestSubtitleLanguagesPrefersAvailableCreatorTracks(t *testing.T) {
@@ -113,6 +114,70 @@ func TestBuildRequestUsesSettingsVP9Preference(t *testing.T) {
 			req := a.buildRequest("https://www.youtube.com/watch?v=example", "Example", "", "", 0)
 			if req.PreferVP9 != tt.want {
 				t.Fatalf("request PreferVP9 = %t, want %t", req.PreferVP9, tt.want)
+			}
+		})
+	}
+}
+
+func TestHistoryDownloadRequestRestoresVideoQuality(t *testing.T) {
+	entry := services.HistoryEntry{
+		URL:           "https://example.test/video",
+		Title:         "Example",
+		Mode:          string(models.ModeVideoAudio),
+		Container:     "mkv",
+		MaxHeight:     720,
+		MaxFPS:        30,
+		VideoFormatID: "video-720",
+		AudioFormatID: "audio-en",
+		AudioFmt:      "m4a",
+	}
+
+	got := historyDownloadRequest(entry, t.TempDir())
+	if got.MaxHeight != entry.MaxHeight {
+		t.Errorf("MaxHeight = %d, want %d", got.MaxHeight, entry.MaxHeight)
+	}
+	if got.MaxFPS != entry.MaxFPS {
+		t.Errorf("MaxFPS = %d, want %d", got.MaxFPS, entry.MaxFPS)
+	}
+	if got.VideoFormatID != entry.VideoFormatID {
+		t.Errorf("VideoFormatID = %q, want %q", got.VideoFormatID, entry.VideoFormatID)
+	}
+	if got.AudioFormatID != entry.AudioFormatID {
+		t.Errorf("AudioFormatID = %q, want %q", got.AudioFormatID, entry.AudioFormatID)
+	}
+	if got.Container != entry.Container || got.AudioFormat != entry.AudioFmt {
+		t.Errorf("container/audio format = %q/%q, want %q/%q", got.Container, got.AudioFormat, entry.Container, entry.AudioFmt)
+	}
+}
+
+func TestRestoreHistoryVideoQualityStopsWhenOriginalFileIsUnavailable(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   services.HistoryEntry
+		ffmpeg  *services.FFmpegService
+		wantErr string
+	}{
+		{
+			name:    "missing output path",
+			entry:   services.HistoryEntry{},
+			wantErr: "original downloaded file is unavailable",
+		},
+		{
+			name:    "ffprobe unavailable",
+			entry:   services.HistoryEntry{OutputPath: "video.mkv"},
+			ffmpeg:  &services.FFmpegService{},
+			wantErr: "ffprobe not found",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := models.DownloadRequest{Mode: models.ModeVideoAudio}
+			err := restoreHistoryVideoQuality(&req, tt.entry, tt.ffmpeg)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("restoreHistoryVideoQuality() error = %v, want substring %q", err, tt.wantErr)
+			}
+			if req.MaxHeight != 0 {
+				t.Fatalf("MaxHeight = %d, want unchanged after failed quality restoration", req.MaxHeight)
 			}
 		})
 	}

@@ -2054,6 +2054,33 @@ func historyMode(mode string) models.DownloadMode {
 	return models.ModeVideoAudio
 }
 
+func historyDownloadRequest(entry services.HistoryEntry, outputDir string) models.DownloadRequest {
+	return models.DownloadRequest{
+		URL: entry.URL, Title: entry.Title, Mode: historyMode(entry.Mode), OutputDir: outputDir,
+		Container: entry.Container, MaxHeight: entry.MaxHeight, MaxFPS: entry.MaxFPS,
+		VideoFormatID: entry.VideoFormatID, AudioFormatID: entry.AudioFormatID,
+		AudioFormat: entry.AudioFmt,
+	}
+}
+
+func restoreHistoryVideoQuality(req *models.DownloadRequest, entry services.HistoryEntry, ffmpeg *services.FFmpegService) error {
+	if req.Mode == models.ModeAudioOnly || req.MaxHeight > 0 || req.VideoFormatID != "" {
+		return nil
+	}
+	if entry.OutputPath == "" {
+		return fmt.Errorf("original downloaded file is unavailable")
+	}
+	if ffmpeg == nil {
+		return fmt.Errorf("ffprobe is unavailable")
+	}
+	height, err := ffmpeg.ProbeVideoHeight(context.Background(), entry.OutputPath)
+	if err != nil {
+		return err
+	}
+	req.MaxHeight = height
+	return nil
+}
+
 func progressFraction(p models.ProgressInfo) (float64, bool) {
 	if p.TotalBytes > 0 && p.DownloadedBytes >= 0 {
 		return clampProgress(float64(p.DownloadedBytes) / float64(p.TotalBytes)), true
@@ -2415,10 +2442,17 @@ func (a *App) historyPage(c *ui.Context) {
 				}
 				if e.URL != "" && ui.Button(c.Key("hist-redo-"+e.ID), "Download again").Clicked() {
 					settings := a.settingsDraftSnapshot()
-					req := models.DownloadRequest{URL: e.URL, Title: e.Title, Mode: historyMode(e.Mode), OutputDir: settings.DownloadDir, Container: e.Container, AudioFormat: e.AudioFmt}
+					req := historyDownloadRequest(e, settings.DownloadDir)
 					a.page = PageDownloads
 					a.showToast("Queueing: " + e.Title)
 					go func() {
+						if err := restoreHistoryVideoQuality(&req, e, a.ffmpeg); err != nil {
+							log.Printf("history: could not restore previous video quality for %q: %v", e.OutputPath, err)
+							a.updateOnMain(func() {
+								a.showToast("Cannot restore previous quality: " + err.Error())
+							})
+							return
+						}
 						_, err := a.manager.EnqueueContext(context.Background(), req)
 						a.updateOnMain(func() {
 							if err != nil {

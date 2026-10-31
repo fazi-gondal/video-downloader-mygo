@@ -35,6 +35,18 @@ func TestFFprobeDurationHelperProcess(t *testing.T) {
 	time.Sleep(8 * time.Second)
 }
 
+func TestFFprobeVideoHeightHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_FFPROBE_HEIGHT_HELPER") != "1" {
+		return
+	}
+	if os.Getenv("GO_FFPROBE_HEIGHT_ERROR") == "1" {
+		fmt.Fprintln(os.Stderr, "sample.mkv: No such file or directory")
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stdout, os.Getenv("GO_FFPROBE_VIDEO_HEIGHT"))
+	os.Exit(0)
+}
+
 func TestProbeDurationTimesOut(t *testing.T) {
 	service := &FFmpegService{ffprobe: "fake-ffprobe"}
 	service.command = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
@@ -55,6 +67,57 @@ func TestProbeDurationTimesOut(t *testing.T) {
 	}
 	if elapsed > 6*time.Second {
 		t.Fatalf("probeDuration() took %v, want it to stop near its %v timeout", elapsed, ffprobeDurationTimeout)
+	}
+}
+
+func TestProbeVideoHeight(t *testing.T) {
+	tests := []struct {
+		name       string
+		output     string
+		wantHeight int
+		wantErr    bool
+	}{
+		{name: "returns reported video height", output: "720\n", wantHeight: 720},
+		{name: "rejects missing height", output: "", wantErr: true},
+		{name: "rejects invalid height", output: "unknown\n", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &FFmpegService{ffprobe: "fake-ffprobe"}
+			service.command = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+				cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestFFprobeVideoHeightHelperProcess$")
+				cmd.Env = append(os.Environ(),
+					"GO_WANT_FFPROBE_HEIGHT_HELPER=1",
+					"GO_FFPROBE_VIDEO_HEIGHT="+tt.output,
+				)
+				return cmd
+			}
+
+			got, err := service.ProbeVideoHeight(context.Background(), "source.mp4")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ProbeVideoHeight() error = %v, want error: %t", err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.wantHeight {
+				t.Fatalf("ProbeVideoHeight() = %d, want %d", got, tt.wantHeight)
+			}
+		})
+	}
+}
+
+func TestProbeVideoHeightIncludesFFprobeDiagnostics(t *testing.T) {
+	service := &FFmpegService{ffprobe: "fake-ffprobe"}
+	service.command = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestFFprobeVideoHeightHelperProcess$")
+		cmd.Env = append(os.Environ(),
+			"GO_WANT_FFPROBE_HEIGHT_HELPER=1",
+			"GO_FFPROBE_HEIGHT_ERROR=1",
+		)
+		return cmd
+	}
+
+	_, err := service.ProbeVideoHeight(context.Background(), "sample.mkv")
+	if err == nil || !strings.Contains(err.Error(), "No such file or directory") {
+		t.Fatalf("ProbeVideoHeight() error = %v, want FFprobe stderr", err)
 	}
 }
 

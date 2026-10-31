@@ -90,6 +90,40 @@ func TestHistoryRecordDoesNotReplaceMalformedFile(t *testing.T) {
 	}
 }
 
+func TestHistoryRecordPreservesDownloadQuality(t *testing.T) {
+	history := testHistoryService(t)
+	task := models.NewDownloadTask(models.DownloadRequest{
+		URL:           "https://example.com/video",
+		Title:         "Example",
+		Mode:          models.ModeVideoAudio,
+		Container:     "mkv",
+		MaxHeight:     720,
+		MaxFPS:        30,
+		VideoFormatID: "video-720",
+		AudioFormatID: "audio-en",
+		AudioFormat:   "m4a",
+	})
+	task.State = models.StateCompleted
+
+	if err := history.Record(task); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	entries, err := history.List(0)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("List() returned %d entries, want 1", len(entries))
+	}
+	got := entries[0]
+	if got.MaxHeight != 720 || got.MaxFPS != 30 {
+		t.Errorf("saved quality limits = %dpx/%dfps, want 720px/30fps", got.MaxHeight, got.MaxFPS)
+	}
+	if got.VideoFormatID != "video-720" || got.AudioFormatID != "audio-en" {
+		t.Errorf("saved format IDs = %q/%q, want video-720/audio-en", got.VideoFormatID, got.AudioFormatID)
+	}
+}
+
 func TestHistorySaveFailurePreservesDestination(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.json")

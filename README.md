@@ -141,6 +141,10 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 - JSON-backed history for completed, failed, and cancelled tasks.
 - History search and filters for all, video, audio, and errors.
 - Re-download, open-folder, delete-entry, refresh, and clear-all actions.
+- Re-download preserves the original resolution/frame-rate limits and selected
+  format IDs. For older history entries, it reads the existing output's video
+  height when that file is still available. If quality cannot be recovered, the
+  app stops instead of silently queuing the best available quality.
 - Settings for download folder, concurrency, fragments, proxy, cookies, rate limiting, headers, subtitles, multi-audio, metadata, thumbnails, VP9, theme, and conversion defaults.
 - Glass-backed settings cards, including discrete performance sliders with
   current values shown.
