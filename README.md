@@ -5,6 +5,10 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/fazi-gondal/video-downloader-mygo/ci.yml?branch=main&label=CI)](https://github.com/fazi-gondal/video-downloader-mygo/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/fazi-gondal/video-downloader-mygo.svg)](https://pkg.go.dev/github.com/fazi-gondal/video-downloader-mygo)
 
+This Project is also Listed on
+
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/video-downloader)
+
 **Current release:** `v3.2.0`
 
 Native desktop video downloader built with [Go](https://go.dev/), [MyGo](https://mygo.egoist.dev/), [yt-dlp](https://github.com/yt-dlp/yt-dlp), and [FFmpeg](https://ffmpeg.org/). The application analyzes videos and playlists, lets users choose quality, audio, subtitles, and containers, manages downloads in a queue, converts local media, and stores download history.
