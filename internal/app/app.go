@@ -2107,7 +2107,7 @@ func (a *App) sortSelectedAudioTrackIDs(selectedIDs []string) []string {
 		if nameJ == "" {
 			nameJ = result[j]
 		}
-		if strings.ToLower(nameI) != strings.ToLower(nameJ) {
+		if !strings.EqualFold(nameI, nameJ) {
 			return strings.ToLower(nameI) < strings.ToLower(nameJ)
 		}
 		return result[i] < result[j]
@@ -2142,7 +2142,7 @@ func sortSelectedSubtitleLangs(langs []string) []string {
 		if nameJ == "" {
 			nameJ = result[j]
 		}
-		if strings.ToLower(nameI) != strings.ToLower(nameJ) {
+		if !strings.EqualFold(nameI, nameJ) {
 			return strings.ToLower(nameI) < strings.ToLower(nameJ)
 		}
 		return result[i] < result[j]

@@ -9,7 +9,7 @@ This Project is also Listed on
 
 [![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/video-downloader)
 
-**Current release:** `v3.2.0`
+**Current release:** `v3.3.0`
 
 Native desktop video downloader built with [Go](https://go.dev/), [MyGo](https://mygo.egoist.dev/), [yt-dlp](https://github.com/yt-dlp/yt-dlp), and [FFmpeg](https://ffmpeg.org/). The application analyzes videos and playlists, lets users choose quality, audio, subtitles, and containers, manages downloads in a queue, converts local media, and stores download history.
 
@@ -484,8 +484,8 @@ The CI job uses the Go version from `go.mod`, does not modify dependencies, and 
 4. Create a matching tag, for example:
 
 ```bash
-git tag v3.2.0
-git push origin v3.2.0
+git tag v3.3.0
+git push origin v3.3.0
 ```
 
 The workflow checks that the tag matches `mygo.json`, downloads platform tools, uses the pinned MyGo CLI, builds Windows and Linux from Ubuntu, builds macOS from macOS, and uploads the generated artifacts to a draft GitHub release.

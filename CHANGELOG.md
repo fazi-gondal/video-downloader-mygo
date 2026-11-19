@@ -4,6 +4,22 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-11-19
+
+### Changed
+
+- Redesigned format-selection (config) screen: mode icon cards, chip-group rows
+  for quality/container/audio-format, bento two-column layout, fixed bottom
+  action bar with live summary chips and size pill.
+- Redesigned About screen: centered card, large accent logo block, version pill,
+  outlined link buttons with icons, tech stack chips, license link.
+
+### Fixed
+
+- Use `!strings.EqualFold` instead of `strings.ToLower(x) != strings.ToLower(y)`
+  in audio-track and subtitle sort helpers (SA6005).
+- YouTube playlist downloads now use the playlist name as the output folder.
+
 ## [3.2.0] - 2026-10-31
 
 ### Added

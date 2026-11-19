@@ -264,7 +264,7 @@ func (a *App) refinedAboutPage(c *ui.Context) {
 
 					// Version pill
 					ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(999).Padding(5, 14).Children(func() {
-						ui.Text(c, "v3.0.0 · Open-source media downloader").FontSize(12).Bold().TextColor(t.TextMuted)
+						ui.Text(c, "v3.3.0 · Open-source media downloader").FontSize(12).Bold().TextColor(t.TextMuted)
 					})
 
 					// Description
