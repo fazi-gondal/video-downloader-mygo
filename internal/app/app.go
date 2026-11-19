@@ -1100,16 +1100,9 @@ func (a *App) configPanel(c *ui.Context) {
 				ui.Text(c, "Container").FontSize(12).TextColor(t.TextMuted)
 				ct := a.container
 				containerLocked := a.containerSelectionLocked()
-				ui.Row(c).FillWidth().Gap(6).Children(func() {
-					for _, opt := range []string{"mp4", "mkv", "webm"} {
-						selected := ct == opt
-						a.chipBtn(c, "ct-"+opt, opt, selected, containerLocked, func() {
-							if !containerLocked {
-								a.container = opt
-								a.preferredContainer = opt
-							}
-						})
-					}
+				a.chipGroup(c, "container", []string{"mp4", "mkv", "webm"}, ct, containerLocked, func(opt string) {
+					a.container = opt
+					a.preferredContainer = opt
 				})
 			})
 			// right column: quality
@@ -1124,15 +1117,14 @@ func (a *App) configPanel(c *ui.Context) {
 						break
 					}
 				}
-				ui.Row(c).FillWidth().Gap(6).Children(func() {
-					for i, label := range qLabels {
-						idx := i
-						selected := curIdx == idx
-						a.chipBtn(c, "q-"+label, label, selected, false, func() {
-							a.maxHeight = qVals[idx]
+				a.chipGroup(c, "quality", qLabels, qLabels[curIdx], false, func(opt string) {
+					for i, lbl := range qLabels {
+						if lbl == opt {
+							a.maxHeight = qVals[i]
 							a.selectedVideoFormat = ""
 							a.selectedVideoLabel = "Auto (best for resolution)"
-						})
+							break
+						}
 					}
 				})
 			})
@@ -1144,13 +1136,8 @@ func (a *App) configPanel(c *ui.Context) {
 		// ── Audio format & quality chips ──────────────────────────────────
 		a.configSectionTitle(c, "Audio")
 		ui.Text(c, "Format").FontSize(12).TextColor(t.TextMuted)
-		ui.Row(c).FillWidth().Gap(6).Children(func() {
-			for _, opt := range []string{"mp3", "m4a", "opus", "flac", "wav"} {
-				selected := a.audioFormat == opt
-				a.chipBtn(c, "af-"+opt, opt, selected, false, func() {
-					a.audioFormat = opt
-				})
-			}
+		a.chipGroup(c, "audioformat", []string{"mp3", "m4a", "opus", "flac", "wav"}, a.audioFormat, false, func(opt string) {
+			a.audioFormat = opt
 		})
 		ui.Box(c).FillWidth().Height(1).Background(t.Border)
 	}
@@ -1192,6 +1179,38 @@ func (a *App) chipBtn(c *ui.Context, key, label string, selected, disabled bool,
 	if btn.Clicked() && !disabled && !selected {
 		onClick()
 	}
+}
+
+// chipGroup renders a segmented chip-card selector inside a tonal track container,
+// matching the reference ChipGroup component style.
+// Each option gets an equal-width card; the selected one has an accent border and
+// accent-coloured label; unselected cards are transparent.
+func (a *App) chipGroup(c *ui.Context, groupKey string, options []string, selected string, disabled bool, onSelect func(string)) {
+	t := c.Theme()
+	ui.Row(c.Key("cg-"+groupKey)).FillWidth().Background(t.SurfaceHover).Border(1, t.Border).Radius(10).Padding(4).Gap(4).Children(func() {
+		for i, opt := range options {
+			opt := opt
+			isSelected := opt == selected
+			isDisabled := disabled && !isSelected
+			var bg, border ui.Color
+			var textColor ui.Color
+			if isSelected {
+				bg = t.SurfacePressed
+				border = t.Accent
+				textColor = t.Accent
+			} else if isDisabled {
+				textColor = t.TextMuted
+			} else {
+				textColor = t.Text
+			}
+			card := ui.Column(c.Key(fmt.Sprintf("cg-%s-%d", groupKey, i))).Grow(1).Background(bg).Border(1, border).Radius(8).Padding(8, 10).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+				ui.Text(c, opt).FontSize(13).Bold().TextColor(textColor)
+			})
+			if card.Clicked() && !isSelected && !isDisabled {
+				onSelect(opt)
+			}
+		}
+	})
 }
 
 func (a *App) audioTracksControls(c *ui.Context) {
