@@ -145,10 +145,10 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 		})
 
 		settingsCard(c, "Appearance", "Choose how MyGo follows your system theme.", func() {
-			ui.Row(c).Gap(8).Wrap().Children(func() {
-				a.themeChoice(c, "system", "System")
-				a.themeChoice(c, "dark", "Dark")
-				a.themeChoice(c, "light", "Light")
+			ui.Row(c).FillWidth().Gap(10).Children(func() {
+				a.themeCard(c, "light", appui.IconSun, "Light")
+				a.themeCard(c, "dark", appui.IconMoon, "Dark")
+				a.themeCard(c, "system", appui.IconMonitor, "System")
 			})
 		})
 
@@ -376,14 +376,33 @@ func (a *App) ytdlpPath() string {
 	return a.ytdlp.Bin()
 }
 
-func (a *App) themeChoice(c *ui.Context, mode, label string) {
+// themeCard renders an icon card for one theme mode (light / dark / system).
+// The selected card gets an accent border and primary-tinted background.
+func (a *App) themeCard(c *ui.Context, mode string, icon *ui.SVG, label string) {
 	a.ensureSettingsDraft()
+	t := c.Theme()
 	selected := a.settingsDraft.ThemeMode == mode
+	borderColor := t.Border
+	bgColor := ui.Color{}
+	iconColor := t.TextMuted
 	if selected {
-		ui.PrimaryButton(c.Key("theme-"+mode+"-selected"), label)
-		return
+		borderColor = t.Accent
+		bgColor = ui.Color{R: t.Accent.R, G: t.Accent.G, B: t.Accent.B, A: 30}
+		iconColor = t.Accent
 	}
-	if ui.Button(c.Key("theme-"+mode), label).Clicked() {
+	row := ui.Column(c.Key("theme-card-"+mode)).
+		Grow(1).
+		Background(bgColor).
+		Border(2, borderColor).
+		Radius(10).
+		Padding(14, 10).
+		Gap(6).
+		AlignItems(ui.Center).
+		Children(func() {
+			ui.Icon(c, icon).FontSize(22).TextColor(iconColor)
+			ui.Text(c, label).FontSize(13).Bold()
+		})
+	if !selected && row.Clicked() {
 		a.settingsDraft.ThemeMode = mode
 		a.invalidate()
 	}

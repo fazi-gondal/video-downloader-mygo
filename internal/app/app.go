@@ -580,6 +580,9 @@ func (a *App) View(c *ui.Context) {
 				ui.SidebarItem(c, PageSettings, appui.IconSettings, "Settings")
 				ui.SidebarItem(c, PageAbout, appui.IconAbout, "About")
 			})
+			// Theme toggle pinned to the bottom of the sidebar
+			ui.Spacer(c).Grow(1)
+			a.sidebarThemeToggle(c)
 		}).Width(212).Material(glass.Glass{Clarity: 0.2})
 		ui.Column(c).Grow(1).FillHeight().Background(t.Background).Children(func() {
 			a.topBar(c)
@@ -633,6 +636,42 @@ func (a *App) topBar(c *ui.Context) {
 			ui.Text(c, fmt.Sprintf("%d active", n)).FontSize(12).TextColor(t.Accent)
 		}
 	})
+}
+
+// sidebarThemeToggle renders a compact theme-cycle row at the bottom of the
+// sidebar: clicking it cycles light → dark → system → light and immediately
+// applies the new theme.
+func (a *App) sidebarThemeToggle(c *ui.Context) {
+	a.ensureSettingsDraft()
+	t := c.Theme()
+	mode := a.settingsDraft.ThemeMode
+	var icon *ui.SVG
+	var label string
+	switch mode {
+	case "dark":
+		icon, label = appui.IconMoon, "Dark theme"
+	case "light":
+		icon, label = appui.IconSun, "Light theme"
+	default:
+		icon, label = appui.IconMonitor, "System theme"
+	}
+	row := ui.Row(c.Key("sidebar-theme-toggle")).
+		FillWidth().
+		Background(ui.Color{}).
+		Border(1, t.Border).
+		Radius(10).
+		Padding(9, 12).
+		Gap(10).
+		AlignItems(ui.Center).
+		Children(func() {
+			ui.Icon(c, icon).FontSize(19).TextColor(t.TextMuted)
+			ui.Text(c, label).FontSize(13).TextColor(t.TextMuted).Grow(1)
+		})
+	if row.Clicked() {
+		next := map[string]string{"light": "dark", "dark": "system", "system": "light"}
+		a.settingsDraft.ThemeMode = next[mode]
+		a.invalidate()
+	}
 }
 
 func (a *App) toastBar(c *ui.Context) {
@@ -2712,34 +2751,48 @@ func (a *App) historyPage(c *ui.Context) {
 				})
 				if e.OutputPath != "" {
 					path := e.OutputPath
-					if ui.Button(c.Key("hist-show-"+e.ID), "Open folder").Clicked() {
+					if ui.Row(c.Key("hist-show-"+e.ID)).
+						Background(ui.Color{}).Border(1, t.Border).Radius(8).Size(32, 32).Center().
+						Children(func() {
+							ui.Icon(c, appui.IconFolderOpen).FontSize(16).TextColor(t.TextMuted)
+						}).Clicked() {
 						go mygo.Shell.ShowItemInFolder(path)
 					}
 				}
-				if e.URL != "" && ui.Button(c.Key("hist-redo-"+e.ID), "Download again").Clicked() {
-					settings := a.settingsDraftSnapshot()
-					req := historyDownloadRequest(e, settings.DownloadDir)
-					a.page = PageDownloads
-					a.showToast("Queueing: " + e.Title)
-					go func() {
-						if err := restoreHistoryVideoQuality(&req, e, a.ffmpeg); err != nil {
-							log.Printf("history: could not restore previous video quality for %q: %v", e.OutputPath, err)
-							a.updateOnMain(func() {
-								a.showToast("Cannot restore previous quality: " + err.Error())
-							})
-							return
-						}
-						_, err := a.manager.EnqueueContext(context.Background(), req)
-						a.updateOnMain(func() {
-							if err != nil {
-								a.showToast("Could not queue download: " + err.Error())
+				if e.URL != "" {
+					if ui.Row(c.Key("hist-redo-"+e.ID)).
+						Background(ui.Color{}).Border(1, t.Border).Radius(8).Size(32, 32).Center().
+						Children(func() {
+							ui.Icon(c, appui.IconRepeat).FontSize(16).TextColor(t.TextMuted)
+						}).Clicked() {
+						settings := a.settingsDraftSnapshot()
+						req := historyDownloadRequest(e, settings.DownloadDir)
+						a.page = PageDownloads
+						a.showToast("Queueing: " + e.Title)
+						go func() {
+							if err := restoreHistoryVideoQuality(&req, e, a.ffmpeg); err != nil {
+								log.Printf("history: could not restore previous video quality for %q: %v", e.OutputPath, err)
+								a.updateOnMain(func() {
+									a.showToast("Cannot restore previous quality: " + err.Error())
+								})
 								return
 							}
-							a.showToast("Queued: " + req.Title)
-						})
-					}()
+							_, err := a.manager.EnqueueContext(context.Background(), req)
+							a.updateOnMain(func() {
+								if err != nil {
+									a.showToast("Could not queue download: " + err.Error())
+									return
+								}
+								a.showToast("Queued: " + req.Title)
+							})
+						}()
+					}
 				}
-				if ui.Button(c.Key("hist-delete-"+e.ID), "Delete").Clicked() {
+				if ui.Row(c.Key("hist-delete-"+e.ID)).
+					Background(ui.Color{}).Border(1, t.Border).Radius(8).Size(32, 32).Center().
+					Children(func() {
+						ui.Icon(c, appui.IconDelete).FontSize(16).TextColor(t.Danger)
+					}).Clicked() {
 					if err := a.history.Delete(e.ID); err != nil {
 						a.showToast("Could not delete history entry: " + err.Error())
 					} else {
