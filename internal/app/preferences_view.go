@@ -319,11 +319,11 @@ func aboutLinkBtn(c *ui.Context, t *ui.Theme, icon *ui.SVG, label, url string) {
 		})
 }
 
-// settingsCard renders a surface card section. icon may be nil to omit the
+// settingsCard renders a glass surface card section. icon may be nil to omit the
 // leading accent icon (matches the reference _section header style when provided).
 func settingsCard(c *ui.Context, icon *ui.SVG, title, subtitle string, children func()) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Background(t.Surface).Border(1, t.Border).Radius(12).Padding(16, 18).Gap(10).Children(func() {
+	ui.Column(c).FillWidth().Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Radius(12).Padding(16, 18).Gap(10).Children(func() {
 		// Header: icon (accent) + bold title on one row
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			if icon != nil {
@@ -404,18 +404,34 @@ func (a *App) themeCard(c *ui.Context, mode string, icon *ui.SVG, label string) 
 		bgColor = t.SurfaceHover
 		iconColor = t.TextMuted
 	}
-	row := ui.Column(c.Key("theme-card-"+mode)).
-		Grow(1).
-		Background(bgColor).
-		Border(borderWidth, borderColor).
-		Radius(10).
-		Padding(14, 10).
-		Gap(6).
-		AlignItems(ui.Center).
-		Children(func() {
-			ui.Icon(c, icon).FontSize(22).TextColor(iconColor)
-			ui.Text(c, label).FontSize(13).Bold()
-		})
+	var row ui.Element
+	if selected {
+		row = ui.Column(c.Key("theme-card-"+mode)).
+			Grow(1).
+			Background(bgColor).
+			Border(borderWidth, borderColor).
+			Radius(10).
+			Padding(14, 10).
+			Gap(6).
+			AlignItems(ui.Center).
+			Children(func() {
+				ui.Icon(c, icon).FontSize(22).TextColor(iconColor)
+				ui.Text(c, label).FontSize(13).Bold()
+			})
+	} else {
+		row = ui.Column(c.Key("theme-card-"+mode)).
+			Grow(1).
+			Material(glass.Glass{Clarity: 0.3}).
+			Border(borderWidth, borderColor).
+			Radius(10).
+			Padding(14, 10).
+			Gap(6).
+			AlignItems(ui.Center).
+			Children(func() {
+				ui.Icon(c, icon).FontSize(22).TextColor(iconColor)
+				ui.Text(c, label).FontSize(13).Bold()
+			})
+	}
 	if !selected && row.Clicked() {
 		a.settingsDraft.ThemeMode = mode
 		a.invalidate()

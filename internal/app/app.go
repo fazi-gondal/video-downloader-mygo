@@ -644,9 +644,9 @@ func (a *App) topBar(c *ui.Context) {
 	})
 }
 
-// sidebarThemeToggle renders a compact theme-cycle row fixed at the bottom of
-// the left nav column, outside the sidebar scroll. Clicking cycles:
-// light → dark → system → light and immediately applies the new theme.
+// sidebarThemeToggle renders the theme-cycle button styled identically to a
+// native SidebarItem (same padding, gap, radius, icon size, and hover bg).
+// Clicking cycles: light → dark → system → light.
 func (a *App) sidebarThemeToggle(c *ui.Context) {
 	a.ensureSettingsDraft()
 	t := c.Theme()
@@ -661,15 +661,16 @@ func (a *App) sidebarThemeToggle(c *ui.Context) {
 	default:
 		icon, label = appui.IconMonitor, "System theme"
 	}
+	// t.Space(1.5)=6, t.Space(2)=8 — matches coreSidebarItem padding/gap exactly
 	row := ui.Row(c.Key("sidebar-theme-toggle")).
 		FillWidth().
-		Background(ui.Color{}).
-		Padding(9, 12).
-		Gap(10).
 		AlignItems(ui.Center).
+		Gap(8).
+		Padding(6, 8).
+		Radius(t.Radius).
 		Children(func() {
-			ui.Icon(c, icon).FontSize(19).TextColor(t.TextMuted)
-			ui.Text(c, label).FontSize(13).TextColor(t.TextMuted).Grow(1)
+			ui.Icon(c, icon).FontSize(16).TextColor(t.Accent)
+			ui.Text(c, label).FontSize(t.FontSize).Grow(1)
 		})
 	if row.Clicked() {
 		next := map[string]string{"light": "dark", "dark": "system", "system": "light"}
