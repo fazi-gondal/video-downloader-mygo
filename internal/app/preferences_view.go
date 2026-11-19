@@ -144,7 +144,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			ui.Text(c, "Tune downloads, media defaults, and the appearance of MyGo.").FontSize(12).TextColor(t.TextMuted)
 		})
 
-		settingsCard(c, "Appearance", "Choose how MyGo follows your system theme.", func() {
+		settingsCard(c, appui.IconSettings, "Appearance", "Choose how MyGo follows your system theme.", func() {
 			ui.Row(c).FillWidth().Gap(10).Children(func() {
 				a.themeCard(c, "light", appui.IconSun, "Light")
 				a.themeCard(c, "dark", appui.IconMoon, "Dark")
@@ -152,7 +152,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			})
 		})
 
-		settingsCard(c, "Download location", "Files are saved here unless a request chooses another folder.", func() {
+		settingsCard(c, appui.IconFolder, "Download location", "Files are saved here unless a request chooses another folder.", func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, appui.IconFolder).FontSize(16).TextColor(t.TextMuted)
 				ui.TextInput(c, &a.settingsDraft.DownloadDir).Grow(1).Placeholder("Download folder")
@@ -162,19 +162,19 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			})
 		})
 
-		settingsCard(c, "Performance", "Choose how many downloads or fragments may run in parallel.", func() {
+		settingsCard(c, appui.IconRefresh, "Performance", "Choose how many downloads or fragments may run in parallel.", func() {
 			performanceSliderRow(c, "Downloads", "Maximum concurrent downloads", &a.maxConcurrentSlider, 1, 16)
 			performanceSliderRow(c, "Fragments", "Concurrent fragments per download", &a.concurrentFragmentsSlider, 1, 32)
 		})
 
-		settingsCard(c, "Media defaults", "These options are applied to new download requests.", func() {
+		settingsCard(c, appui.IconDownload, "Media defaults", "These options are applied to new download requests.", func() {
 			ui.Checkbox(c, &a.settingsDraft.EmbedThumbnail, "Embed thumbnail")
 			ui.Checkbox(c, &a.settingsDraft.EmbedMetadata, "Embed metadata and chapters")
 			ui.Checkbox(c, &a.settingsDraft.MultiAudio, "Download multiple audio tracks when available")
 			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, "Prefer VP9 video when available (fallback automatically)")
 		})
 
-		settingsCard(c, "Subtitles", "Use comma-separated yt-dlp language codes, such as en, ur, or all.", func() {
+		settingsCard(c, appui.IconVideo, "Subtitles", "Use comma-separated yt-dlp language codes, such as en, ur, or all.", func() {
 			ui.Checkbox(c, &a.settingsDraft.WriteSubtitles, "Write subtitles by default")
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Languages").FontSize(12).TextColor(t.TextMuted).Width(86)
@@ -182,21 +182,21 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			})
 		})
 
-		settingsCard(c, "Network", "Optional proxy, browser cookies, and a per-download rate limit.", func() {
+		settingsCard(c, appui.IconLink, "Network", "Optional proxy, browser cookies, and a per-download rate limit.", func() {
 			settingsLabeledInput(c, "Proxy", &a.settingsDraft.Proxy, "http://… or socks5://…")
 			settingsLabeledInput(c, "Cookies", &a.settingsDraft.CookiesBrowser, "chrome, firefox, edge…")
 			settingsLabeledInput(c, "Rate limit", &a.settingsRateLimit, "0 = unlimited (Kbps)")
 		})
 
-		settingsCard(c, "Custom headers", "One header per line in the form Key: Value.", func() {
+		settingsCard(c, nil, "Custom headers", "One header per line in the form Key: Value.", func() {
 			ui.TextArea(c, &a.settingsHeaders).FillWidth().Height(86).Placeholder("Accept-Language: en-US")
 		})
 
-		settingsCard(c, "Conversion", "Defaults used by the local FFmpeg converter.", func() {
+		settingsCard(c, appui.IconConverter, "Conversion", "Defaults used by the local FFmpeg converter.", func() {
 			ui.Checkbox(c, &a.settingsDraft.KeepOriginals, "Keep originals after conversion")
 		})
 
-		settingsCard(c, "Dependencies", "The executable paths currently resolved by the app.", func() {
+		settingsCard(c, appui.IconAbout, "Dependencies", "The executable paths currently resolved by the app.", func() {
 			dependencyRow(c, "FFmpeg", dependencyPath(a.ffmpegPath()))
 			dependencyRow(c, "yt-dlp", dependencyPath(a.ytdlpPath()))
 		})
@@ -319,10 +319,18 @@ func aboutLinkBtn(c *ui.Context, t *ui.Theme, icon *ui.SVG, label, url string) {
 		})
 }
 
-func settingsCard(c *ui.Context, title, subtitle string, children func()) {
+// settingsCard renders a surface card section. icon may be nil to omit the
+// leading accent icon (matches the reference _section header style when provided).
+func settingsCard(c *ui.Context, icon *ui.SVG, title, subtitle string, children func()) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Radius(12).Padding(14, 16).Gap(9).Children(func() {
-		ui.Text(c, title).FontSize(14).Bold()
+	ui.Column(c).FillWidth().Background(t.Surface).Border(1, t.Border).Radius(12).Padding(16, 18).Gap(10).Children(func() {
+		// Header: icon (accent) + bold title on one row
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			if icon != nil {
+				ui.Icon(c, icon).FontSize(18).TextColor(t.Accent)
+			}
+			ui.Text(c, title).FontSize(14).Bold()
+		})
 		if subtitle != "" {
 			ui.Text(c, subtitle).FontSize(11).TextColor(t.TextMuted).MaxWidth(680)
 		}
@@ -377,23 +385,29 @@ func (a *App) ytdlpPath() string {
 }
 
 // themeCard renders an icon card for one theme mode (light / dark / system).
-// The selected card gets an accent border and primary-tinted background.
+// Matches the reference _ThemeSelector: unselected cards have a surface fill
+// and a 1px muted border; selected gets PRIMARY_CONTAINER-equivalent tint + 1.5px accent border.
 func (a *App) themeCard(c *ui.Context, mode string, icon *ui.SVG, label string) {
 	a.ensureSettingsDraft()
 	t := c.Theme()
 	selected := a.settingsDraft.ThemeMode == mode
-	borderColor := t.Border
-	bgColor := ui.Color{}
-	iconColor := t.TextMuted
+	var borderWidth float32
+	var borderColor, bgColor, iconColor ui.Color
 	if selected {
+		borderWidth = 2
 		borderColor = t.Accent
-		bgColor = ui.Color{R: t.Accent.R, G: t.Accent.G, B: t.Accent.B, A: 30}
+		bgColor = ui.Color{R: t.Accent.R, G: t.Accent.G, B: t.Accent.B, A: 28}
 		iconColor = t.Accent
+	} else {
+		borderWidth = 1
+		borderColor = t.Border
+		bgColor = t.SurfaceHover
+		iconColor = t.TextMuted
 	}
 	row := ui.Column(c.Key("theme-card-"+mode)).
 		Grow(1).
 		Background(bgColor).
-		Border(2, borderColor).
+		Border(borderWidth, borderColor).
 		Radius(10).
 		Padding(14, 10).
 		Gap(6).

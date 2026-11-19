@@ -565,25 +565,31 @@ func (a *App) View(c *ui.Context) {
 	}
 	a.tasksMu.Unlock()
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		ui.Sidebar(c, &a.page, func() {
-			ui.SidebarSection(c, "Library", &a.sidebarOpen[0], func() {
-				ui.SidebarItem(c, PageDashboard, appui.IconHome, "Home")
-				ui.SidebarItem(c, PageDownloads, appui.IconDownload, "Downloads").Children(func() {
-					if activeDownloads > 0 {
-						ui.Badge(c, fmt.Sprintf("%d", activeDownloads))
-					}
+		// Left nav: sidebar sections (scrollable) + theme toggle fixed at bottom.
+		// The Column wrapper is necessary because ui.Sidebar is a scroll container —
+		// a Spacer inside it would scroll away. Wrapping ensures the toggle stays
+		// anchored below the scroll regardless of content height.
+		ui.Column(c).Width(212).FillHeight().Material(glass.Glass{Clarity: 0.2}).Children(func() {
+			ui.Sidebar(c, &a.page, func() {
+				ui.SidebarSection(c, "Library", &a.sidebarOpen[0], func() {
+					ui.SidebarItem(c, PageDashboard, appui.IconHome, "Home")
+					ui.SidebarItem(c, PageDownloads, appui.IconDownload, "Downloads").Children(func() {
+						if activeDownloads > 0 {
+							ui.Badge(c, fmt.Sprintf("%d", activeDownloads))
+						}
+					})
+					ui.SidebarItem(c, PageConverter, appui.IconConverter, "Converter")
+					ui.SidebarItem(c, PageHistory, appui.IconHistory, "History")
 				})
-				ui.SidebarItem(c, PageConverter, appui.IconConverter, "Converter")
-				ui.SidebarItem(c, PageHistory, appui.IconHistory, "History")
-			})
-			ui.SidebarSection(c, "App", &a.sidebarOpen[1], func() {
-				ui.SidebarItem(c, PageSettings, appui.IconSettings, "Settings")
-				ui.SidebarItem(c, PageAbout, appui.IconAbout, "About")
-			})
-			// Theme toggle pinned to the bottom of the sidebar
-			ui.Spacer(c).Grow(1)
+				ui.SidebarSection(c, "App", &a.sidebarOpen[1], func() {
+					ui.SidebarItem(c, PageSettings, appui.IconSettings, "Settings")
+					ui.SidebarItem(c, PageAbout, appui.IconAbout, "About")
+				})
+			}).Grow(1)
+			// Thin divider + theme cycle button, outside the scroll area
+			ui.Box(c).FillWidth().Height(1).Background(t.Border)
 			a.sidebarThemeToggle(c)
-		}).Width(212).Material(glass.Glass{Clarity: 0.2})
+		})
 		ui.Column(c).Grow(1).FillHeight().Background(t.Background).Children(func() {
 			a.topBar(c)
 			ui.Column(c).Grow(1).Padding(16).Children(func() {
@@ -638,9 +644,9 @@ func (a *App) topBar(c *ui.Context) {
 	})
 }
 
-// sidebarThemeToggle renders a compact theme-cycle row at the bottom of the
-// sidebar: clicking it cycles light → dark → system → light and immediately
-// applies the new theme.
+// sidebarThemeToggle renders a compact theme-cycle row fixed at the bottom of
+// the left nav column, outside the sidebar scroll. Clicking cycles:
+// light → dark → system → light and immediately applies the new theme.
 func (a *App) sidebarThemeToggle(c *ui.Context) {
 	a.ensureSettingsDraft()
 	t := c.Theme()
@@ -658,8 +664,6 @@ func (a *App) sidebarThemeToggle(c *ui.Context) {
 	row := ui.Row(c.Key("sidebar-theme-toggle")).
 		FillWidth().
 		Background(ui.Color{}).
-		Border(1, t.Border).
-		Radius(10).
 		Padding(9, 12).
 		Gap(10).
 		AlignItems(ui.Center).
@@ -2754,7 +2758,7 @@ func (a *App) historyPage(c *ui.Context) {
 					if ui.Row(c.Key("hist-show-"+e.ID)).
 						Background(ui.Color{}).Border(1, t.Border).Radius(8).Size(32, 32).Center().
 						Children(func() {
-							ui.Icon(c, appui.IconFolderOpen).FontSize(16).TextColor(t.TextMuted)
+							ui.Icon(c, appui.IconFolder).FontSize(16).TextColor(t.TextMuted)
 						}).Clicked() {
 						go mygo.Shell.ShowItemInFolder(path)
 					}
@@ -2763,7 +2767,7 @@ func (a *App) historyPage(c *ui.Context) {
 					if ui.Row(c.Key("hist-redo-"+e.ID)).
 						Background(ui.Color{}).Border(1, t.Border).Radius(8).Size(32, 32).Center().
 						Children(func() {
-							ui.Icon(c, appui.IconRepeat).FontSize(16).TextColor(t.TextMuted)
+							ui.Icon(c, appui.IconDownload).FontSize(16).TextColor(t.TextMuted)
 						}).Clicked() {
 						settings := a.settingsDraftSnapshot()
 						req := historyDownloadRequest(e, settings.DownloadDir)
