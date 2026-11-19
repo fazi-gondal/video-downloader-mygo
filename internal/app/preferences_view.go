@@ -246,30 +246,77 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 
 func (a *App) refinedAboutPage(c *ui.Context) {
 	t := c.Theme()
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(700).Material(glass.Glass{Clarity: 0.2}).Border(1, c.Theme().Border).Radius(16).Center().Gap(10).Padding(24, 12).Children(func() {
-			ui.Box(c).Size(72, 72).Background(t.Accent).Radius(22).Center().Children(func() {
-				ui.Icon(c, appui.IconDownload).FontSize(34).TextColor(ui.Color{R: 255, G: 255, B: 255, A: 255})
-			})
-			ui.Text(c, "Video Downloader").FontSize(24).Bold()
-			ui.Text(c, "MyGo native desktop app").FontSize(13).TextColor(t.TextMuted)
-			ui.Text(c, "v3.2.0").FontSize(12).TextColor(t.Accent)
-			ui.Text(c, "Rewritten from the Flet + Python original by Fazi Gondal.").FontSize(13).TextColor(t.TextMuted).MaxWidth(480)
+	// Center the card vertically: 1 unit of space above, 2 below (matches reference).
+	ui.Column(c).Grow(1).FillWidth().Children(func() {
+		ui.Spacer(c).Grow(1)
+		ui.Scroll(c).FillWidth().Children(func() {
+			ui.Column(c).FillWidth().Center().Padding(0, 16).Children(func() {
+				// ── card ─────────────────────────────────────────────────────
+				ui.Column(c).Width(620).Background(t.Surface).Border(1, t.Border).Radius(16).Padding(36, 40).Gap(14).AlignItems(ui.Center).Children(func() {
 
-			ui.Row(c).Gap(8).Wrap().Justify(ui.Center).Children(func() {
-				techChip(c, "Go")
-				techChip(c, "MyGo")
-				techChip(c, "yt-dlp")
-				techChip(c, "FFmpeg")
-			})
-			ui.Row(c).Gap(14).Wrap().Justify(ui.Center).Children(func() {
-				ui.Link(c, "Original reference", "https://github.com/fazi-gondal/Video-Downloader")
-				ui.Link(c, "Project repository", "https://github.com/fazi-gondal/video-downloader-mygo")
-				ui.Link(c, "Report an issue", "https://github.com/fazi-gondal/video-downloader-mygo/issues")
-				ui.Link(c, "MIT license", "https://github.com/fazi-gondal/video-Downloader-mygo/blob/main/LICENSE")
+					// Logo
+					ui.Box(c).Size(84, 84).Background(t.Accent).Radius(20).Center().Children(func() {
+						ui.Icon(c, appui.IconDownload).FontSize(40).TextColor(ui.Color{R: 255, G: 255, B: 255, A: 255})
+					})
+
+					// App name
+					ui.Text(c, "Video Downloader").FontSize(28).Bold()
+
+					// Version pill
+					ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(999).Padding(5, 14).Children(func() {
+						ui.Text(c, "v3.0.0 · Open-source media downloader").FontSize(12).Bold().TextColor(t.TextMuted)
+					})
+
+					// Description
+					ui.Text(c, "Download, convert, and organize media from YouTube, TikTok, Instagram, X, ARY Plus, and more. Native Go desktop app — fast, lightweight, no Electron.").
+						FontSize(14).TextColor(t.TextMuted).MaxWidth(460)
+
+					// Divider
+					ui.Box(c).FillWidth().Height(1).Background(t.Border)
+
+					// Developer credit
+					ui.Text(c, "Developed by Faizan Gondal").FontSize(14).Bold()
+
+					// Link buttons row (outlined style)
+					ui.Row(c).Gap(8).Wrap().Justify(ui.Center).Children(func() {
+						aboutLinkBtn(c, t, appui.IconLink, "GitHub", "https://github.com/fazi-gondal")
+						aboutLinkBtn(c, t, appui.IconLink, "Website", "https://codewithfazi.vercel.app/")
+						aboutLinkBtn(c, t, appui.IconVideo, "Reference app", "https://github.com/fazi-gondal/Video-Downloader")
+						aboutLinkBtn(c, t, appui.IconDownload, "Repository", "https://github.com/fazi-gondal/video-downloader-mygo")
+						aboutLinkBtn(c, t, appui.IconSettings, "Report issue", "https://github.com/fazi-gondal/video-downloader-mygo/issues")
+					})
+
+					// Tech stack label + chips
+					ui.Text(c, "BUILT WITH").FontSize(10).Bold().TextColor(t.TextMuted)
+					ui.Row(c).Gap(8).Wrap().Justify(ui.Center).Children(func() {
+						techChip(c, "Go")
+						techChip(c, "MyGo")
+						techChip(c, "yt-dlp")
+						techChip(c, "FFmpeg")
+					})
+
+					// License line
+					ui.Link(c, "© 2026 Faizan Gondal · MIT License", "https://github.com/fazi-gondal/video-downloader-mygo/blob/main/LICENSE").FontSize(12)
+				})
 			})
 		})
+		ui.Spacer(c).Grow(2)
 	})
+}
+
+// aboutLinkBtn renders an outlined button that opens a URL when clicked.
+func aboutLinkBtn(c *ui.Context, t *ui.Theme, icon *ui.SVG, label, url string) {
+	ui.Row(c.Key("abt-"+label)).
+		Background(ui.Color{}).
+		Border(1, t.Border).
+		Radius(10).
+		Padding(10, 16).
+		Gap(6).
+		AlignItems(ui.Center).
+		Children(func() {
+			ui.Icon(c, icon).FontSize(14).TextColor(t.TextMuted)
+			ui.Link(c, label, url).FontSize(13)
+		})
 }
 
 func settingsCard(c *ui.Context, title, subtitle string, children func()) {
