@@ -1036,76 +1036,118 @@ func isMeshVideoFormat(format models.FormatInfo) bool {
 func (a *App) configPanel(c *ui.Context) {
 	t := c.Theme()
 	a.syncContainerSelection()
-	ui.Column(c).FillWidth().Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Padding(14).Radius(10).Gap(10).Children(func() {
-		ui.Text(c, "Download options").FontSize(13).Bold()
-		ui.Row(c).Gap(8).Children(func() {
-			a.modeBtn(c, models.ModeVideoAudio, "Video + Audio")
-			a.modeBtn(c, models.ModeAudioOnly, "Audio only")
-			a.modeBtn(c, models.ModeVideoOnly, "Video only")
-		})
-		if a.mode != models.ModeAudioOnly {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Max quality").FontSize(12).TextColor(t.TextMuted).Width(90)
+
+	// ── Mode selector cards ───────────────────────────────────────────────
+	a.configSectionTitle(c, "Download mode")
+	ui.Row(c).FillWidth().Gap(10).Children(func() {
+		a.modeBtn(c, models.ModeVideoAudio, appui.IconVideo, "Video + Audio", "Best quality, merged streams")
+		a.modeBtn(c, models.ModeVideoOnly, appui.IconVideo, "Video only", "No audio track muxed")
+		a.modeBtn(c, models.ModeAudioOnly, appui.IconMusic, "Audio only", "Extract audio stream")
+	})
+
+	ui.Box(c).FillWidth().Height(1).Background(t.Border)
+
+	if a.mode != models.ModeAudioOnly {
+		// ── Bento: container/fps left | resolution right ──────────────────
+		a.configSectionTitle(c, "Video options")
+		ui.Row(c).FillWidth().Gap(20).AlignItems(ui.Start).Children(func() {
+			// left column: container
+			ui.Column(c).Gap(8).Grow(5).Children(func() {
+				ui.Text(c, "Container").FontSize(12).TextColor(t.TextMuted)
+				ct := a.container
+				containerLocked := a.containerSelectionLocked()
+				ui.Row(c).FillWidth().Gap(6).Children(func() {
+					for _, opt := range []string{"mp4", "mkv", "webm"} {
+						selected := ct == opt
+						a.chipBtn(c, "ct-"+opt, opt, selected, containerLocked, func() {
+							if !containerLocked {
+								a.container = opt
+								a.preferredContainer = opt
+							}
+						})
+					}
+				})
+			})
+			// right column: quality
+			ui.Column(c).Gap(8).Grow(7).Children(func() {
+				ui.Text(c, "Max quality").FontSize(12).TextColor(t.TextMuted)
 				qLabels := []string{"Best", "2160p", "1440p", "1080p", "720p", "480p", "360p"}
 				qVals := []int{0, 2160, 1440, 1080, 720, 480, 360}
-				curQ := "Best"
+				curIdx := 0
 				for i, h := range qVals {
 					if a.maxHeight == h {
-						curQ = qLabels[i]
+						curIdx = i
 						break
 					}
 				}
-				if ui.Select(c, &curQ, qLabels).Changed() {
-					for i, lab := range qLabels {
-						if lab == curQ {
-							a.maxHeight = qVals[i]
-							// resolution preset must not pin a video-only format id
+				ui.Row(c).FillWidth().Gap(6).Children(func() {
+					for i, label := range qLabels {
+						idx := i
+						selected := curIdx == idx
+						a.chipBtn(c, "q-"+label, label, selected, false, func() {
+							a.maxHeight = qVals[idx]
 							a.selectedVideoFormat = ""
 							a.selectedVideoLabel = "Auto (best for resolution)"
-							break
-						}
+						})
 					}
-				}
+				})
 			})
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Container").FontSize(12).TextColor(t.TextMuted).Width(90)
-				ct := a.container
-				containerLocked := a.containerSelectionLocked()
-				if ui.Select(c, &ct, []string{"mp4", "mkv", "webm"}).Disabled(containerLocked).Changed() && !containerLocked {
-					a.container = ct
-					a.preferredContainer = ct
-				}
-			})
-		}
-		if a.mode == models.ModeAudioOnly {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Format").FontSize(12).TextColor(t.TextMuted).Width(90)
-				af := a.audioFormat
-				if ui.Select(c, &af, []string{"mp3", "m4a", "opus", "flac", "wav"}).Changed() {
-					a.audioFormat = af
-				}
-			})
-		}
-		if a.mode == models.ModeVideoAudio && a.currentMedia != nil {
-			a.audioTracksControls(c)
-		}
-		if a.mode != models.ModeAudioOnly {
-			if a.hasSubtitles() {
-				a.subtitleControls(c)
+		})
+		ui.Box(c).FillWidth().Height(1).Background(t.Border)
+	}
+
+	if a.mode == models.ModeAudioOnly {
+		// ── Audio format & quality chips ──────────────────────────────────
+		a.configSectionTitle(c, "Audio")
+		ui.Text(c, "Format").FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).FillWidth().Gap(6).Children(func() {
+			for _, opt := range []string{"mp3", "m4a", "opus", "flac", "wav"} {
+				selected := a.audioFormat == opt
+				a.chipBtn(c, "af-"+opt, opt, selected, false, func() {
+					a.audioFormat = opt
+				})
 			}
+		})
+		ui.Box(c).FillWidth().Height(1).Background(t.Border)
+	}
+
+	if a.mode == models.ModeVideoAudio && a.currentMedia != nil {
+		a.audioTracksControls(c)
+	}
+	if a.mode != models.ModeAudioOnly {
+		if a.hasSubtitles() {
+			a.subtitleControls(c)
 		}
-		a.syncContainerSelection()
-		if estimate := a.estimatedSizeText(); estimate != "" {
-			ui.Text(c, estimate).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
-		}
-		if ui.PrimaryButton(c, "Start download").Clicked() {
-			if a.currentMedia != nil {
-				a.startDownload()
-			} else if a.currentPlaylist != nil {
-				a.startPlaylistDownloads()
-			}
-		}
+	}
+	a.syncContainerSelection()
+}
+
+// configSectionTitle renders a section heading label (matches ref headline_md).
+func (a *App) configSectionTitle(c *ui.Context, text string) {
+	ui.Text(c, text).FontSize(14).Bold()
+}
+
+// chipBtn renders an exclusive selectable chip. When disabled, it is greyed out
+// and not clickable (used for the container selector when locked to MKV).
+func (a *App) chipBtn(c *ui.Context, key, label string, selected, disabled bool, onClick func()) {
+	t := c.Theme()
+	bg := t.Surface
+	border := t.Border
+	textColor := t.TextMuted
+	if selected {
+		bg = t.SurfaceHover
+		border = t.Accent
+		textColor = t.Accent
+	}
+	if disabled && !selected {
+		textColor = t.TextMuted
+	}
+	btn := ui.Row(c.Key("chip-"+key)).Background(bg).Border(1, border).Radius(8).Padding(7, 12).Grow(1).Justify(ui.Center).Children(func() {
+		ui.Text(c, label).FontSize(13).Bold().TextColor(textColor)
 	})
+	if btn.Clicked() && !disabled && !selected {
+		onClick()
+	}
 }
 
 func (a *App) audioTracksControls(c *ui.Context) {
@@ -1117,25 +1159,29 @@ func (a *App) audioTracksControls(c *ui.Context) {
 		return
 	}
 	t := c.Theme()
-	ui.Column(c).FillWidth().Gap(6).Children(func() {
-		ui.Text(c, "Audio tracks").FontSize(12).TextColor(t.TextMuted)
-		ui.Row(c).Gap(8).Children(func() {
+	ui.Box(c).FillWidth().Height(1).Background(t.Border)
+	ui.Column(c).FillWidth().Gap(10).Children(func() {
+		a.configSectionTitle(c, "Audio tracks")
+		ui.Text(c, "Select which audio languages to include in the output file.").FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).FillWidth().Gap(6).Children(func() {
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksNone, "Default")
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksAll, "All")
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksCustom, "Custom")
 		})
 		if a.audioTracksMode == audioTracksCustom {
-			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Padding(4, 6).Children(func() {
-				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).GapX(14).GapY(8).Children(func() {
-					for _, tr := range tracks {
-						id := tr.ID
-						on := checkboxState(a.selectedAudio, id)
-						label := a.audioTrackLanguage(tr)
-						ui.Row(c.Key("aud-tile-"+id)).FillWidth().MinWidth(0).Padding(6, 10).
-							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
-							ui.Checkbox(c.Key("aud-"+id), on, label)
-						})
-					}
+			ui.Column(c).FillWidth().Gap(4).Background(t.Surface).Border(1, t.Border).Radius(8).Padding(10).Children(func() {
+				ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Padding(4, 6).Children(func() {
+					ui.Grid(c).FillWidth().MinWidth(0).Columns(3).GapX(14).GapY(8).Children(func() {
+						for _, tr := range tracks {
+							id := tr.ID
+							on := checkboxState(a.selectedAudio, id)
+							label := a.audioTrackLanguage(tr)
+							ui.Row(c.Key("aud-tile-"+id)).FillWidth().MinWidth(0).Padding(6, 10).
+								AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
+								ui.Checkbox(c.Key("aud-"+id), on, label)
+							})
+						}
+					})
 				})
 			})
 		}
@@ -1248,27 +1294,31 @@ func (a *App) subtitleControls(c *ui.Context) {
 	if len(langs) == 0 {
 		return
 	}
-	ui.Column(c).FillWidth().Gap(6).Children(func() {
-		ui.Text(c, "Subtitles").FontSize(12).TextColor(t.TextMuted)
-		ui.Row(c).Gap(8).Children(func() {
+	ui.Box(c).FillWidth().Height(1).Background(t.Border)
+	ui.Column(c).FillWidth().Gap(10).Children(func() {
+		a.configSectionTitle(c, "Subtitles")
+		ui.Text(c, "Embed subtitle tracks into the output file (requires MKV for multiple).").FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).FillWidth().Gap(6).Children(func() {
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeNone, "None")
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeAll, "All")
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeCustom, "Custom")
 		})
 		if a.subtitleMode == subtitleModeCustom {
-			ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Padding(4, 6).Children(func() {
-				ui.Grid(c).FillWidth().MinWidth(0).Columns(3).GapX(14).GapY(8).Children(func() {
-					for _, lang := range langs {
-						on := checkboxState(a.selectedSubtitle, lang)
-						label := languageDisplayName(lang)
-						if label == "" {
-							label = lang
+			ui.Column(c).FillWidth().Gap(4).Background(t.Surface).Border(1, t.Border).Radius(8).Padding(10).Children(func() {
+				ui.Scroll(c).FillWidth().MinWidth(0).Height(168).Padding(4, 6).Children(func() {
+					ui.Grid(c).FillWidth().MinWidth(0).Columns(3).GapX(14).GapY(8).Children(func() {
+						for _, lang := range langs {
+							on := checkboxState(a.selectedSubtitle, lang)
+							label := languageDisplayName(lang)
+							if label == "" {
+								label = lang
+							}
+							ui.Row(c.Key("sub-tile-"+lang)).FillWidth().MinWidth(0).Padding(6, 10).
+								AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
+								ui.Checkbox(c.Key("sub-"+lang), on, label)
+							})
 						}
-						ui.Row(c.Key("sub-tile-"+lang)).FillWidth().MinWidth(0).Padding(6, 10).
-							AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).Radius(6).Children(func() {
-							ui.Checkbox(c.Key("sub-"+lang), on, label)
-						})
-					}
+					})
 				})
 			})
 		}
@@ -1276,15 +1326,31 @@ func (a *App) subtitleControls(c *ui.Context) {
 }
 
 func (a *App) selectionModeBtn(c *ui.Context, key string, selected *string, value, label string) {
-	a.toggleBtn(c, key+"-"+value, label, *selected == value, func() {
+	a.chipBtn(c, key+"-"+value, label, *selected == value, false, func() {
 		*selected = value
 	})
 }
 
-func (a *App) modeBtn(c *ui.Context, mode models.DownloadMode, label string) {
-	a.toggleBtn(c, "mode-"+string(mode), label, a.mode == mode, func() {
-		a.mode = mode
+func (a *App) modeBtn(c *ui.Context, mode models.DownloadMode, icon *ui.SVG, label, desc string) {
+	t := c.Theme()
+	selected := a.mode == mode
+	bg := t.Surface
+	border := t.Border
+	iconColor := t.TextMuted
+	labelColor := t.Text
+	if selected {
+		bg = t.SurfaceHover
+		border = t.Accent
+		iconColor = t.Accent
+	}
+	btn := ui.Column(c.Key("mode-"+string(mode))).Background(bg).Border(1, border).Radius(10).Padding(16, 12).Gap(6).Grow(1).AlignItems(ui.Center).Children(func() {
+		ui.Icon(c, icon).FontSize(26).TextColor(iconColor)
+		ui.Text(c, label).FontSize(14).Bold().TextColor(labelColor)
+		ui.Text(c, desc).FontSize(11).TextColor(t.TextMuted)
 	})
+	if btn.Clicked() && !selected {
+		a.mode = mode
+	}
 }
 
 // toggleBtn renders a PrimaryButton when selected, otherwise a normal Button.
@@ -1352,20 +1418,90 @@ func (a *App) playlistEntryCheckbox(c *ui.Context, index int) {
 }
 
 func (a *App) configPage(c *ui.Context) {
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).FillWidth().Gap(12).Children(func() {
-			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-				if ui.Button(c, "← Back").Clicked() {
-					a.page = PageDashboard
-				}
-				ui.Text(c, "Download configuration").FontSize(18).Bold()
-			})
-			if a.currentMedia != nil {
-				a.mediaCard(c)
+	t := c.Theme()
+	// outer column: header + scrollable body + fixed bottom bar
+	ui.Column(c).Grow(1).FillWidth().Gap(0).Children(func() {
+		// ── fixed header ──────────────────────────────────────────────
+		ui.Row(c).FillWidth().Padding(0, 0, 10, 0).AlignItems(ui.Center).Gap(10).Children(func() {
+			if ui.Button(c, "←").Clicked() {
+				a.page = PageDashboard
 			}
-			a.configPanel(c)
-			a.formatPicker(c)
+			ui.Column(c).Gap(2).Grow(1).Children(func() {
+				ui.Text(c, "Download options").FontSize(17).Bold()
+				if a.currentMedia != nil {
+					ui.Text(c, a.currentMedia.Title).FontSize(12).TextColor(t.TextMuted).Ellipsis("…")
+				} else if a.currentPlaylist != nil {
+					n := 0
+					for _, v := range a.selectedEntries {
+						if v {
+							n++
+						}
+					}
+					ui.Text(c, fmt.Sprintf("%d videos selected · %s", n, a.currentPlaylist.Title)).FontSize(12).TextColor(t.TextMuted).Ellipsis("…")
+				}
+			})
+			if a.currentMedia != nil && a.currentMedia.Thumbnail != "" {
+				a.thumbnailElement(c, a.currentMedia.Thumbnail, 85, 48, appui.IconVideo)
+			}
 		})
+
+		// ── scrollable body ───────────────────────────────────────────
+		ui.Scroll(c).Grow(1).Gap(0).Children(func() {
+			ui.Column(c).FillWidth().Gap(20).Children(func() {
+				a.configPanel(c)
+				a.formatPicker(c)
+			})
+		})
+
+		// ── fixed bottom action bar ───────────────────────────────────
+		ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Border).Radius(10).Padding(12, 16).Gap(10).AlignItems(ui.Center).Children(func() {
+			// summary chips
+			if a.mode == models.ModeAudioOnly {
+				a.configSummaryChip(c, strings.ToUpper(a.audioFormat))
+			} else {
+				a.configSummaryChip(c, strings.ToUpper(a.container))
+				if a.maxHeight > 0 {
+					a.configSummaryChip(c, fmt.Sprintf("%dp", a.maxHeight))
+				} else {
+					a.configSummaryChip(c, "Best")
+				}
+			}
+			ui.Spacer(c).Grow(1)
+			// estimated size pill
+			if est := a.estimatedSizeText(); est != "" {
+				ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(6).Padding(5, 10).Gap(5).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, est).FontSize(12).TextColor(t.Accent)
+				})
+			}
+			// action button
+			label := "Start download"
+			if a.currentPlaylist != nil {
+				n := 0
+				for _, v := range a.selectedEntries {
+					if v {
+						n++
+					}
+				}
+				if n > 1 {
+					label = fmt.Sprintf("Download (%d)", n)
+				}
+			}
+			if ui.PrimaryButton(c, label).Clicked() {
+				if a.currentMedia != nil {
+					a.startDownload()
+				} else if a.currentPlaylist != nil {
+					a.startPlaylistDownloads()
+				}
+			}
+		})
+	})
+}
+
+// configSummaryChip renders a small label pill in the bottom bar.
+func (a *App) configSummaryChip(c *ui.Context, text string) {
+	t := c.Theme()
+	ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(6).Padding(4, 10).Children(func() {
+		ui.Text(c, text).FontSize(12).Bold()
 	})
 }
 
