@@ -4,15 +4,33 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
-## [3.3.0] - 2026-11-19
+## [3.3.0] - 2026-11-20
+
+### Added
+
+- **Minimize to tray**: a new "Minimize to tray" option in the close dialog lets
+  downloads continue running in the background. A system-tray icon appears with
+  "Show Video Downloader" and "Quit" menu items; clicking the icon restores the
+  window instantly.
 
 ### Changed
 
-- Redesigned format-selection (config) screen: mode icon cards, chip-group rows
-  for quality/container/audio-format, bento two-column layout, fixed bottom
+- Redesigned format-selection (config) screen: mode icon cards, **ChipGroup-style
+  card selectors** for container (mp4/mkv/webm), video quality (Best → 360p), and
+  audio format (mp3/m4a/opus/flac/wav); bento two-column layout; fixed bottom
   action bar with live summary chips and size pill.
 - Redesigned About screen: centered card, large accent logo block, version pill,
   outlined link buttons with icons, tech stack chips, license link.
+- Redesigned Settings screen: glass card sections with icons, improved slider rows,
+  section dividers, and tonal surface styling.
+- Sidebar: theme-switching button moved to the bottom of the sidebar, styled
+  identically to native SidebarItem entries (same padding, gap, icon, hover bg).
+- History actions (open folder, re-download, delete) redesigned with icons
+  matching the reference app.
+- Close dialog updated from 3 → 4 buttons; "Minimize to tray" is the default
+  suggestion when downloads are active.
+- `OnWindowAllClosed` now guards against shutting down the app while a tray icon
+  is active, keeping the event loop alive for background downloads.
 
 ### Fixed
 
