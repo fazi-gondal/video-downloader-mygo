@@ -11,7 +11,14 @@ import (
 
 func main() {
 	a := app.New()
-	mygo.App.OnWindowAllClosed(a.Shutdown)
+	mygo.App.OnWindowAllClosed(func() {
+		// If the user chose "Minimize to tray", the window is hidden but the
+		// tray icon keeps the app alive. Do NOT shut down in that case.
+		if a.HasTray() {
+			return
+		}
+		a.Shutdown()
+	})
 	defer a.Shutdown()
 
 	mygo.App.WhenReady(func() {

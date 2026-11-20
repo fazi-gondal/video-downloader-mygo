@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -23,6 +24,9 @@ import (
 	"github.com/fazi-gondal/video-downloader-mygo/internal/services"
 	appui "github.com/fazi-gondal/video-downloader-mygo/internal/ui"
 )
+
+//go:embed assets/icon.png
+var _trayIconPNG []byte
 
 const (
 	PageDashboard = "dashboard"
@@ -64,6 +68,8 @@ type App struct {
 	resumeStore               *services.ResumeStore
 	closePrompting            atomic.Bool
 	closeApproved             atomic.Bool
+	trayMu                    sync.Mutex
+	tray                      *mygo.Tray
 
 	page string
 
@@ -361,10 +367,10 @@ func (a *App) promptCloseWithDownloads() {
 		Parent:        a.window(),
 		Type:          mygo.MessageQuestion,
 		Title:         "Downloads need attention",
-		Message:       "Some downloads are active or paused. What would you like to do before closing?",
-		Detail:        "Paused downloads can be resumed the next time you open the app.",
-		Buttons:       []string{"Keep downloading", "Pause and close", "Cancel downloads and close"},
-		DefaultButton: 0,
+		Message:       "Some downloads are active or paused. What would you like to do?",
+		Detail:        "\"Minimize to tray\" keeps downloads running in the background. Paused downloads can be resumed the next time you open the app.",
+		Buttons:       []string{"Keep downloading", "Minimize to tray", "Pause and close", "Cancel downloads and close"},
+		DefaultButton: 1,
 		CancelButton:  0,
 	})
 	if err != nil {
@@ -377,6 +383,10 @@ func (a *App) promptCloseWithDownloads() {
 	defer cancel()
 	switch result.Button {
 	case 1:
+		// Minimize to tray: hide the window and keep downloads running.
+		a.minimizeToTray()
+		return // do NOT set closeApproved; window is just hidden
+	case 2:
 		if err := a.manager.PauseAll(ctx); err != nil {
 			mygo.Dialog.Error("Could not pause downloads", err.Error())
 			a.closePrompting.Store(false)
@@ -387,7 +397,7 @@ func (a *App) promptCloseWithDownloads() {
 			a.closePrompting.Store(false)
 			return
 		}
-	case 2:
+	case 3:
 		a.manager.CancelAll()
 		if err := a.manager.WaitForTerminal(ctx); err != nil {
 			mygo.Dialog.Error("Could not stop downloads", err.Error())
@@ -410,6 +420,89 @@ func (a *App) promptCloseWithDownloads() {
 	if win := a.window(); win != nil {
 		win.Close()
 	}
+}
+
+// minimizeToTray hides the window and shows a system-tray icon so downloads
+// continue running in the background. The user can restore the window by
+// clicking the tray icon, or quit cleanly from the tray menu.
+func (a *App) minimizeToTray() {
+	win := a.window()
+	if win == nil {
+		a.closePrompting.Store(false)
+		return
+	}
+
+	trayMenu := mygo.NewMenu([]*mygo.MenuItem{
+		{
+			Label: "Show Video Downloader",
+			Click: func(_ *mygo.MenuItem, _ *mygo.Window) { a.showFromTray() },
+		},
+		mygo.Separator(),
+		{
+			Label: "Quit",
+			Click: func(_ *mygo.MenuItem, _ *mygo.Window) { a.quitFromTray() },
+		},
+	})
+
+	tray, err := mygo.NewTray(mygo.TrayOptions{
+		ID:      "vd-main",
+		Icon:    _trayIconPNG,
+		ToolTip: "Video Downloader — downloading in background",
+		Menu:    trayMenu,
+	})
+	if err != nil {
+		// Tray unavailable (e.g. Linux without libayatana); fall back to keeping the window open.
+		log.Println("tray: could not create tray icon:", err)
+		a.closePrompting.Store(false)
+		return
+	}
+	tray.OnClick(func() { a.showFromTray() })
+
+	a.trayMu.Lock()
+	a.tray = tray
+	a.trayMu.Unlock()
+
+	win.SetSkipTaskbar(true) // remove from Windows taskbar while tray-only
+	win.Hide()
+	a.closePrompting.Store(false)
+}
+
+// showFromTray restores the main window and removes the tray icon.
+func (a *App) showFromTray() {
+	a.trayMu.Lock()
+	t := a.tray
+	a.tray = nil
+	a.trayMu.Unlock()
+	if t != nil {
+		t.Destroy()
+	}
+	win := a.window()
+	if win == nil {
+		return
+	}
+	win.SetSkipTaskbar(false)
+	win.Show()
+	win.Focus()
+}
+
+// quitFromTray performs a clean shutdown initiated from the tray menu.
+func (a *App) quitFromTray() {
+	a.closeApproved.Store(true)
+	win := a.window()
+	if win == nil {
+		mygo.App.Quit()
+		return
+	}
+	win.Show() // must be visible for Close to fire the lifecycle hooks
+	win.Close()
+}
+
+// HasTray reports whether a tray icon is currently shown (i.e. the app is
+// running in the background). Used by main.go to guard OnWindowAllClosed.
+func (a *App) HasTray() bool {
+	a.trayMu.Lock()
+	defer a.trayMu.Unlock()
+	return a.tray != nil
 }
 
 // Shutdown stops media workers before the application event loop exits. Both
