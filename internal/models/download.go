@@ -111,6 +111,11 @@ type DownloadRequest struct {
 	PlaylistTitle string
 	PlaylistIndex int
 
+	// Extractor context: the page the stream came from, so history can
+	// re-resolve an expired direct link instead of replaying it.
+	SourcePageURL string
+	SourceIndex   int
+
 	// UI-only
 	PlaylistBatchID           uint64
 	ThumbnailURL              string

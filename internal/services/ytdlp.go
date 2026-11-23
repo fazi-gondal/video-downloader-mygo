@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
@@ -27,6 +28,7 @@ import (
 // YtDlpService wraps the yt-dlp CLI. All methods are blocking and must
 // be called from worker goroutines (never the UI thread).
 type YtDlpService struct {
+	mu         sync.Mutex
 	ffmpegPath string
 	ytdlpPath  string
 	settings   func() config.AppSettings
@@ -93,7 +95,29 @@ func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtD
 	}
 }
 
-func (s *YtDlpService) Bin() string { return s.ytdlpPath }
+func (s *YtDlpService) Bin() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ytdlpPath
+}
+
+// RefreshBinary re-resolves yt-dlp when it was missing at startup, so a tool
+// installed while the app runs can be picked up by Check again.
+func (s *YtDlpService) RefreshBinary() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ytdlpPath == "" || s.ytdlpPath == "yt-dlp" {
+		if p := tools.YtDlp(); p != "" {
+			s.ytdlpPath = p
+		}
+	}
+}
+
+func (s *YtDlpService) binary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ytdlpPath
+}
 
 // Analyze performs a fast flat extraction (good for playlists).
 func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
@@ -203,22 +227,11 @@ func (s *YtDlpService) fetchFormatsAryPlus(ctx context.Context, rawURL string) (
 
 func validateYtDlpURL(rawURL string) error {
 	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return errors.New("media URL is empty")
-	}
 	if strings.HasPrefix(rawURL, "-") {
 		return errors.New("media URL must not begin with '-'")
 	}
-
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid media URL: %w", err)
-	}
-	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
-		return errors.New("media URL must use http or https")
-	}
-	if parsed.Hostname() == "" {
-		return errors.New("media URL must include a host")
+	if _, err := parseHTTPURL(rawURL); err != nil {
+		return fmt.Errorf("media URL: %w", err)
 	}
 	return nil
 }
@@ -290,7 +303,7 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, s.ytdlpPath, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
+	cmd := exec.CommandContext(runCtx, s.binary(), args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 	prepareBackgroundCmd(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1077,7 +1090,7 @@ func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
+	cmd := exec.CommandContext(ctx, s.binary(), args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 	prepareBackgroundCmd(cmd)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -1087,11 +1100,7 @@ func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		msg := strings.TrimSpace(diagnostics.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return nil, fmt.Errorf("%s", msg)
+		return nil, ytDlpRunError(diagnostics.String(), err)
 	}
 	return stdout.Bytes(), nil
 }

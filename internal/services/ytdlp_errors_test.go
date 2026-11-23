@@ -138,3 +138,18 @@ func TestYtDlpSubtitleErrorClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestYtDlpRunErrorTagsUnsupportedURL(t *testing.T) {
+	err := ytDlpRunError("ERROR: Unsupported URL: https://example.com/archives/1/", nil)
+	if !errors.Is(err, ErrUnsupportedURL) {
+		t.Fatalf("err = %v, want ErrUnsupportedURL", err)
+	}
+	if !strings.Contains(err.Error(), "Unsupported URL") {
+		t.Fatalf("err = %v, want the original diagnostics", err)
+	}
+
+	other := ytDlpRunError("ERROR: HTTP Error 403: Forbidden", nil)
+	if errors.Is(other, ErrUnsupportedURL) {
+		t.Fatalf("403 should not be tagged as unsupported: %v", other)
+	}
+}

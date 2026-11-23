@@ -28,6 +28,7 @@ type AppSettings struct {
 	EmbedMetadata       bool              `json:"embed_metadata"`
 	PreferVP9Video      bool              `json:"prefer_vp9_video"`
 	ThemeMode           string            `json:"theme_mode"` // system | dark | light
+	Language            string            `json:"language"`   // system | en | zh-Hans
 }
 
 func DefaultSettings() AppSettings {
@@ -44,6 +45,7 @@ func DefaultSettings() AppSettings {
 		EmbedMetadata:       true,
 		PreferVP9Video:      true,
 		ThemeMode:           "system",
+		Language:            "system",
 		CustomHeaders:       map[string]string{},
 	}
 }
@@ -121,6 +123,9 @@ func (r *SettingsRepository) Load() (AppSettings, error) {
 	}
 	if s.ThemeMode == "" {
 		s.ThemeMode = def.ThemeMode
+	}
+	if s.Language == "" {
+		s.Language = def.Language
 	}
 	if s.CustomHeaders == nil {
 		s.CustomHeaders = map[string]string{}

@@ -2,11 +2,15 @@
 package tools
 
 import (
+	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo"
 )
@@ -14,6 +18,9 @@ import (
 var (
 	once   sync.Once
 	resDir string
+
+	healthMu sync.Mutex
+	healthOK = map[string]bool{}
 )
 
 // ResourcesDir is the app's resources folder (Contents/Resources on macOS,
@@ -87,20 +94,92 @@ func lookIn(dir, name string) string {
 	return ""
 }
 
-// Resolve returns the path of a tool: bundled resource first, then PATH.
+// Resolve returns the first usable path of a tool: bundled resource first,
+// then the usual install directories, then PATH. A bundled binary can be
+// present but broken (for example a dynamically linked FFmpeg whose Homebrew
+// libraries are gone), so each candidate is probed by running it before it is
+// accepted.
 func Resolve(name string) string {
-	if p := lookIn(ResourcesDir(), name); p != "" {
-		return p
-	}
-	if p, err := exec.LookPath(name); err == nil {
-		return p
-	}
-	if runtime.GOOS == "windows" {
-		if p, err := exec.LookPath(name + ".exe"); err == nil {
+	for _, p := range resolveCandidates(name) {
+		if p == "" {
+			continue
+		}
+		if usable(p, name) {
 			return p
 		}
 	}
 	return ""
+}
+
+func resolveCandidates(name string) []string {
+	var out []string
+	if p := lookIn(ResourcesDir(), name); p != "" {
+		out = append(out, p)
+	}
+	if runtime.GOOS != "windows" {
+		// A packaged app launched from Finder has launchd's minimal PATH, so
+		// look in the common package manager directories explicitly.
+		for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"} {
+			out = append(out, filepath.Join(dir, exeName(name)))
+		}
+	}
+	if p, err := exec.LookPath(name); err == nil {
+		out = append(out, p)
+	}
+	return out
+}
+
+// ResetProbeCache forgets cached health probes, so Check again can pick up a
+// tool installed while the app is running.
+func ResetProbeCache() {
+	healthMu.Lock()
+	healthOK = map[string]bool{}
+	healthMu.Unlock()
+}
+
+// usable reports whether path runs, caching the answer per binary. The probe
+// runs outside the lock so unrelated tools resolve concurrently.
+func usable(path, name string) bool {
+	healthMu.Lock()
+	ok, found := healthOK[path]
+	healthMu.Unlock()
+	if found {
+		return ok
+	}
+
+	ok, timedOut := runVersion(path, name)
+	if timedOut {
+		// A probe that ran out of time says nothing about the binary; let a
+		// later call try again instead of disabling the tool for the session.
+		return false
+	}
+
+	healthMu.Lock()
+	healthOK[path] = ok
+	healthMu.Unlock()
+	return ok
+}
+
+func runVersion(path, name string) (ok bool, timedOut bool) {
+	flag := "-version"
+	timeout := 3 * time.Second
+	switch strings.ToLower(name) {
+	case "yt-dlp", "youtube-dl":
+		flag = "--version"
+		// The yt-dlp launcher is a large self-extracting binary; a cold start
+		// under Gatekeeper or a loaded machine can take several seconds.
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, flag)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return false, true
+	}
+	return err == nil, false
 }
 
 func FFmpeg() string  { return Resolve("ffmpeg") }
@@ -110,6 +189,10 @@ func YtDlp() string {
 	if p := Resolve("yt-dlp"); p != "" {
 		return p
 	}
+	// A probe can fail on a cold start; the bundled binary is still a better
+	// guess than the bare name, which a Finder-launched app cannot find on PATH.
+	if p := lookIn(ResourcesDir(), "yt-dlp"); p != "" {
+		return p
+	}
 	return Resolve("youtube-dl")
 }
-

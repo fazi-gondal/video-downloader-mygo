@@ -4,10 +4,12 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/services"
+	"github.com/fazi-gondal/video-downloader-mygo/internal/tools"
 	appui "github.com/fazi-gondal/video-downloader-mygo/internal/ui"
 )
 
@@ -45,6 +48,13 @@ const (
 	subtitleModeAll     = "all"
 	subtitleModeCustom  = "custom"
 	thumbnailCacheLimit = 256
+
+	sidebarWidth    = 212
+	pageInset       = 16
+	heroInset       = 40
+	topBarHeight    = 44
+	contentMaxWidth = 720
+	contentMinWidth = 320
 )
 
 type App struct {
@@ -73,12 +83,27 @@ type App struct {
 
 	page string
 
-	urlInput        string
-	analyzing       bool
-	analyzeError    string
-	currentMedia    *models.MediaInfo
-	currentPlaylist *models.PlaylistInfo
-	selectedEntries map[int]bool
+	urlInput           string
+	analyzing          bool
+	analyzeError       string
+	analyzeUnsupported bool
+	currentMedia       *models.MediaInfo
+	currentPlaylist    *models.PlaylistInfo
+	selectedEntries    map[int]bool
+
+	extractOpen       bool
+	extractProgress   float32
+	heroContentHeight float32
+	extractInput      string
+	extractBusy       bool
+	extractError      string
+	extractResult     *services.SiteExtractResult
+	extractItems      []extractItem
+	extractSelected   map[int]bool
+	extractToken      uint64
+	extractCancel     context.CancelFunc
+	toolChecks        []tools.Check
+	lang              string
 
 	mode                models.DownloadMode
 	maxHeight           int
@@ -285,6 +310,7 @@ func New() *App {
 			a.toastUntil = time.Now().Add(5 * time.Second)
 		}
 	}
+	a.refreshToolChecks()
 	go a.pumpDownloadEvents()
 	go a.pumpConversionEvents()
 	return a
@@ -574,7 +600,7 @@ func (a *App) pumpDownloadEvents() {
 			if err := a.persistResumableDownloads(); err != nil {
 				log.Println("download recovery:", err)
 				a.updateOnMain(func() {
-					a.showToast("Could not save download recovery data")
+					a.showToast(a.tr("Could not save download recovery data"))
 				})
 			}
 		}
@@ -592,18 +618,18 @@ func (a *App) pumpDownloadEvents() {
 					a.historyLoaded = false
 				}
 				if a.recordPlaylistTask(task) {
-					a.showToast(fmt.Sprintf("Playlist done: %d ok, %d failed", a.playlistDone, a.playlistFailed))
+					a.showToast(a.tr("downloads.playlistDone", map[string]any{"ok": a.playlistDone, "failed": a.playlistFailed}))
 				}
 				if task.State == models.StateCancelled {
-					a.showToast("Download cancelled")
+					a.showToast(a.tr("Download cancelled"))
 				} else if ev.Error == nil {
 					name := filepath.Base(task.OutputPath)
 					if name == "." || name == "" {
 						name = task.Request.Title
 					}
-					a.showToast("Downloaded: " + name)
+					a.showToast(a.tr("Downloaded: ") + name)
 				} else if !a.playlistActive {
-					a.showToast("Download failed")
+					a.showToast(a.tr("Download failed"))
 				}
 			}
 			a.invalidate()
@@ -623,11 +649,11 @@ func (a *App) pumpConversionEvents() {
 			a.convJobsMu.Unlock()
 			if ev.Kind == services.ConvEventFinished {
 				if job.State == models.ConvCancelled {
-					a.showToast("Conversion cancelled")
+					a.showToast(a.tr("Conversion cancelled"))
 				} else if ev.Err == nil {
-					a.showToast("Converted: " + filepath.Base(job.OutputPath))
+					a.showToast(a.tr("Converted: ") + filepath.Base(job.OutputPath))
 				} else {
-					a.showToast("Conversion failed")
+					a.showToast(a.tr("Conversion failed"))
 				}
 			}
 			a.invalidate()
@@ -637,6 +663,10 @@ func (a *App) pumpConversionEvents() {
 
 func (a *App) View(c *ui.Context) {
 	a.ensureSettingsDraft()
+	if locale := a.preferredLocale(); locale != a.lang {
+		a.lang = locale
+		mygo.App.SetLocale(locale)
+	}
 	defer a.publishSettingsDraft()
 	// Apply the reference app's palette without replacing mygo's native
 	// controls. The initial theme tells us whether the OS is currently dark.
@@ -650,38 +680,58 @@ func (a *App) View(c *ui.Context) {
 	c.SetTheme(appui.NativeTheme(dark))
 	t := c.Theme()
 	a.tasksMu.Lock()
-	activeDownloads := 0
+	activeDownloads, failedDownloads := 0, 0
 	for _, task := range a.tasks {
+		if task.State == models.StateError {
+			failedDownloads++
+		}
 		if !task.State.IsTerminal() && task.State != models.StatePaused {
 			activeDownloads++
 		}
 	}
 	a.tasksMu.Unlock()
+	if !c.FocusTakesText() {
+		shortcutMod := ui.Super
+		if runtime.GOOS != "darwin" {
+			shortcutMod = ui.Ctrl
+		}
+		switch {
+		case c.Shortcut(shortcutMod, ui.Key1):
+			a.page = PageDashboard
+		case c.Shortcut(shortcutMod, ui.Key2):
+			a.page = PageDownloads
+		case c.Shortcut(shortcutMod, ui.Key3):
+			a.page = PageHistory
+		case c.Shortcut(shortcutMod, ui.Key4):
+			a.page = PageConverter
+		case c.Shortcut(shortcutMod, ui.KeyComma):
+			a.page = PageSettings
+		}
+	}
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		// Left nav: sidebar sections (scrollable) + theme toggle fixed at bottom.
 		// The Column wrapper is necessary because ui.Sidebar is a scroll container —
 		// a Spacer inside it would scroll away. Wrapping ensures the toggle stays
 		// anchored below the scroll regardless of content height.
-		ui.Column(c).Width(212).FillHeight().Material(glass.Glass{Clarity: 0.2}).Children(func() {
+		ui.Column(c).Width(sidebarWidth).FillHeight().Material(glass.Glass{Clarity: 0.2}).Children(func() {
 			ui.Sidebar(c, &a.page, func() {
-				ui.SidebarSection(c, "Library", &a.sidebarOpen[0], func() {
-					ui.SidebarItem(c, PageDashboard, appui.IconHome, "Home")
-					ui.SidebarItem(c, PageDownloads, appui.IconDownload, "Downloads").Children(func() {
-						if activeDownloads > 0 {
+				ui.SidebarSection(c, a.tr("nav.library"), &a.sidebarOpen[0], func() {
+					ui.SidebarItem(c, PageDashboard, appui.IconHome, a.tr("nav.home"))
+					ui.SidebarItem(c, PageDownloads, appui.IconDownload, a.tr("nav.downloads")).Children(func() {
+						if failedDownloads > 0 {
+							ui.Badge(c, "!")
+						} else if activeDownloads > 0 {
 							ui.Badge(c, fmt.Sprintf("%d", activeDownloads))
 						}
 					})
-					ui.SidebarItem(c, PageConverter, appui.IconConverter, "Converter")
-					ui.SidebarItem(c, PageHistory, appui.IconHistory, "History")
+					ui.SidebarItem(c, PageHistory, appui.IconHistory, a.tr("nav.history"))
+					ui.SidebarItem(c, PageConverter, appui.IconConverter, a.tr("nav.converter"))
 				})
-				ui.SidebarSection(c, "App", &a.sidebarOpen[1], func() {
-					ui.SidebarItem(c, PageSettings, appui.IconSettings, "Settings")
-					ui.SidebarItem(c, PageAbout, appui.IconAbout, "About")
+				ui.SidebarSection(c, a.tr("nav.app"), &a.sidebarOpen[1], func() {
+					ui.SidebarItem(c, PageSettings, appui.IconSettings, a.tr("nav.settings"))
+					ui.SidebarItem(c, PageAbout, appui.IconAbout, a.tr("nav.about"))
 				})
 			}).Grow(1)
-			// Thin divider + theme cycle button, outside the scroll area
-			ui.Box(c).FillWidth().Height(1).Background(t.Border)
-			a.sidebarThemeToggle(c)
 		})
 		ui.Column(c).Grow(1).FillHeight().Background(t.Background).Children(func() {
 			a.topBar(c)
@@ -711,16 +761,16 @@ func (a *App) View(c *ui.Context) {
 func (a *App) topBar(c *ui.Context) {
 	t := c.Theme()
 	titles := map[string]string{
-		PageDashboard: "Home", PageDownloads: "Downloads", PageConverter: "Converter",
-		PageHistory: "History", PageSettings: "Settings", PageAbout: "About",
-		PageConfig: "Download options",
+		PageDashboard: a.tr("nav.home"), PageDownloads: a.tr("nav.downloads"), PageConverter: a.tr("nav.converter"),
+		PageHistory: a.tr("nav.history"), PageSettings: a.tr("nav.settings"), PageAbout: a.tr("nav.about"),
+		PageConfig: a.tr("nav.downloadOptions"),
 	}
-	ui.Row(c).Height(44).FillWidth().Padding(0, 16).AlignItems(ui.Center).Material(glass.Glass{Clarity: 0.2}).Children(func() {
+	ui.Row(c).Height(topBarHeight).FillWidth().Padding(0, 16).AlignItems(ui.Center).Material(glass.Glass{Clarity: 0.2}).Children(func() {
 		ui.Text(c, titles[a.page]).FontSize(15).Bold()
 		ui.Spacer(c).Grow(1)
 		if a.playlistActive {
 			done := a.playlistDone + a.playlistFailed
-			ui.Text(c, fmt.Sprintf("Playlist %d/%d", done, a.playlistQueued)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, a.tr("downloads.playlistProgress", map[string]any{"done": done, "total": a.playlistQueued})).FontSize(12).TextColor(t.TextMuted)
 			ui.Progress(c, float64(done)/float64(maxInt(a.playlistQueued, 1))).Width(120)
 		}
 		a.tasksMu.Lock()
@@ -732,42 +782,29 @@ func (a *App) topBar(c *ui.Context) {
 		}
 		a.tasksMu.Unlock()
 		if n > 0 {
-			ui.Text(c, fmt.Sprintf("%d active", n)).FontSize(12).TextColor(t.Accent)
+			ui.Text(c, a.tr("downloads.activeCount", map[string]any{"n": n})).FontSize(12).TextColor(t.Accent)
 		}
+		a.themeToggleButton(c, t)
 	})
 }
 
-// sidebarThemeToggle renders the theme-cycle button styled identically to a
-// native SidebarItem (same padding, gap, radius, icon size, and hover bg).
-// Clicking cycles: light → dark → system → light.
-func (a *App) sidebarThemeToggle(c *ui.Context) {
-	a.ensureSettingsDraft()
-	t := c.Theme()
-	mode := a.settingsDraft.ThemeMode
-	var icon *ui.SVG
-	var label string
-	switch mode {
-	case "dark":
-		icon, label = appui.IconMoon, "Dark theme"
-	case "light":
-		icon, label = appui.IconSun, "Light theme"
-	default:
-		icon, label = appui.IconMonitor, "System theme"
+// themeToggleButton switches between light and dark from the top bar.
+func (a *App) themeToggleButton(c *ui.Context, t *ui.Theme) {
+	icon := appui.IconMoon
+	next := "dark"
+	if t.Dark {
+		icon = appui.IconSun
+		next = "light"
 	}
-	// t.Space(1.5)=6, t.Space(2)=8 — matches coreSidebarItem padding/gap exactly
-	row := ui.Row(c.Key("sidebar-theme-toggle")).
-		FillWidth().
-		AlignItems(ui.Center).
-		Gap(8).
-		Padding(6, 8).
-		Radius(t.Radius).
+	button := ui.Row(c.Key("topbar-theme")).
+		Size(28, 28).
+		Radius(8).
+		Center().
 		Children(func() {
-			ui.Icon(c, icon).FontSize(16).TextColor(t.Accent)
-			ui.Text(c, label).FontSize(t.FontSize).Grow(1)
+			ui.Icon(c, icon).FontSize(16).TextColor(t.TextMuted)
 		})
-	if row.Clicked() {
-		next := map[string]string{"light": "dark", "dark": "system", "system": "light"}
-		a.settingsDraft.ThemeMode = next[mode]
+	if button.Clicked() {
+		a.settingsDraft.ThemeMode = next
 		a.invalidate()
 	}
 }
@@ -795,19 +832,28 @@ func (a *App) dashboardPage(c *ui.Context) {
 		}
 
 		a.dashboardSearch(c)
+		a.extractorCollapsible(c, pageContentWidth(c))
 		if a.analyzeError != "" {
-			ui.Row(c).FillWidth().Background(t.Surface).Border(1, t.Danger).Radius(10).Padding(10, 12).Children(func() {
-				ui.Text(c, a.analyzeError).FontSize(13).TextColor(t.Danger).Grow(1)
+			ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Background(t.Surface).Border(1, t.Danger).Radius(10).Padding(10, 12).Children(func() {
+				ui.Text(c, a.friendlyError(a.analyzeError)).FontSize(13).TextColor(t.Danger).Grow(1)
+				if a.analyzeUnsupported {
+					if ui.Button(c.Key("dashboard-try-extractor"), a.tr("extractor.try")).Clicked() {
+						a.extractInput = strings.TrimSpace(a.urlInput)
+						a.extractOpen = true
+						a.page = PageDashboard
+						a.invalidate()
+					}
+				}
 			})
 		}
 		if a.currentMedia != nil {
 			a.mediaCard(c)
 			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
 				if a.isDirectHDMedia() {
-					if ui.PrimaryButton(c, "Download HD").Clicked() {
+					if ui.PrimaryButton(c, a.tr("Download HD")).Clicked() {
 						a.startDirectHDDownload()
 					}
-				} else if ui.PrimaryButton(c, "Continue to download options").Clicked() {
+				} else if ui.PrimaryButton(c, a.tr("Continue to download options")).Clicked() {
 					a.page = PageConfig
 				}
 			})
@@ -816,7 +862,7 @@ func (a *App) dashboardPage(c *ui.Context) {
 		} else if a.analyzing {
 			ui.Column(c).FillWidth().Padding(42, 0).Center().Gap(10).Children(func() {
 				ui.Spinner(c)
-				ui.Text(c, "Analyzing media…").FontSize(13).TextColor(t.TextMuted)
+				ui.Text(c, a.tr("Analyzing media…")).FontSize(13).TextColor(t.TextMuted)
 			})
 		}
 	})
@@ -824,38 +870,78 @@ func (a *App) dashboardPage(c *ui.Context) {
 
 func (a *App) dashboardHero(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Grow(1).Center().Gap(18).Padding(28, 20).Children(func() {
-		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Text(c, "Extract. ").FontSize(29).Bold()
-			ui.Text(c, "Convert. ").FontSize(29).Bold().TextColor(t.TextMuted)
-			ui.Text(c, "Master.").FontSize(29).Bold().TextColor(t.Accent)
-		})
-		ui.Text(c, "Download, organize, and convert media from your favorite platforms.").FontSize(14).TextColor(t.TextMuted).MaxWidth(560)
-		a.dashboardSearch(c)
-		ui.Column(c).Center().Gap(8).Children(func() {
-			ui.Text(c, "SUPPORTED SERVICES").FontSize(10).Bold().TextColor(t.TextMuted)
-			ui.Row(c).Justify(ui.Center).Gap(18).Children(func() {
-				for i, service := range []string{"YouTube", "TikTok", "Instagram", "X", "ARY Plus"} {
-					ui.Row(c).Gap(5).Children(func() {
-						icon := appui.IconVideo
-						if i == 1 {
-							icon = appui.IconMusic
-						}
-						ui.Icon(c, icon).FontSize(14).TextColor(t.TextMuted)
-						ui.Text(c, service).FontSize(11).TextColor(t.TextMuted)
+	_, windowHeight := c.Size()
+	viewport := windowHeight - topBarHeight - 2*pageInset
+
+	// The hero's top offset is animated, never derived from the live content
+	// height. Otherwise the panel's own expand/collapse and the re-centering
+	// of the column read as two separate animations, especially on close.
+	targetPad := float32(40)
+	if !a.extractOpen {
+		height := a.heroContentHeight
+		if height <= 0 {
+			height = 300
+		}
+		if centered := (viewport - height) / 2; centered > targetPad {
+			targetPad = centered
+		}
+	}
+	ui.Scroll(c).Grow(1).Children(func() {
+		column := ui.Column(c)
+		pad := column.Animate("hero-pad", targetPad, 200*time.Millisecond)
+		column.FillWidth().
+			Padding(pad, heroInset, 0, heroInset).
+			AlignItems(ui.Center).
+			Children(func() {
+				content := ui.Column(c).FillWidth().AlignItems(ui.Center).Children(func() {
+					ui.Column(c).AlignItems(ui.Center).Gap(12).Children(func() {
+						ui.Row(c).Justify(ui.Center).Gap(12).Children(func() {
+							ui.Text(c, a.tr("Extract.")).FontSize(30).Bold().LetterSpacing(0.5)
+							ui.Text(c, a.tr("Convert.")).FontSize(30).Bold().TextColor(t.TextMuted).LetterSpacing(0.5)
+							ui.Text(c, a.tr("Master.")).FontSize(30).Bold().TextColor(t.Accent).LetterSpacing(0.5)
+						})
+						ui.Text(c, a.tr("Download, organize, and convert media from your favorite platforms.")).
+							FontSize(14).TextColor(t.TextMuted).MaxWidth(520)
 					})
+
+					ui.Column(c).FillWidth().AlignItems(ui.Center).Gap(16).Padding(32, 0, 0, 0).Children(func() {
+						a.dashboardSearch(c)
+						a.extractorCollapsible(c, heroContentWidth(c))
+					})
+
+					ui.Column(c).AlignItems(ui.Center).Gap(10).Padding(36, 0, 0, 0).Children(func() {
+						ui.Text(c, a.tr("SUPPORTED SERVICES")).FontSize(11).Bold().TextColor(t.TextMuted)
+						ui.Row(c).FillWidth().Justify(ui.Center).Gap(20).Children(func() {
+							for i, service := range []string{"YouTube", "TikTok", "Instagram", "X", "ARY Plus"} {
+								ui.Row(c).Gap(6).Children(func() {
+									icon := appui.IconVideo
+									if i == 1 {
+										icon = appui.IconMusic
+									}
+									ui.Icon(c, icon).FontSize(14).TextColor(t.TextMuted)
+									ui.Text(c, service).FontSize(12).TextColor(t.TextMuted)
+								})
+							}
+						})
+					})
+				})
+				// Measure only while settled: during the close animation the
+				// panel is still in the content and would inflate the height.
+				if !a.extractOpen && a.extractProgress == 0 {
+					if bounds := content.Bounds(); bounds.H > 0 {
+						a.heroContentHeight = bounds.H
+					}
 				}
 			})
-		})
 	})
 }
 
 func (a *App) dashboardSearch(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().MaxWidth(720).Material(glass.Glass{Clarity: 0.25}).Border(1, t.Border).Radius(12).Padding(6, 8).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().MaxWidth(720).AlignSelf(ui.Center).Material(glass.Glass{Clarity: 0.25}).Border(1, t.Border).Radius(12).Padding(8, 10).Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Icon(c, appui.IconLink).FontSize(18).TextColor(t.TextMuted).Width(20)
-		ui.TextInput(c, &a.urlInput).Label("Video URL").Placeholder("Paste video or playlist URL…").Grow(1).OnSubmit(a.startAnalyze)
-		btn := ui.PrimaryButton(c, "Analyze")
+		ui.TextInput(c, &a.urlInput).Label(a.tr("Video URL")).Placeholder(a.tr("Paste video or playlist URL…")).Grow(1).OnSubmit(a.startAnalyze)
+		btn := ui.PrimaryButton(c, a.tr("Analyze"))
 		if a.analyzing {
 			btn.Disabled(true)
 		}
@@ -871,6 +957,15 @@ func (a *App) startAnalyze() {
 	}
 	a.analyzing = true
 	a.analyzeError = ""
+	a.analyzeUnsupported = false
+	a.resetMediaSelection()
+	a.invalidate()
+	go a.doAnalyze(strings.TrimSpace(a.urlInput))
+}
+
+// resetMediaSelection clears the per-media UI state shared by the normal
+// analyze flow and the extractor flow.
+func (a *App) resetMediaSelection() {
 	a.currentMedia = nil
 	a.currentPlaylist = nil
 	a.selectedEntries = map[int]bool{}
@@ -885,8 +980,6 @@ func (a *App) startAnalyze() {
 	a.audioFmtLabels = nil
 	a.audioFmtIDs = nil
 	a.formatsOpen = false
-	a.invalidate()
-	go a.doAnalyze(strings.TrimSpace(a.urlInput))
 }
 
 func (a *App) thumbnailElement(c *ui.Context, url string, width, height float32, fallback *ui.SVG) ui.Element {
@@ -999,18 +1092,18 @@ func (a *App) mediaCard(c *ui.Context) {
 			}
 			ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted)
 			if platform := services.DirectDownloadPlatform(mediaURL(m)); platform != "" {
-				ui.Text(c, platform+" · best available HD source · cookies not used").FontSize(11).TextColor(t.Accent)
+				ui.Text(c, a.tr("media.directSource", map[string]any{"platform": platform})).FontSize(11).TextColor(t.Accent)
 			}
 		})
 		ui.Column(c).Gap(5).AlignItems(ui.End).Children(func() {
 			if count := len(highQualityOpusAudioTracks(m.AudioTracks)); count > 1 {
-				ui.Text(c, fmt.Sprintf("%d audio tracks", count)).FontSize(11).TextColor(t.Accent)
+				ui.Text(c, a.tr("media.audioTracks", map[string]any{"n": count})).FontSize(11).TextColor(t.Accent)
 			}
 			if subCount := len(subtitleLanguages(m)); subCount > 0 {
 				if subCount == 1 {
-					ui.Text(c, "1 subtitle language").FontSize(11).TextColor(t.Accent)
+					ui.Text(c, a.tr("1 subtitle language")).FontSize(11).TextColor(t.Accent)
 				} else {
-					ui.Text(c, fmt.Sprintf("%d subtitle languages", subCount)).FontSize(11).TextColor(t.Accent)
+					ui.Text(c, a.tr("media.subtitleMany", map[string]any{"n": subCount})).FontSize(11).TextColor(t.Accent)
 				}
 			}
 		})
@@ -1024,12 +1117,12 @@ func (a *App) formatPicker(c *ui.Context) {
 		return
 	}
 	if len(m.Formats) == 0 {
-		ui.Collapsible(c, "Formats (optional)", &a.formatsOpen, func() {
+		ui.Collapsible(c, a.tr("Formats (optional)"), &a.formatsOpen, func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				if a.formatsLoading {
 					ui.Spinner(c)
-					ui.Text(c, "Loading formats…").FontSize(12).TextColor(t.TextMuted)
-				} else if ui.Button(c, "Load available formats").Clicked() {
+					ui.Text(c, a.tr("Loading formats…")).FontSize(12).TextColor(t.TextMuted)
+				} else if ui.Button(c, a.tr("Load available formats")).Clicked() {
 					a.fetchFormats()
 				}
 			})
@@ -1042,11 +1135,11 @@ func (a *App) formatPicker(c *ui.Context) {
 		a.rebuildFormatOptions()
 	}
 
-	ui.Collapsible(c, "Formats (optional)", &a.formatsOpen, func() {
+	ui.Collapsible(c, a.tr("Formats (optional)"), &a.formatsOpen, func() {
 		ui.Column(c).FillWidth().Gap(8).Padding(4, 0, 0, 0).Children(func() {
-			ui.Text(c, "Leave Auto unless you need a specific stream. Video+Audio always merges audio.").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, a.tr("Leave Auto unless you need a specific stream. Video+Audio always merges audio.")).FontSize(11).TextColor(t.TextMuted)
 
-			ui.Text(c, "Video stream").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, a.tr("Video stream")).FontSize(12).TextColor(t.TextMuted)
 			if ui.Select(c, &a.selectedVideoLabel, a.videoFmtLabels).Changed() {
 				a.selectedVideoFormat = ""
 				for i, lab := range a.videoFmtLabels {
@@ -1061,7 +1154,7 @@ func (a *App) formatPicker(c *ui.Context) {
 				}
 			}
 
-			ui.Text(c, "Audio stream").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, a.tr("Audio stream")).FontSize(12).TextColor(t.TextMuted)
 			if ui.Select(c, &a.selectedAudioLabel, a.audioFmtLabels).Changed() {
 				a.selectedAudioFormat = ""
 				for i, lab := range a.audioFmtLabels {
@@ -1073,7 +1166,7 @@ func (a *App) formatPicker(c *ui.Context) {
 			}
 
 			ui.Row(c).Gap(8).Children(func() {
-				if ui.Button(c, "Reset to Auto").Clicked() {
+				if ui.Button(c, a.tr("Reset to Auto")).Clicked() {
 					a.selectedVideoFormat = ""
 					a.selectedAudioFormat = ""
 					a.selectedVideoLabel = "Auto (best for resolution)"
@@ -1175,22 +1268,22 @@ func (a *App) configPanel(c *ui.Context) {
 	a.syncContainerSelection()
 
 	// ── Mode selector cards ───────────────────────────────────────────────
-	a.configSectionTitle(c, "Download mode")
+	a.configSectionTitle(c, a.tr("Download mode"))
 	ui.Row(c).FillWidth().Gap(10).Children(func() {
-		a.modeBtn(c, models.ModeVideoAudio, appui.IconVideo, "Video + Audio", "Best quality, merged streams")
-		a.modeBtn(c, models.ModeVideoOnly, appui.IconVideo, "Video only", "No audio track muxed")
-		a.modeBtn(c, models.ModeAudioOnly, appui.IconMusic, "Audio only", "Extract audio stream")
+		a.modeBtn(c, models.ModeVideoAudio, appui.IconVideo, a.tr("Video + Audio"), a.tr("Best quality, merged streams"))
+		a.modeBtn(c, models.ModeVideoOnly, appui.IconVideo, a.tr("Video only"), a.tr("No audio track muxed"))
+		a.modeBtn(c, models.ModeAudioOnly, appui.IconMusic, a.tr("Audio only"), a.tr("Extract audio stream"))
 	})
 
 	ui.Box(c).FillWidth().Height(1).Background(t.Border)
 
 	if a.mode != models.ModeAudioOnly {
 		// ── Bento: container/fps left | resolution right ──────────────────
-		a.configSectionTitle(c, "Video options")
+		a.configSectionTitle(c, a.tr("Video options"))
 		ui.Row(c).FillWidth().Gap(20).AlignItems(ui.Start).Children(func() {
 			// left column: container
 			ui.Column(c).Gap(8).Grow(5).Children(func() {
-				ui.Text(c, "Container").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, a.tr("Container")).FontSize(12).TextColor(t.TextMuted)
 				ct := a.container
 				containerLocked := a.containerSelectionLocked()
 				a.chipGroup(c, "container", []string{"mp4", "mkv", "webm"}, ct, containerLocked, func(opt string) {
@@ -1200,7 +1293,7 @@ func (a *App) configPanel(c *ui.Context) {
 			})
 			// right column: quality
 			ui.Column(c).Gap(8).Grow(7).Children(func() {
-				ui.Text(c, "Max quality").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, a.tr("Max quality")).FontSize(12).TextColor(t.TextMuted)
 				qLabels := []string{"Best", "2160p", "1440p", "1080p", "720p", "480p", "360p"}
 				qVals := []int{0, 2160, 1440, 1080, 720, 480, 360}
 				curIdx := 0
@@ -1227,8 +1320,8 @@ func (a *App) configPanel(c *ui.Context) {
 
 	if a.mode == models.ModeAudioOnly {
 		// ── Audio format & quality chips ──────────────────────────────────
-		a.configSectionTitle(c, "Audio")
-		ui.Text(c, "Format").FontSize(12).TextColor(t.TextMuted)
+		a.configSectionTitle(c, a.tr("Audio"))
+		ui.Text(c, a.tr("Format")).FontSize(12).TextColor(t.TextMuted)
 		a.chipGroup(c, "audioformat", []string{"mp3", "m4a", "opus", "flac", "wav"}, a.audioFormat, false, func(opt string) {
 			a.audioFormat = opt
 		})
@@ -1317,8 +1410,8 @@ func (a *App) audioTracksControls(c *ui.Context) {
 	t := c.Theme()
 	ui.Box(c).FillWidth().Height(1).Background(t.Border)
 	ui.Column(c).FillWidth().Gap(10).Children(func() {
-		a.configSectionTitle(c, "Audio tracks")
-		ui.Text(c, "Select which audio languages to include in the output file.").FontSize(12).TextColor(t.TextMuted)
+		a.configSectionTitle(c, a.tr("Audio tracks"))
+		ui.Text(c, a.tr("Select which audio languages to include in the output file.")).FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).FillWidth().Gap(6).Children(func() {
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksNone, "Default")
 			a.selectionModeBtn(c, "audio-tracks", &a.audioTracksMode, audioTracksAll, "All")
@@ -1452,8 +1545,8 @@ func (a *App) subtitleControls(c *ui.Context) {
 	}
 	ui.Box(c).FillWidth().Height(1).Background(t.Border)
 	ui.Column(c).FillWidth().Gap(10).Children(func() {
-		a.configSectionTitle(c, "Subtitles")
-		ui.Text(c, "Embed subtitle tracks into the output file (requires MKV for multiple).").FontSize(12).TextColor(t.TextMuted)
+		a.configSectionTitle(c, a.tr("Subtitles"))
+		ui.Text(c, a.tr("Embed subtitle tracks into the output file (requires MKV for multiple).")).FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).FillWidth().Gap(6).Children(func() {
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeNone, "None")
 			a.selectionModeBtn(c, "subtitles", &a.subtitleMode, subtitleModeAll, "All")
@@ -1525,14 +1618,14 @@ func (a *App) playlistPanel(c *ui.Context) {
 	p := a.currentPlaylist
 	ui.Column(c).Grow(1).Gap(10).Children(func() {
 		ui.Text(c, p.Title).FontSize(15).Bold()
-		ui.Text(c, fmt.Sprintf("%d videos · %s", len(p.Entries), p.Uploader)).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, a.tr("playlist.summary", map[string]any{"n": len(p.Entries), "uploader": p.Uploader})).FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Gap(8).Children(func() {
-			if ui.Button(c, "Select all").Clicked() {
+			if ui.Button(c, a.tr("Select all")).Clicked() {
 				for i := range p.Entries {
 					a.selectedEntries[i] = true
 				}
 			}
-			if ui.Button(c, "Select none").Clicked() {
+			if ui.Button(c, a.tr("Select none")).Clicked() {
 				a.selectedEntries = map[int]bool{}
 			}
 			n := 0
@@ -1541,7 +1634,7 @@ func (a *App) playlistPanel(c *ui.Context) {
 					n++
 				}
 			}
-			ui.Text(c, fmt.Sprintf("%d selected", n)).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, a.tr("common.selected", map[string]any{"n": n})).FontSize(12).TextColor(t.TextMuted)
 			ui.Spacer(c).Grow(1)
 			if a.playlistActive {
 				ui.Progress(c, float64(a.playlistDone+a.playlistFailed)/float64(maxInt(a.playlistQueued, 1))).Width(160)
@@ -1559,7 +1652,7 @@ func (a *App) playlistPanel(c *ui.Context) {
 				})
 			})
 		}).Grow(1)
-		if ui.PrimaryButton(c, "Download selected").Clicked() {
+		if ui.PrimaryButton(c, a.tr("Download selected")).Clicked() {
 			a.page = PageConfig
 		}
 	})
@@ -1579,13 +1672,12 @@ func (a *App) configPage(c *ui.Context) {
 	ui.Column(c).Grow(1).FillWidth().Gap(0).Children(func() {
 		// ── fixed header ──────────────────────────────────────────────
 		ui.Row(c).FillWidth().Padding(0, 0, 10, 0).AlignItems(ui.Center).Gap(10).Children(func() {
-			if ui.Button(c, "←").Clicked() {
+			if ui.Button(c, a.tr("←")).Clicked() {
 				a.page = PageDashboard
 			}
 			ui.Column(c).Gap(2).Grow(1).Children(func() {
-				ui.Text(c, "Download options").FontSize(17).Bold()
 				if a.currentMedia != nil {
-					ui.Text(c, a.currentMedia.Title).FontSize(12).TextColor(t.TextMuted).Ellipsis("…")
+					ui.Text(c, a.currentMedia.Title).FontSize(15).Bold().Ellipsis("…")
 				} else if a.currentPlaylist != nil {
 					n := 0
 					for _, v := range a.selectedEntries {
@@ -1593,7 +1685,7 @@ func (a *App) configPage(c *ui.Context) {
 							n++
 						}
 					}
-					ui.Text(c, fmt.Sprintf("%d videos selected · %s", n, a.currentPlaylist.Title)).FontSize(12).TextColor(t.TextMuted).Ellipsis("…")
+					ui.Text(c, a.tr("config.playlistSelected", map[string]any{"n": n, "title": a.currentPlaylist.Title})).FontSize(15).Bold().Ellipsis("…")
 				}
 			})
 			if a.currentMedia != nil && a.currentMedia.Thumbnail != "" {
@@ -1619,7 +1711,7 @@ func (a *App) configPage(c *ui.Context) {
 				if a.maxHeight > 0 {
 					a.configSummaryChip(c, fmt.Sprintf("%dp", a.maxHeight))
 				} else {
-					a.configSummaryChip(c, "Best")
+					a.configSummaryChip(c, a.tr("Best"))
 				}
 			}
 			ui.Spacer(c).Grow(1)
@@ -1630,7 +1722,7 @@ func (a *App) configPage(c *ui.Context) {
 				})
 			}
 			// action button
-			label := "Start download"
+			label := a.tr("Start download")
 			if a.currentPlaylist != nil {
 				n := 0
 				for _, v := range a.selectedEntries {
@@ -1639,7 +1731,7 @@ func (a *App) configPage(c *ui.Context) {
 					}
 				}
 				if n > 1 {
-					label = fmt.Sprintf("Download (%d)", n)
+					label = a.tr("config.downloadCount", map[string]any{"n": n})
 				}
 			}
 			if ui.PrimaryButton(c, label).Clicked() {
@@ -1661,6 +1753,27 @@ func (a *App) configSummaryChip(c *ui.Context, text string) {
 	})
 }
 
+// friendlyError maps common yt-dlp failures to a short, localized sentence.
+// The original text stays visible underneath so nothing is lost.
+func (a *App) friendlyError(message string) string {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "ffmpeg not found"), strings.Contains(lower, "ffmpeg is not installed"):
+		return a.tr("errors.ffmpegMissing")
+	case strings.Contains(lower, "unsupported url"):
+		return a.tr("errors.unsupported")
+	case strings.Contains(lower, "http error 403"), strings.Contains(lower, "403: forbidden"):
+		return a.tr("errors.forbidden")
+	case strings.Contains(lower, "http error 429"), strings.Contains(lower, "http 429"), strings.Contains(lower, "too many requests"):
+		return a.tr("errors.rateLimited")
+	case strings.Contains(lower, "no space left"):
+		return a.tr("errors.disk")
+	case strings.Contains(lower, "network"), strings.Contains(lower, "timed out"), strings.Contains(lower, "connection"):
+		return a.tr("errors.network")
+	}
+	return message
+}
+
 func (a *App) doAnalyze(url string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -1669,6 +1782,7 @@ func (a *App) doAnalyze(url string) {
 		a.updateOnMain(func() {
 			a.analyzing = false
 			a.analyzeError = err.Error()
+			a.analyzeUnsupported = errors.Is(err, services.ErrUnsupportedURL)
 			a.invalidate()
 		})
 		return
@@ -1716,16 +1830,18 @@ func (a *App) startDownload() {
 		return
 	}
 	req := a.buildRequest(mediaURL(a.currentMedia), a.currentMedia.Title, a.currentMedia.Thumbnail, "", 0)
+	req.SourcePageURL = a.currentMedia.SourcePageURL
+	req.SourceIndex = a.currentMedia.SourceIndex
 	a.page = PageDownloads
-	a.showToast("Queueing: " + a.currentMedia.Title)
+	a.showToast(a.tr("Queueing: ") + a.currentMedia.Title)
 	go func() {
 		_, err := a.manager.EnqueueContext(context.Background(), req)
 		a.updateOnMain(func() {
 			if err != nil {
-				a.showToast("Could not queue download: " + err.Error())
+				a.showToast(a.tr("Could not queue download: ") + err.Error())
 				return
 			}
-			a.showToast("Queued: " + req.Title)
+			a.showToast(a.tr("Queued: ") + req.Title)
 		})
 	}()
 }
@@ -1740,15 +1856,15 @@ func (a *App) startDirectHDDownload() {
 	}
 	req := a.buildDirectHDRequest()
 	a.page = PageDownloads
-	a.showToast("Queueing HD download: " + req.Title)
+	a.showToast(a.tr("Queueing HD download: ") + req.Title)
 	go func() {
 		_, err := a.manager.EnqueueContext(context.Background(), req)
 		a.updateOnMain(func() {
 			if err != nil {
-				a.showToast("Could not queue download: " + err.Error())
+				a.showToast(a.tr("Could not queue download: ") + err.Error())
 				return
 			}
-			a.showToast("Queued HD download: " + req.Title)
+			a.showToast(a.tr("Queued HD download: ") + req.Title)
 		})
 	}()
 }
@@ -1790,10 +1906,13 @@ func (a *App) startPlaylistDownloads() {
 		if !a.selectedEntries[i] || ent.URL == "" {
 			continue
 		}
-		requests = append(requests, a.buildRequest(ent.URL, ent.Title, ent.Thumbnail, a.currentPlaylist.Title, ent.Index))
+		req := a.buildRequest(ent.URL, ent.Title, ent.Thumbnail, a.currentPlaylist.Title, ent.Index)
+		req.SourcePageURL = ent.SourcePageURL
+		req.SourceIndex = ent.SourceIndex
+		requests = append(requests, req)
 	}
 	if len(requests) == 0 {
-		a.showToast("No videos selected")
+		a.showToast(a.tr("No videos selected"))
 		return
 	}
 	a.playlistBatchID++
@@ -1809,7 +1928,7 @@ func (a *App) startPlaylistDownloads() {
 	a.playlistFailed = 0
 	a.playlistActive = true
 	a.page = PageDownloads
-	a.showToast(fmt.Sprintf("Queueing %d videos", len(requests)))
+	a.showToast(a.tr("downloads.queueingMany", map[string]any{"n": len(requests)}))
 	go func() {
 		for _, req := range requests {
 			_, err := a.manager.EnqueueContext(context.Background(), req)
@@ -1821,7 +1940,7 @@ func (a *App) startPlaylistDownloads() {
 							a.playlistActive = false
 						}
 					}
-					a.showToast("Could not queue playlist item: " + err.Error())
+					a.showToast(a.tr("Could not queue playlist item: ") + err.Error())
 				})
 			}
 		}
@@ -1832,7 +1951,7 @@ func (a *App) startPlaylistDownloads() {
 			if a.playlistDone+a.playlistFailed >= a.playlistQueued {
 				a.playlistActive = false
 			} else {
-				a.showToast(fmt.Sprintf("Queued %d videos", a.playlistQueued-a.playlistFailed))
+				a.showToast(a.tr("downloads.queuedMany", map[string]any{"n": a.playlistQueued - a.playlistFailed}))
 			}
 		})
 	}()
@@ -1889,7 +2008,7 @@ func (a *App) estimatedSizeText() string {
 	if approximate {
 		marker = "~"
 	}
-	return "Estimated final size: " + marker + formatBytes(size)
+	return a.tr("Estimated final size: ") + marker + formatBytes(size)
 }
 
 func (a *App) estimatedFinalSize() (int64, bool) {
@@ -2313,7 +2432,9 @@ func (a *App) downloadsPage(c *ui.Context) {
 	a.tasksMu.Unlock()
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.After(tasks[j].CreatedAt) })
 	if len(tasks) == 0 {
-		emptyState(c, appui.IconDownload, "No downloads yet", "Your downloaded videos and audio will appear here.")
+		emptyStateAction(c, appui.IconDownload, a.tr("downloads.empty.title"), a.tr("downloads.empty.detail"), a.tr("downloads.empty.action"), func() {
+			a.page = PageDashboard
+		})
 		return
 	}
 	active, queued, paused, finished := 0, 0, 0, 0
@@ -2331,12 +2452,10 @@ func (a *App) downloadsPage(c *ui.Context) {
 	}
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Gap(2).Children(func() {
-				ui.Text(c, "Downloads").FontSize(20).Bold()
-				ui.Text(c, fmt.Sprintf("%d active · %d queued · %d paused · %d finished", active, queued, paused, finished)).FontSize(12).TextColor(t.TextMuted)
-			})
+			ui.Text(c, a.tr("downloads.stats", map[string]any{"active": active, "queued": queued, "paused": paused, "finished": finished})).
+				FontSize(12).TextColor(t.TextMuted)
 			ui.Spacer(c).Grow(1)
-			if finished > 0 && ui.Button(c, "Clear finished").Clicked() {
+			if finished > 0 && ui.Button(c, a.tr("Clear finished")).Clicked() {
 				a.manager.ClearFinished()
 				a.invalidate()
 			}
@@ -2357,12 +2476,16 @@ func (a *App) downloadsPage(c *ui.Context) {
 						}
 						ui.Progress(c, pct)
 						ui.Row(c).FillWidth().Children(func() {
-							ui.Text(c, downloadMetrics(task.Progress)).FontSize(11).TextColor(t.TextMuted)
+							ui.Text(c, a.downloadMetrics(task.Progress)).FontSize(11).TextColor(t.TextMuted)
 							ui.Spacer(c).Grow(1)
 						})
 					}
 					if task.State == models.StateError && task.Error != "" {
-						ui.Text(c, task.Error).FontSize(11).TextColor(t.Danger).MaxWidth(720)
+						friendly := a.friendlyError(task.Error)
+						ui.Text(c, friendly).FontSize(11).TextColor(t.Danger).MaxWidth(720)
+						if friendly != task.Error {
+							ui.Text(c, task.Error).FontSize(10).TextColor(t.TextMuted).MaxWidth(720)
+						}
 					}
 					if task.ErrorDetail != "" {
 						ui.Text(c, task.ErrorDetail).FontSize(11).TextColor(t.Warning).MaxWidth(720)
@@ -2430,6 +2553,23 @@ func statusPill(c *ui.Context, state models.DownloadState) {
 	})
 }
 
+// emptyStateAction is emptyState with the one action that gets the user out
+// of the empty screen.
+func emptyStateAction(c *ui.Context, icon *ui.SVG, title, detail, action string, onClick func()) {
+	t := c.Theme()
+	ui.Column(c).Grow(1).Center().Gap(10).Children(func() {
+		ui.Box(c).Size(56, 56).Material(glass.Glass{Clarity: 0.3}).Border(1, t.Border).Radius(18).Center().Children(func() {
+			ui.Icon(c, icon).FontSize(24).TextColor(t.Accent)
+		})
+		ui.Text(c, title).FontSize(16).Bold()
+		ui.Text(c, detail).FontSize(12).TextColor(t.TextMuted).MaxWidth(360)
+		if ui.PrimaryButton(c, action).Clicked() {
+			onClick()
+			c.Invalidate()
+		}
+	})
+}
+
 func emptyState(c *ui.Context, icon *ui.SVG, title, detail string) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
@@ -2491,7 +2631,7 @@ func historyDownloadRequest(entry services.HistoryEntry, outputDir string) model
 		URL: entry.URL, Title: entry.Title, Mode: historyMode(entry.Mode), OutputDir: outputDir,
 		Container: entry.Container, MaxHeight: entry.MaxHeight, MaxFPS: entry.MaxFPS,
 		VideoFormatID: entry.VideoFormatID, AudioFormatID: entry.AudioFormatID,
-		AudioFormat: entry.AudioFmt,
+		AudioFormat: entry.AudioFmt, SourcePageURL: entry.SourcePageURL, SourceIndex: entry.SourceIndex,
 	}
 }
 
@@ -2547,7 +2687,7 @@ func clampProgress(value float64) float64 {
 	return value
 }
 
-func downloadMetrics(p models.ProgressInfo) string {
+func (a *App) downloadMetrics(p models.ProgressInfo) string {
 	parts := make([]string, 0, 4)
 	if _, ok := progressFraction(p); ok {
 		parts = append(parts, fmt.Sprintf("%.1f%%", progressPercent(p)))
@@ -2559,17 +2699,17 @@ func downloadMetrics(p models.ProgressInfo) string {
 		}
 		parts = append(parts, formatBytes(p.DownloadedBytes)+" / "+total)
 	} else {
-		parts = append(parts, formatBytes(p.DownloadedBytes)+" / size unknown")
+		parts = append(parts, formatBytes(p.DownloadedBytes)+" / "+a.tr("size unknown"))
 	}
 	if p.SpeedBps > 0 {
 		parts = append(parts, formatSpeed(p.SpeedBps))
 	} else {
-		parts = append(parts, "speed calculating")
+		parts = append(parts, a.tr("speed calculating"))
 	}
 	if p.ETA > 0 {
-		parts = append(parts, "ETA "+formatDuration(p.ETA.Seconds()))
+		parts = append(parts, a.tr("ETA")+" "+formatDuration(p.ETA.Seconds()))
 	} else {
-		parts = append(parts, "ETA calculating")
+		parts = append(parts, a.tr("ETA calculating"))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -2577,15 +2717,10 @@ func downloadMetrics(p models.ProgressInfo) string {
 func (a *App) converterPage(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
-		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Gap(2).Children(func() {
-				ui.Text(c, "Media Converter").FontSize(20).Bold()
-				ui.Text(c, "Remux or re-encode your local media with FFmpeg.").FontSize(12).TextColor(t.TextMuted)
-			})
-		})
+		ui.Text(c, a.tr("Remux or re-encode your local media with FFmpeg.")).FontSize(12).TextColor(t.TextMuted)
 		if !a.ffmpeg.Available() {
 			ui.Row(c).Background(t.Surface).Border(1, t.Danger).Radius(12).Padding(12).Children(func() {
-				ui.Text(c, "FFmpeg not found on PATH. Install FFmpeg to enable conversion.").FontSize(13).TextColor(t.Danger)
+				ui.Text(c, a.tr("FFmpeg not found on PATH. Install FFmpeg to enable conversion.")).FontSize(13).TextColor(t.Danger)
 			})
 			return
 		}
@@ -2601,18 +2736,18 @@ func (a *App) converterPage(c *ui.Context) {
 					a.convSource = files[0]
 				}
 				drop.Children(func() {
-					ui.Text(c, "Drop a media file here").FontSize(13).TextColor(t.TextMuted)
-					ui.Text(c, "or use Browse").FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, a.tr("Drop a media file here")).FontSize(13).TextColor(t.TextMuted)
+					ui.Text(c, a.tr("or use Browse")).FontSize(11).TextColor(t.TextMuted)
 				})
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "Source").FontSize(12).TextColor(t.TextMuted).Width(90)
-					ui.TextInput(c, &a.convSource).Placeholder("/path/to/file.mp4").Grow(1)
-					if ui.Button(c, "Browse…").Clicked() {
+					ui.Text(c, a.tr("Source")).FontSize(12).TextColor(t.TextMuted).Width(90)
+					ui.TextInput(c, &a.convSource).Placeholder(a.tr("/path/to/file.mp4")).Grow(1)
+					if ui.Button(c, a.tr("Browse…")).Clicked() {
 						go a.pickConvertFile()
 					}
 				})
 				ui.Row(c).Gap(8).Children(func() {
-					ui.Text(c, "Kind").FontSize(12).TextColor(t.TextMuted).Width(90)
+					ui.Text(c, a.tr("Kind")).FontSize(12).TextColor(t.TextMuted).Width(90)
 					a.toggleBtn(c, "ck-a", "Audio", a.convKind == models.KindAudio, func() {
 						a.convKind = models.KindAudio
 						a.convFormat = "mp3"
@@ -2624,7 +2759,7 @@ func (a *App) converterPage(c *ui.Context) {
 					})
 				})
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "Target").FontSize(12).TextColor(t.TextMuted).Width(90)
+					ui.Text(c, a.tr("Target")).FontSize(12).TextColor(t.TextMuted).Width(90)
 					formats := []string{"mp3", "m4a", "aac", "opus", "flac", "wav"}
 					if a.convKind == models.KindVideo {
 						formats = []string{"mp4", "mkv", "webm", "avi", "mov", "ts"}
@@ -2638,7 +2773,7 @@ func (a *App) converterPage(c *ui.Context) {
 				})
 				if a.convKind == models.KindAudio {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "Audio bitrate").FontSize(12).TextColor(t.TextMuted).Width(90)
+						ui.Text(c, a.tr("Audio bitrate")).FontSize(12).TextColor(t.TextMuted).Width(90)
 						for _, bitrate := range []int{128, 192, 256, 320} {
 							bitrate := bitrate
 							a.toggleBtn(c, fmt.Sprintf("conv-bitrate-%d", bitrate), fmt.Sprintf("%d kbps", bitrate), a.convAudioBitrateKbps == bitrate, func() {
@@ -2647,7 +2782,7 @@ func (a *App) converterPage(c *ui.Context) {
 						}
 					})
 					if a.convFormat == "flac" || a.convFormat == "wav" {
-						ui.Text(c, "Lossless output ignores bitrate selection.").FontSize(11).TextColor(t.TextMuted)
+						ui.Text(c, a.tr("Lossless output ignores bitrate selection.")).FontSize(11).TextColor(t.TextMuted)
 					}
 				}
 				if strings.TrimSpace(a.convSource) != "" {
@@ -2657,27 +2792,27 @@ func (a *App) converterPage(c *ui.Context) {
 						if known && remux {
 							label, color = "Lossless remux", t.Success
 						} else if known && !remux {
-							label, color = "Re-encode", t.Warning
+							label, color = a.tr("Re-encode"), t.Warning
 						} else if !checking {
-							label, color = "Re-encode", t.Warning
+							label, color = a.tr("Re-encode"), t.Warning
 						}
 						ui.Row(c).Gap(6).Children(func() {
 							ui.Text(c, label).FontSize(12).Bold().TextColor(color)
-							ui.Text(c, "for this source/target").FontSize(12).TextColor(t.TextMuted)
+							ui.Text(c, a.tr("for this source/target")).FontSize(12).TextColor(t.TextMuted)
 						})
 					}
 				}
-				if ui.PrimaryButton(c, "Convert").Clicked() {
+				if ui.PrimaryButton(c, a.tr("Convert")).Clicked() {
 					src := strings.TrimSpace(a.convSource)
 					if src == "" {
-						a.showToast("Enter a source path")
+						a.showToast(a.tr("Enter a source path"))
 						return
 					}
 					mode := models.ConversionReencode
 					if a.convKind == models.KindVideo {
 						remux, checking, known := a.remuxDecision(src, a.convFormat)
 						if checking || !known {
-							a.showToast("Still checking source compatibility")
+							a.showToast(a.tr("Still checking source compatibility"))
 							return
 						}
 						if remux {
@@ -2690,22 +2825,22 @@ func (a *App) converterPage(c *ui.Context) {
 						_, err := a.conv.EnqueueContext(context.Background(), req)
 						a.updateOnMain(func() {
 							if err != nil {
-								a.showToast("Could not queue conversion: " + err.Error())
+								a.showToast(a.tr("Could not queue conversion: ") + err.Error())
 								return
 							}
-							a.showToast("Queued conversion: " + filepath.Base(req.Source))
+							a.showToast(a.tr("Queued conversion: ") + filepath.Base(req.Source))
 						})
 					}()
 				}
 			})
 			ui.Column(c).Grow(5).Material(glass.Glass{Clarity: 0.2}).Border(1, t.Border).Padding(14).Radius(14).Gap(8).Children(func() {
-				ui.Text(c, "Conversion queue").FontSize(14).Bold()
+				ui.Text(c, a.tr("Conversion queue")).FontSize(14).Bold()
 				a.convJobsMu.Lock()
 				jobs := append([]models.ConversionJobSnapshot(nil), a.convJobs...)
 				a.convJobsMu.Unlock()
 				sort.Slice(jobs, func(i, j int) bool { return jobs[i].CreatedAt.After(jobs[j].CreatedAt) })
 				if len(jobs) == 0 {
-					emptyState(c, appui.IconConverter, "No conversion jobs", "Converted files will appear here.")
+					emptyState(c, appui.IconConverter, a.tr("No conversion jobs"), a.tr("Converted files will appear here."))
 				} else {
 					ui.List(c, &a.convListState, len(jobs), func(i int) {
 						j := jobs[i]
@@ -2775,7 +2910,7 @@ func (a *App) remuxDecision(source, target string) (result, checking, known bool
 func (a *App) historyPage(c *ui.Context) {
 	t := c.Theme()
 	if a.history == nil {
-		ui.Text(c, "History unavailable").TextColor(t.Danger)
+		ui.Text(c, a.tr("History unavailable")).TextColor(t.Danger)
 		return
 	}
 	if !a.historyLoaded {
@@ -2806,24 +2941,21 @@ func (a *App) historyPage(c *ui.Context) {
 	}
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Gap(2).Children(func() {
-				ui.Text(c, "History").FontSize(20).Bold()
-				ui.Text(c, fmt.Sprintf("%d saved downloads", len(a.historyEntries))).FontSize(12).TextColor(t.TextMuted)
-			})
+			ui.Text(c, a.tr("history.count", map[string]any{"n": len(a.historyEntries)})).FontSize(12).TextColor(t.TextMuted)
 			ui.Spacer(c).Grow(1)
-			if ui.Button(c, "Refresh").Clicked() {
+			if ui.Button(c, a.tr("Refresh")).Clicked() {
 				a.historyLoaded = false
 			}
-			if ui.Button(c, "Clear all").Clicked() {
+			if ui.Button(c, a.tr("Clear all")).Clicked() {
 				if err := a.history.Clear(); err != nil {
-					a.showToast("Could not clear history: " + err.Error())
+					a.showToast(a.tr("Could not clear history: ") + err.Error())
 				} else {
 					a.historyLoaded = false
 				}
 			}
 		})
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
-			ui.TextInput(c, &a.historyQuery).Placeholder("Search title or URL…").Grow(1)
+			ui.TextInput(c, &a.historyQuery).Placeholder(a.tr("Search title or URL…")).Grow(1)
 			for _, filter := range []string{"all", "video", "audio", "error"} {
 				filter := filter
 				label := filter
@@ -2836,11 +2968,13 @@ func (a *App) historyPage(c *ui.Context) {
 			}
 		})
 		if len(a.historyEntries) == 0 {
-			emptyState(c, appui.IconHistory, "No history yet", "Completed downloads will be saved here.")
+			emptyStateAction(c, appui.IconHistory, a.tr("history.empty.title"), a.tr("history.empty.detail"), a.tr("history.empty.action"), func() {
+				a.page = PageDashboard
+			})
 			return
 		}
 		if len(filtered) == 0 {
-			emptyState(c, appui.IconHistory, "No matches", "Try another search or filter.")
+			emptyState(c, appui.IconHistory, a.tr("No matches"), a.tr("Try another search or filter."))
 			return
 		}
 		ui.List(c, &a.histListState, len(filtered), func(i int) {
@@ -2885,24 +3019,28 @@ func (a *App) historyPage(c *ui.Context) {
 						settings := a.settingsDraftSnapshot()
 						req := historyDownloadRequest(e, settings.DownloadDir)
 						a.page = PageDownloads
-						a.showToast("Queueing: " + e.Title)
-						go func() {
-							if err := restoreHistoryVideoQuality(&req, e, a.ffmpeg); err != nil {
-								log.Printf("history: could not restore previous video quality for %q: %v", e.OutputPath, err)
-								a.updateOnMain(func() {
-									a.showToast("Cannot restore previous quality: " + err.Error())
-								})
-								return
-							}
-							_, err := a.manager.EnqueueContext(context.Background(), req)
-							a.updateOnMain(func() {
-								if err != nil {
-									a.showToast("Could not queue download: " + err.Error())
+						a.showToast(a.tr("Queueing: ") + e.Title)
+						if e.SourcePageURL != "" {
+							go a.requeueHistorySource(e, req)
+						} else {
+							go func() {
+								if err := restoreHistoryVideoQuality(&req, e, a.ffmpeg); err != nil {
+									log.Printf("history: could not restore previous video quality for %q: %v", e.OutputPath, err)
+									a.updateOnMain(func() {
+										a.showToast(a.tr("Cannot restore previous quality: ") + err.Error())
+									})
 									return
 								}
-								a.showToast("Queued: " + req.Title)
-							})
-						}()
+								_, err := a.manager.EnqueueContext(context.Background(), req)
+								a.updateOnMain(func() {
+									if err != nil {
+										a.showToast(a.tr("Could not queue download: ") + err.Error())
+										return
+									}
+									a.showToast(a.tr("Queued: ") + req.Title)
+								})
+							}()
+						}
 					}
 				}
 				if ui.Row(c.Key("hist-delete-"+e.ID)).
@@ -2911,13 +3049,70 @@ func (a *App) historyPage(c *ui.Context) {
 						ui.Icon(c, appui.IconDelete).FontSize(16).TextColor(t.Danger)
 					}).Clicked() {
 					if err := a.history.Delete(e.ID); err != nil {
-						a.showToast("Could not delete history entry: " + err.Error())
+						a.showToast(a.tr("Could not delete history entry: ") + err.Error())
 					} else {
 						a.historyLoaded = false
 					}
 				}
 			})
 		}).Grow(1).Gap(8)
+	})
+}
+
+// requeueHistorySource re-resolves an extracted stream before retrying it,
+// because the direct m3u8 URL stored at download time carries an auth key
+// that expires.
+func (a *App) requeueHistorySource(entry services.HistoryEntry, req models.DownloadRequest) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	res, err := services.ExtractSiteMedia(ctx, entry.SourcePageURL)
+	if err != nil {
+		a.updateOnMain(func() {
+			a.extractInput = entry.SourcePageURL
+			a.extractOpen = true
+			a.page = PageDashboard
+			a.showToast(a.tr("history.requeueExpired"))
+			a.invalidate()
+		})
+		return
+	}
+	mediaURL := ""
+	if title := strings.TrimSpace(entry.Title); title != "" {
+		for _, video := range res.Videos {
+			if strings.EqualFold(strings.TrimSpace(video.Title), title) {
+				mediaURL = video.MediaURL
+				break
+			}
+		}
+	}
+	if mediaURL == "" && entry.SourceIndex >= 0 && entry.SourceIndex < len(res.Videos) {
+		mediaURL = res.Videos[entry.SourceIndex].MediaURL
+	}
+	if mediaURL == "" && len(res.Videos) == 1 {
+		mediaURL = res.Videos[0].MediaURL
+	}
+	if mediaURL == "" {
+		a.updateOnMain(func() {
+			a.extractInput = entry.SourcePageURL
+			a.extractOpen = true
+			a.page = PageDashboard
+			a.showToast(a.tr("history.requeueExpired"))
+			a.invalidate()
+		})
+		return
+	}
+	req.URL = mediaURL
+	if err := restoreHistoryVideoQuality(&req, entry, a.ffmpeg); err != nil {
+		log.Printf("history: could not restore previous video quality for %q: %v", entry.OutputPath, err)
+	}
+	_, err = a.manager.EnqueueContext(context.Background(), req)
+	a.updateOnMain(func() {
+		if err != nil {
+			a.showToast(a.tr("Could not queue download: ") + err.Error())
+			return
+		}
+		a.showToast(a.tr("Queued: ") + req.Title)
 	})
 }
 
@@ -2928,14 +3123,14 @@ func (a *App) exportSettings(settings config.AppSettings) {
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		a.updateOnMain(func() { a.showToast("Could not export settings: " + err.Error()) })
+		a.updateOnMain(func() { a.showToast(a.tr("Could not export settings: ") + err.Error()) })
 		return
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		a.updateOnMain(func() { a.showToast("Could not export settings: " + err.Error()) })
+		a.updateOnMain(func() { a.showToast(a.tr("Could not export settings: ") + err.Error()) })
 		return
 	}
-	a.updateOnMain(func() { a.showToast("Settings exported") })
+	a.updateOnMain(func() { a.showToast(a.tr("Settings exported")) })
 }
 
 func (a *App) importSettings() {
@@ -2945,12 +3140,12 @@ func (a *App) importSettings() {
 	}
 	data, err := os.ReadFile(paths[0])
 	if err != nil {
-		a.updateOnMain(func() { a.showToast("Could not read settings: " + err.Error()) })
+		a.updateOnMain(func() { a.showToast(a.tr("Could not read settings: ") + err.Error()) })
 		return
 	}
 	var settings config.AppSettings
 	if err := json.Unmarshal(data, &settings); err != nil {
-		a.updateOnMain(func() { a.showToast("Invalid settings file") })
+		a.updateOnMain(func() { a.showToast(a.tr("Invalid settings file")) })
 		return
 	}
 	var headerLines []string
@@ -2967,7 +3162,7 @@ func (a *App) importSettings() {
 		subtitleLangs:  strings.Join(settings.SubtitleLangs, ", "),
 	})
 	if err != nil {
-		a.updateOnMain(func() { a.showToast("Invalid settings: " + err.Error()) })
+		a.updateOnMain(func() { a.showToast(a.tr("Invalid settings: ") + err.Error()) })
 		return
 	}
 	a.updateOnMain(func() {
@@ -2982,21 +3177,21 @@ func (a *App) importSettings() {
 		a.settingsSubtitleLangs = strings.Join(validated.SubtitleLangs, ", ")
 		a.settingsRateLimit = strconv.Itoa(validated.RateLimitKbps)
 		if err := a.settingsRepo.Save(validated); err != nil {
-			a.showToast("Could not save imported settings: " + err.Error())
+			a.showToast(a.tr("Could not save imported settings: ") + err.Error())
 			return
 		}
 		if a.manager != nil {
 			a.manager.SetMaxWorkers(validated.MaxConcurrent)
 		}
 		a.invalidate()
-		a.showToast("Settings imported")
+		a.showToast(a.tr("Settings imported"))
 	})
 }
 
 func (a *App) pickConvertFile() {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 		Parent: a.window(),
-		Title:  "Choose media file",
+		Title:  a.tr("Choose media file"),
 		Filters: []mygo.FileFilter{
 			{Name: "Media", Extensions: []string{"mp4", "mkv", "webm", "avi", "mov", "flv", "ts", "m4v", "m4a", "mp3", "flac", "wav", "opus", "aac", "ogg", "wma"}},
 			{Name: "All files", Extensions: []string{"*"}},
@@ -3018,7 +3213,7 @@ func (a *App) pickConvertFile() {
 func (a *App) pickDownloadDir() {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 		Parent:    a.window(),
-		Title:     "Choose download folder",
+		Title:     a.tr("Choose download folder"),
 		Directory: true,
 	})
 	if err != nil {

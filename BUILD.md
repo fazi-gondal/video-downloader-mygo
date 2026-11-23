@@ -71,7 +71,7 @@ The script writes to:
 resources/<platform>/bin/
 ```
 
-Supported target names include `windows-amd64`, `windows-arm64`, `linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64`. Windows/Linux FFmpeg archives are verified against the recorded SHA-256 values. macOS uses a Homebrew bottle on a runner matching the target architecture (`macos-13` for amd64 and `macos-latest` for arm64); Homebrew verifies that bottle before installation.
+Supported target names include `windows-amd64`, `windows-arm64`, `linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64`. Every FFmpeg archive is verified against the recorded SHA-256 values. macOS uses pinned static FFmpeg builds from `eugeneware/ffmpeg-static`; the script rejects any binary that still links `/opt/homebrew` or `/usr/local/opt` libraries, since those fail on users' machines.
 
 Optional environment variables:
 

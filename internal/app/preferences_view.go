@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
+	"github.com/fazi-gondal/video-downloader-mygo/internal/tools"
 	appui "github.com/fazi-gondal/video-downloader-mygo/internal/ui"
 )
 
@@ -139,78 +140,98 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 	page := ui.Scroll(c).Grow(1).Gap(14)
 
 	page.Children(func() {
-		ui.Column(c).Gap(3).Children(func() {
-			ui.Text(c, "Settings").FontSize(20).Bold()
-			ui.Text(c, "Tune downloads, media defaults, and the appearance of MyGo.").FontSize(12).TextColor(t.TextMuted)
-		})
-
-		settingsCard(c, appui.IconSettings, "Appearance", "Choose how MyGo follows your system theme.", func() {
+		settingsCard(c, appui.IconSettings, a.tr("Appearance"), a.tr("Choose how MyGo follows your system theme."), func() {
 			ui.Row(c).FillWidth().Gap(10).Children(func() {
-				a.themeCard(c, "light", appui.IconSun, "Light")
-				a.themeCard(c, "dark", appui.IconMoon, "Dark")
-				a.themeCard(c, "system", appui.IconMonitor, "System")
+				a.themeCard(c, "light", appui.IconSun, a.tr("Light"))
+				a.themeCard(c, "dark", appui.IconMoon, a.tr("Dark"))
+				a.themeCard(c, "system", appui.IconMonitor, a.tr("System"))
 			})
 		})
 
-		settingsCard(c, appui.IconFolder, "Download location", "Files are saved here unless a request chooses another folder.", func() {
+		settingsCard(c, appui.IconMonitor, a.tr("settings.language.title"), a.tr("settings.language.desc"), func() {
+			options := []string{a.tr("settings.language.system"), "简体中文", "English"}
+			values := []string{"system", "zh-Hans", "en"}
+			current := options[0]
+			for i, value := range values {
+				if a.settingsDraft.Language == value {
+					current = options[i]
+				}
+			}
+			if ui.Select(c, &current, options).Width(220).Changed() {
+				for i, option := range options {
+					if option == current {
+						a.settingsDraft.Language = values[i]
+						a.persistLanguage()
+						break
+					}
+				}
+				a.invalidate()
+			}
+		})
+
+		settingsCard(c, appui.IconFolder, a.tr("Download location"), a.tr("Files are saved here unless a request chooses another folder."), func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, appui.IconFolder).FontSize(16).TextColor(t.TextMuted)
-				ui.TextInput(c, &a.settingsDraft.DownloadDir).Grow(1).Placeholder("Download folder")
-				if ui.Button(c, "Browse…").Clicked() {
+				ui.TextInput(c, &a.settingsDraft.DownloadDir).Grow(1).Placeholder(a.tr("Download folder"))
+				if ui.Button(c, a.tr("Browse…")).Clicked() {
 					go a.pickDownloadDir()
 				}
 			})
 		})
 
-		settingsCard(c, appui.IconRefresh, "Performance", "Choose how many downloads or fragments may run in parallel.", func() {
-			performanceSliderRow(c, "Downloads", "Maximum concurrent downloads", &a.maxConcurrentSlider, 1, 16)
-			performanceSliderRow(c, "Fragments", "Concurrent fragments per download", &a.concurrentFragmentsSlider, 1, 32)
+		settingsCard(c, appui.IconRefresh, a.tr("Performance"), a.tr("Choose how many downloads or fragments may run in parallel."), func() {
+			performanceSliderRow(c, a.tr("Downloads"), a.tr("Maximum concurrent downloads"), &a.maxConcurrentSlider, 1, 16)
+			performanceSliderRow(c, a.tr("Fragments"), a.tr("Concurrent fragments per download"), &a.concurrentFragmentsSlider, 1, 32)
 		})
 
-		settingsCard(c, appui.IconDownload, "Media defaults", "These options are applied to new download requests.", func() {
-			ui.Checkbox(c, &a.settingsDraft.EmbedThumbnail, "Embed thumbnail")
-			ui.Checkbox(c, &a.settingsDraft.EmbedMetadata, "Embed metadata and chapters")
-			ui.Checkbox(c, &a.settingsDraft.MultiAudio, "Download multiple audio tracks when available")
-			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, "Prefer VP9 video when available (fallback automatically)")
+		settingsCard(c, appui.IconDownload, a.tr("Media defaults"), a.tr("These options are applied to new download requests."), func() {
+			ui.Checkbox(c, &a.settingsDraft.EmbedThumbnail, a.tr("Embed thumbnail"))
+			ui.Checkbox(c, &a.settingsDraft.EmbedMetadata, a.tr("Embed metadata and chapters"))
+			ui.Checkbox(c, &a.settingsDraft.MultiAudio, a.tr("Download multiple audio tracks when available"))
+			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, a.tr("Prefer VP9 video when available (fallback automatically)"))
 		})
 
-		settingsCard(c, appui.IconVideo, "Subtitles", "Use comma-separated yt-dlp language codes, such as en, ur, or all.", func() {
-			ui.Checkbox(c, &a.settingsDraft.WriteSubtitles, "Write subtitles by default")
+		settingsCard(c, appui.IconVideo, a.tr("Subtitles"), a.tr("Use comma-separated yt-dlp language codes, such as en, ur, or all."), func() {
+			ui.Checkbox(c, &a.settingsDraft.WriteSubtitles, a.tr("Write subtitles by default"))
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Languages").FontSize(12).TextColor(t.TextMuted).Width(86)
-				ui.TextInput(c, &a.settingsSubtitleLangs).Grow(1).Placeholder("all, en, ur")
+				ui.Text(c, a.tr("Languages")).FontSize(12).TextColor(t.TextMuted).Width(86)
+				ui.TextInput(c, &a.settingsSubtitleLangs).Grow(1).Placeholder(a.tr("all, en, ur"))
 			})
 		})
 
-		settingsCard(c, appui.IconLink, "Network", "Optional proxy, browser cookies, and a per-download rate limit.", func() {
-			settingsLabeledInput(c, "Proxy", &a.settingsDraft.Proxy, "http://… or socks5://…")
-			settingsLabeledInput(c, "Cookies", &a.settingsDraft.CookiesBrowser, "chrome, firefox, edge…")
-			settingsLabeledInput(c, "Rate limit", &a.settingsRateLimit, "0 = unlimited (Kbps)")
+		settingsCard(c, appui.IconLink, a.tr("Network"), a.tr("Optional proxy, browser cookies, and a per-download rate limit."), func() {
+			settingsLabeledInput(c, a.tr("Proxy"), &a.settingsDraft.Proxy, a.tr("http://… or socks5://…"))
+			settingsLabeledInput(c, a.tr("Cookies"), &a.settingsDraft.CookiesBrowser, a.tr("chrome, firefox, edge…"))
+			settingsLabeledInput(c, a.tr("Rate limit"), &a.settingsRateLimit, a.tr("0 = unlimited (Kbps)"))
 		})
 
-		settingsCard(c, nil, "Custom headers", "One header per line in the form Key: Value.", func() {
-			ui.TextArea(c, &a.settingsHeaders).FillWidth().Height(86).Placeholder("Accept-Language: en-US")
+		settingsCard(c, nil, a.tr("Custom headers"), a.tr("One header per line in the form Key: Value."), func() {
+			ui.TextArea(c, &a.settingsHeaders).FillWidth().Height(86).Placeholder(a.tr("Accept-Language: en-US"))
 		})
 
-		settingsCard(c, appui.IconConverter, "Conversion", "Defaults used by the local FFmpeg converter.", func() {
-			ui.Checkbox(c, &a.settingsDraft.KeepOriginals, "Keep originals after conversion")
+		settingsCard(c, appui.IconConverter, a.tr("Conversion"), a.tr("Defaults used by the local FFmpeg converter."), func() {
+			ui.Checkbox(c, &a.settingsDraft.KeepOriginals, a.tr("Keep originals after conversion"))
 		})
 
-		settingsCard(c, appui.IconAbout, "Dependencies", "The executable paths currently resolved by the app.", func() {
-			dependencyRow(c, "FFmpeg", dependencyPath(a.ffmpegPath()))
-			dependencyRow(c, "yt-dlp", dependencyPath(a.ytdlpPath()))
+		settingsCard(c, appui.IconAbout, a.tr("settings.tools.title"), a.tr("settings.tools.desc"), func() {
+			for _, check := range a.toolChecks {
+				a.toolStatusRow(c, check)
+			}
+			if ui.Button(c, a.tr("settings.tools.recheck")).Clicked() {
+				a.refreshToolChecks()
+			}
 		})
 
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
-			if ui.Button(c, "Export settings").Clicked() {
+			if ui.Button(c, a.tr("Export settings")).Clicked() {
 				settings := a.settingsDraftSnapshot()
 				go a.exportSettings(settings)
 			}
-			if ui.Button(c, "Import settings").Clicked() {
+			if ui.Button(c, a.tr("Import settings")).Clicked() {
 				go a.importSettings()
 			}
 			ui.Spacer(c).Grow(1)
-			if ui.PrimaryButton(c, "Save settings").Clicked() {
+			if ui.PrimaryButton(c, a.tr("Save settings")).Clicked() {
 				draft := refinedSettingsDraft{
 					settings:       a.settingsDraftSnapshot(),
 					maxConcurrent:  strconv.Itoa(int(a.maxConcurrentSlider)),
@@ -221,15 +242,15 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 				}
 				saved, err := validateSettingsDraft(draft)
 				if err != nil {
-					a.showToast("Could not save settings: " + err.Error())
+					a.showToast(a.tr("Could not save settings: ") + err.Error())
 					return
 				}
 				if a.settingsRepo == nil {
-					a.showToast("Could not save settings: settings repository unavailable")
+					a.showToast(a.tr("Could not save settings: settings repository unavailable"))
 					return
 				}
 				if err := a.settingsRepo.Save(saved); err != nil {
-					a.showToast("Could not save settings: " + err.Error())
+					a.showToast(a.tr("Could not save settings: ") + err.Error())
 					return
 				}
 				a.applySettings(saved)
@@ -238,7 +259,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 				if a.manager != nil {
 					a.manager.SetMaxWorkers(saved.MaxConcurrent)
 				}
-				a.showToast("Settings saved")
+				a.showToast(a.tr("Settings saved"))
 			}
 		})
 	})
@@ -260,22 +281,22 @@ func (a *App) refinedAboutPage(c *ui.Context) {
 					})
 
 					// App name
-					ui.Text(c, "Video Downloader").FontSize(28).Bold()
+					ui.Text(c, a.tr("Video Downloader")).FontSize(28).Bold()
 
 					// Version pill
 					ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(999).Padding(5, 14).Children(func() {
-						ui.Text(c, "v3.3.0 · Open-source media downloader").FontSize(12).Bold().TextColor(t.TextMuted)
+						ui.Text(c, a.tr("v3.3.0 · Open-source media downloader")).FontSize(12).Bold().TextColor(t.TextMuted)
 					})
 
 					// Description
-					ui.Text(c, "Download, convert, and organize media from YouTube, TikTok, Instagram, X, ARY Plus, and more. Native Go desktop app — fast, lightweight, no Electron.").
+					ui.Text(c, a.tr("Download, convert, and organize media from YouTube, TikTok, Instagram, X, ARY Plus, and more. Native Go desktop app — fast, lightweight, no Electron.")).
 						FontSize(14).TextColor(t.TextMuted).MaxWidth(460)
 
 					// Divider
 					ui.Box(c).FillWidth().Height(1).Background(t.Border)
 
 					// Developer credit
-					ui.Text(c, "Developed by Faizan Gondal").FontSize(14).Bold()
+					ui.Text(c, a.tr("Developed by Faizan Gondal")).FontSize(14).Bold()
 
 					// Link buttons row (outlined style)
 					ui.Row(c).Gap(8).Wrap().Justify(ui.Center).Children(func() {
@@ -287,7 +308,7 @@ func (a *App) refinedAboutPage(c *ui.Context) {
 					})
 
 					// Tech stack label + chips
-					ui.Text(c, "BUILT WITH").FontSize(10).Bold().TextColor(t.TextMuted)
+					ui.Text(c, a.tr("BUILT WITH")).FontSize(10).Bold().TextColor(t.TextMuted)
 					ui.Row(c).Gap(8).Wrap().Justify(ui.Center).Children(func() {
 						techChip(c, "Go")
 						techChip(c, "MyGo")
@@ -296,7 +317,7 @@ func (a *App) refinedAboutPage(c *ui.Context) {
 					})
 
 					// License line
-					ui.Link(c, "© 2026 Faizan Gondal · MIT License", "https://github.com/fazi-gondal/video-downloader-mygo/blob/main/LICENSE").FontSize(12)
+					ui.Link(c, a.tr("© 2026 Faizan Gondal · MIT License"), "https://github.com/fazi-gondal/video-downloader-mygo/blob/main/LICENSE").FontSize(12)
 				})
 			})
 		})
@@ -353,35 +374,6 @@ func settingsLabeledInput(c *ui.Context, label string, value *string, placeholde
 		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Width(86)
 		ui.TextInput(c, value).Grow(1).Placeholder(placeholder)
 	})
-}
-
-func dependencyRow(c *ui.Context, label, path string) {
-	t := c.Theme()
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Width(86)
-		ui.Text(c, path).FontSize(12).Ellipsis("…").Grow(1)
-	})
-}
-
-func dependencyPath(path string) string {
-	if strings.TrimSpace(path) == "" {
-		return "Not found"
-	}
-	return path
-}
-
-func (a *App) ffmpegPath() string {
-	if a.ffmpeg == nil {
-		return ""
-	}
-	return a.ffmpeg.Path()
-}
-
-func (a *App) ytdlpPath() string {
-	if a.ytdlp == nil {
-		return ""
-	}
-	return a.ytdlp.Bin()
 }
 
 // themeCard renders an icon card for one theme mode (light / dark / system).
@@ -443,4 +435,76 @@ func techChip(c *ui.Context, label string) {
 	ui.Row(c).Background(t.Surface).Border(1, t.Border).Radius(999).Padding(4, 10).Children(func() {
 		ui.Text(c, label).FontSize(11).TextColor(t.TextMuted)
 	})
+}
+
+// toolStatusRow shows one dependency with its version, path, and health.
+func (a *App) toolStatusRow(c *ui.Context, check tools.Check) {
+	t := c.Theme()
+	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Children(func() {
+		ui.Text(c, check.Name).FontSize(13).Bold().Width(70)
+		ui.Column(c).Grow(1).Gap(1).Children(func() {
+			version := check.Version
+			if version == "" {
+				version = "—"
+			}
+			ui.Text(c, version).FontSize(12).TextColor(t.TextMuted).Ellipsis("…")
+			ui.Text(c, check.Path).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
+		})
+		status, color := a.tr("settings.tools.missing"), t.Danger
+		if check.OK {
+			status, color = a.tr("settings.tools.available"), t.Success
+		}
+		ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(999).Padding(4, 10).Children(func() {
+			ui.Text(c, status).FontSize(11).Bold().TextColor(color)
+		})
+	})
+}
+
+// persistLanguage saves the language immediately: unlike the rest of the form
+// it is expected to survive without pressing Save settings.
+func (a *App) persistLanguage() {
+	if a.settingsRepo == nil {
+		return
+	}
+	// Load first: only the language is meant to be committed, not the rest of
+	// the form, which may still hold half-edited values.
+	settings, err := a.settingsRepo.Load()
+	if err != nil {
+		a.showToast(a.tr("settings.language.saveFailed") + err.Error())
+		return
+	}
+	settings = languageOnlySettings(settings, a.settingsDraft.Language)
+	if err := a.settingsRepo.Save(settings); err != nil {
+		a.showToast(a.tr("settings.language.saveFailed") + err.Error())
+		return
+	}
+	a.setSettings(settings)
+}
+
+// languageOnlySettings applies just the language, so saving it cannot commit
+// other half-edited form values.
+func languageOnlySettings(settings config.AppSettings, language string) config.AppSettings {
+	settings.Language = language
+	return settings
+}
+
+// refreshToolChecks probes the bundled tools off the render thread; yt-dlp can
+// take seconds to answer on a cold start.
+func (a *App) refreshToolChecks() {
+	go func() {
+		tools.ResetProbeCache()
+		checks := tools.ProbeAll()
+		if !a.hasUnfinishedDownloads() {
+			if a.ffmpeg != nil {
+				a.ffmpeg.RefreshTools()
+			}
+			if a.ytdlp != nil {
+				a.ytdlp.RefreshBinary()
+			}
+		}
+		a.updateOnMain(func() {
+			a.toolChecks = checks
+			a.invalidate()
+		})
+	}()
 }

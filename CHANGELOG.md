@@ -4,6 +4,32 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+### Added
+
+- **Page extractor**: recover every video from pages yt-dlp reports as
+  unsupported (including players whose stream URL is JSON-escaped in an inline
+  config), inline on Home. Select any subset, copy links, continue to the
+  download options, or queue everything with best-quality defaults.
+- **Native i18n** through MyGo's catalog (`en`, `zh-Hans`) with a Settings
+  language card (follow system / 简体中文 / English) that applies and persists
+  immediately. zh-Hant falls back to English.
+- **Tools status** in Settings: yt-dlp, FFmpeg, and FFprobe versions, paths, and
+  health with a re-check that runs off the render thread.
+- Friendly, localized download errors; failure badges; empty-state actions;
+  keyboard navigation shortcuts.
+
+### Changed
+
+- Home hero rebuilt on one center axis with a fixed spacing scale; the
+  extractor expands in place with one synchronized height/offset animation
+  instead of switching pages.
+- Removed duplicate page headings; the extractor sidebar item is gone; the
+  theme toggle moved to the top bar as a sun/moon button.
+- History entries created by the extractor store their source page and
+  re-resolve it on retry, so expired direct links no longer fail.
+- macOS packaging uses pinned static FFmpeg/FFprobe builds; the fetch script
+  rejects Homebrew-linked binaries, and bundled tools are probed at runtime.
+
 ## [3.3.0] - 2026-11-20
 
 ### Added

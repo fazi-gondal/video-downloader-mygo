@@ -22,6 +22,10 @@ func main() {
 	defer a.Shutdown()
 
 	mygo.App.WhenReady(func() {
+		// Declare the app's languages so MyGo's Locale() picks the user's
+		// preferred one among them; English is the source language.
+		mygo.App.SetLanguages("en", "zh-Hans")
+		a.SetInitialLocale()
 		// Default title bar = native OS chrome (Windows caption buttons,
 		// macOS traffic lights, Linux window decorations). No Frameless,
 		// no TitleBarHidden.

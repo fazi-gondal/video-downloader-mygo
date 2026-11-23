@@ -462,7 +462,7 @@ func TestEstimatedFinalSizeAudioOnlyUsesSelectedAudio(t *testing.T) {
 }
 
 func TestDownloadMetricsShowsEstimatedTotalSpeedAndETA(t *testing.T) {
-	metrics := downloadMetrics(models.ProgressInfo{
+	metrics := (&App{lang: "en"}).downloadMetrics(models.ProgressInfo{
 		DownloadedBytes: 1024,
 		TotalBytes:      4096,
 		TotalIsEstimate: true,
@@ -477,7 +477,7 @@ func TestDownloadMetricsShowsEstimatedTotalSpeedAndETA(t *testing.T) {
 }
 
 func TestDownloadMetricsExplainsUnknownProgressFields(t *testing.T) {
-	metrics := downloadMetrics(models.ProgressInfo{DownloadedBytes: 1024})
+	metrics := (&App{lang: "en"}).downloadMetrics(models.ProgressInfo{DownloadedBytes: 1024})
 	for _, want := range []string{"1.0 KB / size unknown", "speed calculating", "ETA calculating"} {
 		if !strings.Contains(metrics, want) {
 			t.Fatalf("metrics %q does not contain %q", metrics, want)

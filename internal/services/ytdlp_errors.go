@@ -1,6 +1,31 @@
 package services
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// ErrUnsupportedURL marks a yt-dlp failure caused by a URL no extractor
+// handles, which the Extractor page can often recover from.
+var ErrUnsupportedURL = errors.New("unsupported URL")
+
+// ytDlpRunError turns the diagnostics of a failed run into an error, tagging
+// the unsupported-URL case so the UI can offer the extractor without matching
+// English stderr text itself.
+func ytDlpRunError(diagnostics string, runErr error) error {
+	msg := strings.TrimSpace(diagnostics)
+	if msg == "" && runErr != nil {
+		msg = runErr.Error()
+	}
+	if msg == "" {
+		msg = "yt-dlp failed"
+	}
+	if strings.Contains(msg, "Unsupported URL") {
+		return fmt.Errorf("%w: %s", ErrUnsupportedURL, msg)
+	}
+	return errors.New(msg)
+}
 
 const subtitleRateLimitExplanation = "Subtitle server rate-limited this request (HTTP 429). Wait before retrying, select fewer subtitle languages or reduce simultaneous downloads, or explicitly select None to download without subtitles."
 

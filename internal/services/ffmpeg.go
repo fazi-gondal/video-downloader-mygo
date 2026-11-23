@@ -22,6 +22,7 @@ const ffprobeDurationTimeout = 5 * time.Second
 
 // FFmpegService locates ffmpeg/ffprobe and runs conversions.
 type FFmpegService struct {
+	mu         sync.Mutex
 	ffmpeg     string
 	ffprobe    string
 	remuxMu    sync.Mutex
@@ -40,6 +41,19 @@ func NewFFmpegService() *FFmpegService {
 		ffmpeg:     tools.FFmpeg(),
 		ffprobe:    tools.FFprobe(),
 		remuxCache: make(map[string]remuxCacheEntry),
+	}
+}
+
+// RefreshTools re-resolves tools that were missing at startup, so installing
+// FFmpeg while the app runs can be picked up by Check again.
+func (s *FFmpegService) RefreshTools() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ffmpeg == "" {
+		s.ffmpeg = tools.FFmpeg()
+	}
+	if s.ffprobe == "" {
+		s.ffprobe = tools.FFprobe()
 	}
 }
 

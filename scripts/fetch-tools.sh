@@ -15,6 +15,9 @@ RES="$ROOT/resources"
 # is deliberately updated here.
 YTDLP_TAG="${YTDLP_TAG:-2026.08.19}"
 FFMPEG_RELEASE="${FFMPEG_RELEASE:-latest}"
+# Static macOS FFmpeg builds: self-contained, unlike Homebrew bottles whose
+# binaries link /opt/homebrew dylibs that are absent on users' machines.
+FFMPEG_STATIC_TAG="${FFMPEG_STATIC_TAG:-b6.1.1}"
 
 fetch() {
 	local url="$1" out="$2"
@@ -130,26 +133,46 @@ get_ffmpeg_expected_sha256() {
   ffmpeg_sha256 "$plat"
 }
 
+# ffmpeg_static_sha256 pins the eugeneware/ffmpeg-static asset for a target.
+ffmpeg_static_sha256() {
+  local plat="$1" tool="$2"
+  case "$plat:$tool" in
+    darwin-arm64:ffmpeg)  echo "a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584" ;;
+    darwin-arm64:ffprobe) echo "bb2db6f5d8cef919da12fbf592119a987202a8c060a886f3cab091f9cab90b64" ;;
+    darwin-amd64:ffmpeg)  echo "ebdddc936f61e14049a2d4b549a412b8a40deeff6540e58a9f2a2da9e6b18894" ;;
+    darwin-amd64:ffprobe) echo "fa3add0ce901f7241abe0dfc0155d958fc834aca3f8ce61f87cc712ae669c1e0" ;;
+  esac
+}
+
 install_macos_ffmpeg() {
   local plat="$1"
   local dir="$RES/$plat/bin"
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "  ERROR: brew is required to bundle FFmpeg for $plat" >&2
-    return 1
+  local arch="arm64"
+  case "$plat" in
+    darwin-amd64) arch="x64" ;;
+  esac
+
+  local tool name url tmp
+  for tool in ffmpeg ffprobe; do
+    name="${tool}-darwin-${arch}"
+    url="https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_TAG}/${name}"
+    tmp="$dir/.${tool}.download"
+    fetch "$url" "$tmp"
+    verify_sha256 "$tmp" "$(ffmpeg_static_sha256 "$plat" "$tool")"
+    mv -f "$tmp" "$dir/$tool"
+    chmod +x "$dir/$tool"
+  done
+
+  # A Homebrew-linked binary would run on the build machine but fail on a
+  # user's Mac, which is the bug these static builds replace.
+  if command -v otool >/dev/null 2>&1; then
+    if otool -L "$dir/ffmpeg" | grep -Eq '(/opt/homebrew|/usr/local/opt)/'; then
+      echo "  ERROR: bundled FFmpeg links Homebrew libraries" >&2
+      return 1
+    fi
   fi
 
-  # Homebrew verifies the bottle checksum before installing it. The runner
-  # must match the target architecture (macos-13 for amd64, macos-latest for
-  # arm64); otherwise an incompatible executable could be packaged silently.
-  brew install --formula ffmpeg
-  local prefix
-  prefix="$(brew --prefix ffmpeg)"
-  [ -x "$prefix/bin/ffmpeg" ] || { echo "  ERROR: brew ffmpeg missing" >&2; return 1; }
-  [ -x "$prefix/bin/ffprobe" ] || { echo "  ERROR: brew ffprobe missing" >&2; return 1; }
-  cp -f "$prefix/bin/ffmpeg" "$dir/ffmpeg"
-  cp -f "$prefix/bin/ffprobe" "$dir/ffprobe"
-  chmod +x "$dir/ffmpeg" "$dir/ffprobe"
-  echo "  ok: Homebrew FFmpeg $("$dir/ffmpeg" -version | awk 'NR==1 {print $3}')"
+  echo "  ok: static FFmpeg $("$dir/ffmpeg" -version | awk 'NR==1 {print $3}')"
   echo "  sha256: $(sha256 "$dir/ffmpeg")  ffmpeg"
   echo "  sha256: $(sha256 "$dir/ffprobe")  ffprobe"
 }
