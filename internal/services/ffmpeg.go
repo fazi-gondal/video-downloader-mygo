@@ -58,6 +58,20 @@ func (s *FFmpegService) RefreshTools() {
 	s.mu.Unlock()
 }
 
+// SetFFmpegPath updates the binary path without probing; the tool check
+// already did that. The final refresh still resolves both paths together.
+func (s *FFmpegService) SetFFmpegPath(path string) {
+	s.mu.Lock()
+	s.ffmpeg = path
+	s.mu.Unlock()
+}
+
+func (s *FFmpegService) SetFFprobePath(path string) {
+	s.mu.Lock()
+	s.ffprobe = path
+	s.mu.Unlock()
+}
+
 func (s *FFmpegService) paths() (string, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -67,6 +81,11 @@ func (s *FFmpegService) paths() (string, string) {
 func (s *FFmpegService) Available() bool {
 	ffmpegPath, _ := s.paths()
 	return ffmpegPath != ""
+}
+
+func (s *FFmpegService) HasFFprobe() bool {
+	_, ffprobePath := s.paths()
+	return ffprobePath != ""
 }
 
 func (s *FFmpegService) Path() string {

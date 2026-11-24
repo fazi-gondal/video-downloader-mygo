@@ -142,3 +142,37 @@ func TestHeroDarkSnapshot(t *testing.T) {
 	tt.Frame()
 	saveSnapshot(t, "hero-dark.png", tt)
 }
+
+func TestSetupCardSnapshot(t *testing.T) {
+	a := &App{lang: "zh-Hans", settingsDraft: config.DefaultSettings()}
+	a.toolChecks = []tools.Check{
+		{
+			Name: "yt-dlp", Path: "/Applications/Video Downloader.app/Contents/Resources/bin/yt-dlp",
+			Version: "2026.11.23", OK: true, Source: tools.SourceBuiltin,
+		},
+		{Name: "ffmpeg", OK: false},
+		{Name: "ffprobe", OK: false},
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(appui.NativeTheme(true))
+		ui.Column(c).Grow(1).Padding(16).Children(func() {
+			a.setupCard(c)
+		})
+	}, 900, 560)
+	tt.SetLocale("zh-Hans")
+	tt.Frame()
+	saveSnapshot(t, "setup.png", tt)
+}
+
+func TestHeroSetupSnapshot(t *testing.T) {
+	a := &App{lang: "zh-Hans"}
+	a.toolChecks = []tools.Check{
+		{Name: "yt-dlp", Path: "/Applications/Video Downloader.app/Contents/Resources/bin/yt-dlp", Version: "2026.11.23", OK: true, Source: tools.SourceBuiltin},
+		{Name: "ffmpeg", OK: false},
+		{Name: "ffprobe", OK: false},
+	}
+	tt := ui.NewTester(heroShell(a, false), 1120, 760)
+	tt.SetLocale("zh-Hans")
+	tt.Frame()
+	saveSnapshot(t, "hero-setup.png", tt)
+}

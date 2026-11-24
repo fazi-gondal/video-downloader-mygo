@@ -8,8 +8,9 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 - Git.
 - MyGo v0.10.0 through the pinned Go tool in `go.mod`.
 - yt-dlp and, on Windows/Linux, FFmpeg/FFprobe on `PATH`, or downloaded into
-  `resources/<platform>/bin`. On macOS, FFmpeg is not bundled: install it with
-  Homebrew, MacPorts, or a static build, or set its path in Settings → Tools.
+  `resources/<platform>/bin`. On macOS, FFmpeg is not bundled: use the Home
+  setup card (Homebrew or a pinned static build), install it yourself, or set
+  its path in Settings → Tools.
 - ARY Plus is optional and requires a user-provided API key. Add it in
   Settings → ARY Plus or set `ARYPLUS_API_KEY`; no third-party key is bundled.
   `ARYPLUS_API_BASE` can select a compatible API endpoint.
@@ -123,11 +124,14 @@ Outputs are written below `build/`, as configured by `mygo.json`:
 `internal/tools` checks, in order:
 
 1. Explicit path from Settings → Tools, when it runs.
-2. For yt-dlp, the newer of the bundled and system copies (Homebrew/MacPorts/
-   `PATH`); a user-installed update takes effect without rebuilding the app.
-3. Packaged `resources/bin/<tool>` or `resources/<tool>` (development
+2. The app-managed directory (`~/Library/Application Support/VideoDownloader/bin`
+   on macOS, the platform config directory elsewhere). A copy installed from
+   the Home setup card takes effect here.
+3. For yt-dlp, the newest of the app-managed, bundled, and system copies;
+   ties prefer app-managed, then bundled, then system.
+4. Packaged `resources/bin/<tool>` or `resources/<tool>` (development
    `resources/<os>-<arch>/bin/<tool>` is also recognized).
-4. System `PATH` and the common package-manager directories.
+5. System `PATH` and the common package-manager directories.
 
 Every candidate is executed once (`-version` or `--version`) and cached, so a
 present-but-broken binary falls through instead of shadowing a working copy.
@@ -292,10 +296,11 @@ Windows installer creation needs NSIS. The release workflow installs NSIS on Ubu
 
 ### FFmpeg or yt-dlp is missing
 
-Run the helper script using Bash, check `resources/<platform>/bin`, install the
-tools on `PATH`, or set an explicit path in Settings → Tools. On macOS install
-FFmpeg with `brew install ffmpeg` (or a static build) and press **Check again**.
-Restart the app after changing bundled resources.
+On macOS use the Home setup card to install FFmpeg with Homebrew or a pinned
+static build. Otherwise run the helper script using Bash, check
+`resources/<platform>/bin`, install the tools on `PATH`, or set an explicit path
+in Settings → Tools. Press **Check again** after changing tools; no restart is
+needed for an app-managed install.
 
 ### Linux executable does not start
 

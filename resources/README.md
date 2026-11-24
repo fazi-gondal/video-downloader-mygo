@@ -44,6 +44,21 @@ The `bin` directories are usually empty in Git because downloaded executables ar
 
 `icon.png` is shared by application packages. Use a 1024×1024 PNG when replacing it.
 
+## App-managed tools
+
+Tools installed from the Home setup card live outside the `.app` bundle:
+
+```text
+~/Library/Application Support/VideoDownloader/bin/   # macOS
+%LOCALAPPDATA%/VideoDownloader/bin/                  # Windows
+~/.config/VideoDownloader/bin/                       # Linux
+```
+
+The resolver prefers this directory over the bundled and system copies for
+FFmpeg/FFprobe, so an install takes effect immediately. yt-dlp uses the newest
+of the app-managed, bundled, and system copies. See
+`docs/design/tool-resolution.md`.
+
 ## Fetch tools
 
 Run the Bash helper from the repository root:
@@ -92,16 +107,19 @@ The Windows/Linux archive checksums are recorded in the script. The `latest` FFm
 `internal/tools/resolve.go` resolves each executable in this order:
 
 1. An explicit path from Settings → Tools, if it runs.
-2. For yt-dlp, the newer of the bundled and system copies.
-3. `App.Path(PathResources)/bin/<tool>` in a packaged app.
-4. `App.Path(PathResources)/<tool>` in a packaged app.
-5. `resources/<GOOS>-<GOARCH>/bin/<tool>` during local development.
-6. A matching executable in the common package-manager directories or on the
+2. The app-managed directory (`~/Library/Application Support/VideoDownloader/bin`
+   on macOS, the platform config directory elsewhere), if it runs.
+3. For yt-dlp, the newest of the app-managed, bundled, and system copies; ties
+   prefer app-managed, then bundled, then system.
+4. `App.Path(PathResources)/bin/<tool>` in a packaged app.
+5. `App.Path(PathResources)/<tool>` in a packaged app.
+6. `resources/<GOOS>-<GOARCH>/bin/<tool>` during local development.
+7. A matching executable in the common package-manager directories or on the
    system `PATH`.
 
 Every candidate is probed by running it once, so a present-but-broken binary is
 skipped. macOS packages contain only yt-dlp; FFmpeg and FFprobe come from the
-system or an explicit path.
+app-managed directory, the system, or an explicit path.
 
 Tool names are:
 

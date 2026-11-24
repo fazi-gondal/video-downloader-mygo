@@ -94,21 +94,25 @@ func TestChooseYtDlpPrefersNewerUsableSystemVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := chooseYtDlp("", bundled, []string{older}); got != bundled {
+	if got := chooseYtDlp("", "", bundled, []string{older}); got != bundled {
 		t.Fatalf("older system yt-dlp = %q, want bundled %q", got, bundled)
 	}
-	if got := chooseYtDlp("", bundled, []string{newer}); got != newer {
+	equal := fakeTool(t, "2026.08.19")
+	if got := chooseYtDlp("", "", bundled, []string{equal}); got != bundled {
+		t.Fatalf("equal system yt-dlp = %q, want bundled %q on a tie", got, bundled)
+	}
+	if got := chooseYtDlp("", "", bundled, []string{newer}); got != newer {
 		t.Fatalf("newer system yt-dlp = %q, want %q", got, newer)
 	}
-	if got := chooseYtDlp("", bundled, []string{broken, newer}); got != newer {
+	if got := chooseYtDlp("", "", bundled, []string{broken, newer}); got != newer {
 		t.Fatalf("broken first candidate = %q, want the next usable %q", got, newer)
 	}
 	newest := fakeTool(t, "2026.12.01")
-	if got := chooseYtDlp("", bundled, []string{older, broken, newest, newer}); got != newest {
+	if got := chooseYtDlp("", "", bundled, []string{older, broken, newest, newer}); got != newest {
 		t.Fatalf("multiple system candidates = %q, want the newest %q", got, newest)
 	}
 	override := fakeTool(t, "2026.01.01")
-	if got := chooseYtDlp(override, bundled, []string{newer}); got != override {
+	if got := chooseYtDlp(override, "", bundled, []string{newer}); got != override {
 		t.Fatalf("explicit override = %q, want %q", got, override)
 	}
 }
@@ -145,4 +149,57 @@ func fakeTool(t *testing.T, version string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestChooseYtDlpComparesManagedAndBundledVersions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake tool scripts are Unix-only")
+	}
+	ResetProbeCache()
+	defer ResetProbeCache()
+	bundled := fakeTool(t, "2026.08.19")
+	olderManaged := fakeTool(t, "2026.07.01")
+	newerManaged := fakeTool(t, "2026.12.01")
+	broken := filepath.Join(t.TempDir(), "broken-managed-ytdlp")
+	if err := os.WriteFile(broken, []byte("not executable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := chooseYtDlp("", newerManaged, bundled, nil); got != newerManaged {
+		t.Fatalf("managed newer = %q, want %q", got, newerManaged)
+	}
+	if got := chooseYtDlp("", olderManaged, bundled, nil); got != bundled {
+		t.Fatalf("managed older = %q, want bundled %q", got, bundled)
+	}
+	if got := chooseYtDlp("", broken, bundled, nil); got != bundled {
+		t.Fatalf("broken managed = %q, want bundled %q", got, bundled)
+	}
+	if got := chooseYtDlp("", olderManaged, "", nil); got != olderManaged {
+		t.Fatalf("managed only = %q, want %q", got, olderManaged)
+	}
+}
+
+func TestResolvePrefersManagedTool(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake tool scripts are Unix-only")
+	}
+	dir := t.TempDir()
+	old := managedDir
+	managedDir = func() string { return dir }
+	t.Cleanup(func() {
+		managedDir = old
+		ResetProbeCache()
+	})
+	ResetProbeCache()
+
+	path := filepath.Join(dir, "ffmpeg")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho ffmpeg version 7.1.1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveFast("ffmpeg"); got != path {
+		t.Fatalf("ResolveFast(ffmpeg) = %q, want managed %q", got, path)
+	}
+	if got := Resolve("ffmpeg"); got != path {
+		t.Fatalf("Resolve(ffmpeg) = %q, want managed %q", got, path)
+	}
 }

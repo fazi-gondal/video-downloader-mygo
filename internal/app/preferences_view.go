@@ -478,15 +478,7 @@ func (a *App) toolStatusRow(c *ui.Context, check tools.Check) {
 				if version == "" {
 					version = "—"
 				}
-				source := ""
-				switch check.Source {
-				case tools.SourceBuiltin:
-					source = a.tr("settings.tools.source.builtin")
-				case tools.SourceSystem:
-					source = a.tr("settings.tools.source.system")
-				case tools.SourceCustom:
-					source = a.tr("settings.tools.source.custom")
-				}
+				source := a.toolSourceLabel(check.Source)
 				label := version
 				if source != "" {
 					label = a.tr("settings.tools.versionSource", map[string]any{"version": version, "source": source})
@@ -499,15 +491,7 @@ func (a *App) toolStatusRow(c *ui.Context, check tools.Check) {
 					ui.Text(c, a.tr("settings.tools.builtinVersion", map[string]any{"version": check.BuiltinVersion})).FontSize(11).TextColor(t.TextMuted)
 				}
 			})
-			status, color := a.tr("settings.tools.missing"), t.Danger
-			switch {
-			case check.OK:
-				status, color = a.tr("settings.tools.available"), t.Success
-			case check.TimedOut:
-				status, color = a.tr("settings.tools.timedOut"), t.Accent
-			case check.Path != "":
-				status, color = a.tr("settings.tools.unavailable"), t.Danger
-			}
+			status, color := a.toolStatusLabel(check, t)
 			ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(999).Padding(4, 10).Children(func() {
 				ui.Text(c, status).FontSize(11).Bold().TextColor(color)
 			})
@@ -557,14 +541,57 @@ func languageOnlySettings(settings config.AppSettings, language string) config.A
 }
 
 // refreshToolChecks probes the tools off the render thread; yt-dlp can take
-// seconds to answer on a cold start. The running services adopt the resolved
-// paths immediately; already-running processes keep their own copy.
+// seconds to answer on a cold start. Each result updates the UI as soon as it
+// arrives, and the running services adopt the resolved paths immediately;
+// already-running processes keep their own copy.
 func (a *App) refreshToolChecks() {
 	a.toolCheckToken++
 	token := a.toolCheckToken
+	tools.ResetProbeCache()
 	go func() {
-		tools.ResetProbeCache()
-		checks := tools.ProbeAll()
+		done := make(chan struct{}, 3)
+		for _, name := range []string{"yt-dlp", "ffmpeg", "ffprobe"} {
+			name := name
+			go func() {
+				check := tools.Probe(name)
+				a.updateOnMain(func() {
+					if a.toolCheckToken != token {
+						return
+					}
+					a.setToolCheck(check)
+					switch check.Name {
+					case "ffmpeg":
+						if a.ffmpeg != nil {
+							if check.OK {
+								a.ffmpeg.SetFFmpegPath(check.Path)
+							} else if !check.TimedOut {
+								a.ffmpeg.SetFFmpegPath("")
+							}
+						}
+						if a.ytdlp != nil {
+							if check.OK {
+								a.ytdlp.SetFFmpegPath(check.Path)
+							} else if !check.TimedOut {
+								a.ytdlp.SetFFmpegPath("")
+							}
+						}
+					case "ffprobe":
+						if a.ffmpeg != nil {
+							if check.OK {
+								a.ffmpeg.SetFFprobePath(check.Path)
+							} else if !check.TimedOut {
+								a.ffmpeg.SetFFprobePath("")
+							}
+						}
+					}
+					a.invalidate()
+				})
+				done <- struct{}{}
+			}()
+		}
+		for i := 0; i < 3; i++ {
+			<-done
+		}
 		a.updateOnMain(func() {
 			if a.toolCheckToken != token {
 				return
@@ -577,7 +604,6 @@ func (a *App) refreshToolChecks() {
 			if a.ytdlp != nil {
 				a.ytdlp.RefreshPaths(ffmpegPath)
 			}
-			a.toolChecks = checks
 			a.invalidate()
 		})
 	}()

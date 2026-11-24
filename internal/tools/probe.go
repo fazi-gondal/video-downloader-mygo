@@ -5,6 +5,7 @@ import "sync"
 // Tool sources reported by Check.Source.
 const (
 	SourceBuiltin = "builtin"
+	SourceManaged = "managed"
 	SourceSystem  = "system"
 	SourceCustom  = "custom"
 )
@@ -22,7 +23,7 @@ type Check struct {
 	BuiltinVersion string
 	OverridePath   string
 	OverrideOK     bool
-	Source         string // SourceBuiltin, SourceSystem, or SourceCustom
+	Source         string // SourceBuiltin, SourceManaged, SourceSystem, or SourceCustom
 }
 
 // ProbeAll checks the tools the download pipeline depends on. yt-dlp can take
@@ -45,6 +46,7 @@ func ProbeAll() []Check {
 // Probe resolves a tool and reads its version, reporting whether it runs and
 // where it came from.
 func Probe(name string) Check {
+	managed := managedPath(name)
 	check := Check{Name: name, BuiltinPath: bundledPath(name)}
 	if check.BuiltinPath != "" {
 		check.BuiltinVersion = probeVersion(check.BuiltinPath, name)
@@ -57,8 +59,10 @@ func Probe(name string) Check {
 	check.Path = Resolve(name)
 	if check.Path == "" {
 		// Keep a timeout visible even when no candidate passed the probe.
-		if check.BuiltinPath != "" && probe(check.BuiltinPath, name).timedOut {
-			check.TimedOut = true
+		for _, candidate := range []string{managed, check.BuiltinPath} {
+			if candidate != "" && probe(candidate, name).timedOut {
+				check.TimedOut = true
+			}
 		}
 		for _, candidate := range installedCandidates(name) {
 			if probe(candidate, name).timedOut {
@@ -70,6 +74,9 @@ func Probe(name string) Check {
 		// show that path and mark it unavailable rather than pretending it is
 		// missing.
 		switch {
+		case managed != "" && fileExists(managed):
+			check.Path = managed
+			check.Source = SourceManaged
 		case check.BuiltinPath != "":
 			check.Path = check.BuiltinPath
 			check.Source = SourceBuiltin
@@ -91,6 +98,8 @@ func Probe(name string) Check {
 	switch {
 	case check.OverrideOK && check.Path == check.OverridePath:
 		check.Source = SourceCustom
+	case managed != "" && check.Path == managed:
+		check.Source = SourceManaged
 	case check.BuiltinPath != "" && check.Path == check.BuiltinPath:
 		check.Source = SourceBuiltin
 	default:

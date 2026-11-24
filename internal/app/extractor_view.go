@@ -474,6 +474,9 @@ func (a *App) downloadAllExtracted() {
 	if res == nil || len(a.extractItems) == 0 {
 		return
 	}
+	if !a.requireTools(false) {
+		return
+	}
 	playlistTitle := strings.TrimSpace(res.Title)
 	if playlistTitle == "" {
 		playlistTitle = a.tr("extractor.fallback")

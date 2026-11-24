@@ -91,22 +91,30 @@ type App struct {
 	currentPlaylist    *models.PlaylistInfo
 	selectedEntries    map[int]bool
 
-	extractOpen       bool
-	extractProgress   float32
-	heroContentHeight float32
-	extractInput      string
-	extractBusy       bool
-	extractError      string
-	extractResult     *services.SiteExtractResult
-	extractItems      []extractItem
-	extractSelected   map[int]bool
-	extractToken      uint64
-	extractCancel     context.CancelFunc
-	toolChecks        []tools.Check
-	toolCheckToken    uint64
-	appliedYtDlpPath  string
-	appliedFFmpegPath string
-	lang              string
+	extractOpen           bool
+	extractProgress       float32
+	heroContentHeight     float32
+	extractInput          string
+	extractBusy           bool
+	extractError          string
+	extractResult         *services.SiteExtractResult
+	extractItems          []extractItem
+	extractSelected       map[int]bool
+	extractToken          uint64
+	extractCancel         context.CancelFunc
+	toolChecks            []tools.Check
+	toolCheckToken        uint64
+	appliedYtDlpPath      string
+	appliedFFmpegPath     string
+	setupDismissed        bool
+	toolInstallRunning    bool
+	toolInstallCancel     context.CancelFunc
+	toolInstallStage      services.ToolInstallStage
+	toolInstallName       string
+	toolInstallDownloaded int64
+	toolInstallTotal      int64
+	toolInstallErr        string
+	lang                  string
 
 	mode                models.DownloadMode
 	maxHeight           int
@@ -604,6 +612,9 @@ func (a *App) HasTray() bool {
 // services make this operation idempotent so it is safe to call from the
 // window lifecycle hook and from main's deferred cleanup.
 func (a *App) Shutdown() {
+	if a.toolInstallCancel != nil {
+		a.toolInstallCancel()
+	}
 	if a.manager != nil {
 		a.manager.Shutdown()
 	}
@@ -902,6 +913,9 @@ func (a *App) dashboardPage(c *ui.Context) {
 
 		a.dashboardSearch(c)
 		a.extractorCollapsible(c, pageContentWidth(c))
+		if a.setupVisible() {
+			a.setupCard(c)
+		}
 		if a.analyzeError != "" {
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Background(t.Surface).Border(1, t.Danger).Radius(10).Padding(10, 12).Children(func() {
 				ui.Text(c, a.friendlyError(a.analyzeError)).FontSize(13).TextColor(t.Danger).Grow(1)
@@ -976,6 +990,11 @@ func (a *App) dashboardHero(c *ui.Context) {
 					ui.Column(c).FillWidth().AlignItems(ui.Center).Gap(16).Padding(32, 0, 0, 0).Children(func() {
 						a.dashboardSearch(c)
 						a.extractorCollapsible(c, heroContentWidth(c))
+						if a.setupVisible() {
+							ui.Column(c).FillWidth().Padding(8, 0, 0, 0).Children(func() {
+								a.setupCard(c)
+							})
+						}
 					})
 
 					ui.Column(c).AlignItems(ui.Center).Gap(10).Padding(36, 0, 0, 0).Children(func() {
@@ -1913,6 +1932,9 @@ func (a *App) startDownload() {
 	if a.currentMedia == nil {
 		return
 	}
+	if !a.requireTools(false) {
+		return
+	}
 	req := a.buildRequest(mediaURL(a.currentMedia), a.currentMedia.Title, a.currentMedia.Thumbnail, "", 0)
 	req.SourcePageURL = a.currentMedia.SourcePageURL
 	req.SourceIndex = a.currentMedia.SourceIndex
@@ -1936,6 +1958,9 @@ func (a *App) isDirectHDMedia() bool {
 
 func (a *App) startDirectHDDownload() {
 	if !a.isDirectHDMedia() {
+		return
+	}
+	if !a.requireTools(false) {
 		return
 	}
 	req := a.buildDirectHDRequest()
@@ -1983,6 +2008,9 @@ func mediaURL(media *models.MediaInfo) string {
 
 func (a *App) startPlaylistDownloads() {
 	if a.currentPlaylist == nil {
+		return
+	}
+	if !a.requireTools(false) {
 		return
 	}
 	requests := make([]models.DownloadRequest, 0, len(a.currentPlaylist.Entries))
@@ -2610,7 +2638,9 @@ func (a *App) downloadsPage(c *ui.Context) {
 						}
 						if task.State == models.StatePaused {
 							if ui.Button(c.Key("resume-"+task.ID), "Resume").Clicked() {
-								a.manager.Resume(task.ID)
+								if a.requireTools(false) {
+									a.manager.Resume(task.ID)
+								}
 							}
 						}
 						if !task.State.IsTerminal() {
@@ -2620,7 +2650,9 @@ func (a *App) downloadsPage(c *ui.Context) {
 						}
 						if task.State == models.StateError || task.State == models.StateCancelled {
 							if ui.Button(c.Key("retry-"+task.ID), "Retry").Clicked() {
-								a.manager.Retry(task.ID)
+								if a.requireTools(false) {
+									a.manager.Retry(task.ID)
+								}
 							}
 						}
 						if task.State == models.StateCompleted && task.OutputPath != "" {
@@ -2920,6 +2952,9 @@ func (a *App) converterPage(c *ui.Context) {
 						a.showToast(a.tr("Enter a source path"))
 						return
 					}
+					if !a.requireTools(true) {
+						return
+					}
 					mode := models.ConversionReencode
 					if a.convKind == models.KindVideo {
 						remux, checking, known := a.remuxDecision(src, a.convFormat)
@@ -3128,6 +3163,9 @@ func (a *App) historyPage(c *ui.Context) {
 						Children(func() {
 							ui.Icon(c, appui.IconDownload).FontSize(16).TextColor(t.TextMuted)
 						}).Clicked() {
+						if !a.requireTools(false) {
+							return
+						}
 						settings := a.settingsDraftSnapshot()
 						req := historyDownloadRequest(e, settings.DownloadDir)
 						a.page = PageDownloads
@@ -3175,6 +3213,9 @@ func (a *App) historyPage(c *ui.Context) {
 // because the direct m3u8 URL stored at download time carries an auth key
 // that expires.
 func (a *App) requeueHistorySource(entry services.HistoryEntry, req models.DownloadRequest) {
+	if !a.requireTools(false) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 

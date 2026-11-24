@@ -22,6 +22,14 @@ All notable user-visible changes are recorded here. Release tags use the version
   yt-dlp was updated to 2026.11.23.
 - Friendly, localized download errors; failure badges; empty-state actions;
   keyboard navigation shortcuts.
+- **First-run tool setup**: a Home setup card shows yt-dlp/FFmpeg/FFprobe status
+  and can install FFmpeg with Homebrew or a pinned static build, choose an
+  existing binary, or defer. Installs show progress and can be cancelled;
+  downloads are checksum-verified, self-checked, and rolled back on failure.
+  App-managed tools live in `~/Library/Application Support/VideoDownloader/bin`.
+- All FFmpeg-dependent actions (download, merge, conversion, subtitle/thumbnail
+  embedding, audio extraction, history retry) check the tool state before
+  starting and open the same setup card instead of failing with a raw error.
 
 ### Changed
 
@@ -46,15 +54,27 @@ All notable user-visible changes are recorded here. Release tags use the version
   container is chosen.
 - VP9 format sorting now compares resolution before codec, so a higher-resolution
   H.264/AV1 stream is not skipped for a lower-resolution VP9 one.
+- Tool resolution now prefers the app-managed FFmpeg install, then bundled, then
+  system; yt-dlp still picks the newest of the app-managed, bundled, and system
+  copies. See `docs/design/tool-resolution.md`.
 
 ### Security
 
 - ARY Plus now requires a user-provided API key. The bundled third-party key was
   removed; the key is stored in the local settings file (owner-only) and excluded
   from exported settings. `ARYPLUS_API_KEY` still overrides it.
+- The page extractor now uses the thumbnail loader's public-destination guard:
+  loopback, private, link-local, localhost, and reserved destinations are
+  rejected, DNS results are pinned, and every redirect is rechecked (limit 10).
 
 ### Fixed
 
+- Startup now removes stale `.mygo-download-*` staging directories older than
+  24 hours from known output directories, while keeping every paused task's
+  staging directory and skipping symlinks and unrelated directories.
+- When yt-dlp does not report `after_move:filepath`, the fallback accepts only
+  one media file in staging; `.part` files, sidecars, and multiple media files
+  fail the download instead of promoting a guess.
 - Cancelling or pausing a download now terminates yt-dlp's whole process group,
   including the ffmpeg child used for merging and post-processing. Paused
   downloads keep their partial files for resume.

@@ -169,15 +169,19 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 
 - Release packages include `yt-dlp`. Windows and Linux packages also include
   static `ffmpeg`/`ffprobe` for merging, post-processing, and conversion.
-- macOS packages use the FFmpeg you install (Homebrew or a static build). The
-  app finds it on `PATH` or through the path field in Settings → Tools.
+- macOS packages use the FFmpeg you install or one installed from the Home
+  setup card (Homebrew or a pinned static build). The app finds it in its managed
+  directory, on `PATH`, or through the path field in Settings → Tools.
 - Local source runs can use the bundled platform directory or matching tools on
   `PATH`.
 - Internet access for media extraction and remote thumbnails.
 - On Linux, the native MyGo runtime libraries required by the distribution format, including GTK/WebKit dependencies where they are not already installed by the package manager.
 
-The application uses an explicit path from Settings first, then a newer system
-`yt-dlp`, then a bundled copy, then `PATH`. See [Bundled tools](#bundled-tools).
+The application uses an explicit path from Settings first. For FFmpeg and
+FFprobe it then prefers its app-managed install, then the bundled copy, then the
+system; for yt-dlp it uses the newest of the app-managed, bundled, and system
+copies. See [Bundled tools](#bundled-tools) and
+[docs/design/tool-resolution.md](docs/design/tool-resolution.md).
 
 ## Install prebuilt releases
 
@@ -309,13 +313,27 @@ shows a real difference. A system yt-dlp installed with Homebrew, MacPorts, or
 on `PATH` is used automatically when it is newer than the bundled copy, and a
 custom binary path can be set in Settings → Tools.
 
-Runtime lookup order is:
+Runtime lookup order:
+
+For `ffmpeg` and `ffprobe`:
 
 1. Explicit path from Settings → Tools (only when the binary runs).
-2. A newer system `yt-dlp` from Homebrew/MacPorts/`PATH` (yt-dlp only).
-3. Packaged `resources/bin/<tool>` or `resources/<tool>`.
+2. App-managed directory: `~/Library/Application Support/VideoDownloader/bin`
+   on macOS, the platform config directory elsewhere.
+3. Packaged `resources/bin/<tool>` or `resources/<tool>` (Windows/Linux).
 4. Development `resources/<os>-<arch>/bin/<tool>`.
-5. System `PATH` / common package-manager directories.
+5. System `PATH` and common package-manager directories.
+
+For `yt-dlp`, an explicit path wins, then the highest version among the
+app-managed, bundled, and system copies. Ties prefer the app-managed copy, then
+the bundled copy, then the system copy. A system copy that is newer than the
+bundled one is used automatically; `youtube-dl` is the last fallback.
+
+On macOS, the Home setup card can install FFmpeg with Homebrew or a pinned
+static build. The download is verified, self-checked, and moved into the
+managed directory only after both binaries pass; failures and cancellation keep
+the previous working copy. Nothing is installed without a click, and nothing
+writes inside the `.app` bundle.
 
 The bundled ARY Plus extractor supports aryplus.tv episode URLs and series
 playlists, multi-quality HLS streams up to 4K, thumbnails, and DRM checks.
@@ -539,9 +557,9 @@ CGO_ENABLED=1 go test -race ./... -count=1
 
 ### `yt-dlp` or FFmpeg is not found
 
-- Install the tools and ensure they are on `PATH`.
-- On macOS, `brew install ffmpeg` is the simplest option. The macOS package does
-  not bundle FFmpeg.
+- On macOS, use the Home setup card to install FFmpeg with Homebrew or a
+  pinned static build. The macOS package does not bundle FFmpeg.
+- Or install the tools and ensure they are on `PATH`.
 - Or set the binary path in Settings → Tools, then choose **Check again**.
 - Or run `bash scripts/fetch-tools.sh <platform>` and rebuild (Windows/Linux
   bundles FFmpeg; macOS downloads yt-dlp only).
@@ -571,12 +589,6 @@ Ad-hoc signed builds are not notarized. To open one:
 4. Confirm **Open**.
 
 If the button is not shown, right-click the app in Finder and choose **Open**.
-As a last resort, remove the quarantine attribute:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Video Downloader.app"
-```
-
 This is expected for an ad-hoc build; no Apple Developer account is needed.
 Developer ID signing and notarization are optional for maintainers.
 

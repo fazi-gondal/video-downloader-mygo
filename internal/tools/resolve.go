@@ -110,6 +110,43 @@ func bundledPath(name string) string {
 	return lookIn(ResourcesDir(), name)
 }
 
+// managedDir is replaceable in tests; production uses the app-owned directory
+// outside the .app bundle so an in-app install survives app replacement.
+var managedDir = defaultManagedDir
+
+// ManagedDir is where the app installs tools it downloads itself.
+func ManagedDir() string {
+	return managedDir()
+}
+
+func defaultManagedDir() string {
+	switch runtime.GOOS {
+	case "windows":
+		base := os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			base, _ = os.UserConfigDir()
+		}
+		if base == "" {
+			base, _ = os.UserHomeDir()
+		}
+		return filepath.Join(base, "VideoDownloader", "bin")
+	case "darwin":
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, "Library", "Application Support", "VideoDownloader", "bin")
+	default:
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".config", "VideoDownloader", "bin")
+	}
+}
+
+func managedPath(name string) string {
+	dir := ManagedDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, exeName(name))
+}
+
 // SetOverrides records optional user-provided binary paths. Empty values
 // restore automatic selection. The override is only used after it passes the
 // same runtime probe as every other candidate, so a mistyped path cannot
@@ -149,6 +186,9 @@ func ResolveFast(name string) string {
 	if p := overrideFor(name); p != "" && fileExists(p) {
 		return p
 	}
+	if p := managedPath(name); p != "" && fileExists(p) {
+		return p
+	}
 	if p := bundledPath(name); p != "" {
 		return p
 	}
@@ -177,6 +217,9 @@ func Resolve(name string) string {
 	if p := overrideFor(name); p != "" && usable(p, name) {
 		return p
 	}
+	if p := managedPath(name); p != "" && usable(p, name) {
+		return p
+	}
 	if p := bundledPath(name); p != "" && usable(p, name) {
 		return p
 	}
@@ -192,7 +235,7 @@ func Resolve(name string) string {
 // are usable, the newer version wins. yt-dlp's extractors change frequently,
 // and a site fix should not require a new app release or a reinstall.
 func resolveYtDlp() string {
-	if p := chooseYtDlp(overrideFor("yt-dlp"), bundledPath("yt-dlp"), installedCandidates("yt-dlp")); p != "" {
+	if p := chooseYtDlp(overrideFor("yt-dlp"), managedPath("yt-dlp"), bundledPath("yt-dlp"), installedCandidates("yt-dlp")); p != "" {
 		return p
 	}
 	for _, p := range installedCandidates("youtube-dl") {
@@ -203,7 +246,7 @@ func resolveYtDlp() string {
 	return ""
 }
 
-func chooseYtDlp(override, bundled string, installed []string) string {
+func chooseYtDlp(override, managed, bundled string, installed []string) string {
 	if override != "" && usable(override, "yt-dlp") {
 		return override
 	}
@@ -211,7 +254,7 @@ func chooseYtDlp(override, bundled string, installed []string) string {
 	system := ""
 	systemVersion := ""
 	for _, p := range installed {
-		if p == "" || p == bundled {
+		if p == "" || p == managed || p == bundled {
 			continue
 		}
 		result := probe(p, "yt-dlp")
@@ -224,26 +267,37 @@ func chooseYtDlp(override, bundled string, installed []string) string {
 		}
 	}
 
-	var bundledProbe probeResult
-	if bundled != "" {
-		bundledProbe = probe(bundled, "yt-dlp")
-	}
-	bundledOK := bundled != "" && (bundledProbe.ok || bundledProbe.timedOut)
-	switch {
-	case bundledOK && system != "":
-		if !bundledProbe.ok {
-			// A verified system binary is better than an unverified bundled one.
-			return system
+	best := ""
+	bestVersion := ""
+	seen := map[string]bool{}
+	// managed, then bundled, then system: equal versions prefer the copy the
+	// app owns, then the bundled copy, preserving the previous tie behavior.
+	for _, p := range []string{managed, bundled, system} {
+		if p == "" || seen[p] {
+			continue
 		}
-		if compareVersions(systemVersion, bundledProbe.version) > 0 {
-			return system
+		seen[p] = true
+		result := probe(p, "yt-dlp")
+		if !result.ok {
+			continue
 		}
-		return bundled
-	case bundledOK:
-		return bundled
-	default:
-		return system
+		if best == "" || compareVersions(result.version, bestVersion) > 0 {
+			best = p
+			bestVersion = result.version
+		}
 	}
+	if best != "" {
+		return best
+	}
+
+	// No verified candidate: keep a bundled or managed binary that timed out
+	// rather than disabling the tool for the session.
+	for _, p := range []string{managed, bundled} {
+		if p != "" && probe(p, "yt-dlp").timedOut {
+			return p
+		}
+	}
+	return ""
 }
 
 func installedCandidates(name string) []string {
@@ -416,8 +470,12 @@ func YtDlp() string {
 	if p := resolveYtDlp(); p != "" {
 		return p
 	}
-	// A probe can fail on a cold start; the bundled binary is still a better
-	// guess than the bare name, which a Finder-launched app cannot find on PATH.
+	// A probe can fail on a cold start; an app-managed or bundled binary is
+	// still a better guess than the bare name, which a Finder-launched app
+	// cannot find on PATH.
+	if p := managedPath("yt-dlp"); p != "" {
+		return p
+	}
 	if p := bundledPath("yt-dlp"); p != "" {
 		return p
 	}

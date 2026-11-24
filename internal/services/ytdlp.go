@@ -101,6 +101,14 @@ func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtD
 	}
 }
 
+// SetFFmpegPath keeps --ffmpeg-location aligned with the path selected by the
+// tool check without re-resolving yt-dlp on the UI thread.
+func (s *YtDlpService) SetFFmpegPath(path string) {
+	s.mu.Lock()
+	s.ffmpegPath = path
+	s.mu.Unlock()
+}
+
 // RefreshPaths re-resolves yt-dlp and adopts the ffmpeg path selected by the
 // tool check in one lock, so a download cannot observe a new yt-dlp with an
 // old ffmpeg path. Existing processes are unaffected. An empty resolution
