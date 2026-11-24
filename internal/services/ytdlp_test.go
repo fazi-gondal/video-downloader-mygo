@@ -194,14 +194,19 @@ func TestYtDlpDownloadDrainsStdoutAndStderrConcurrently(t *testing.T) {
 	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: t.TempDir()})
 	// The helper is selected by the environment inherited by the child process.
 	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_OUTPUT", "1")
 	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_OUTPUT")
 
 	path, err := service.Download(context.Background(), task, nil)
 	if err != nil {
 		t.Fatalf("Download() error = %v", err)
 	}
-	if path != "" {
-		t.Fatalf("Download() path = %q, want empty fallback for helper", path)
+	if path == "" {
+		t.Fatal("Download() returned an empty output path")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("Download() output: %v", err)
 	}
 }
 
@@ -217,11 +222,15 @@ func TestYtDlpDownloadDoesNotUseUnrelatedOutputFile(t *testing.T) {
 	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
 
 	path, err := service.Download(context.Background(), task, nil)
-	if err != nil {
-		t.Fatalf("Download() error = %v", err)
+	if !errors.Is(err, ErrStagedOutputMissing) {
+		t.Fatalf("Download() error = %v, want ErrStagedOutputMissing", err)
 	}
 	if path != "" {
 		t.Fatalf("Download() path = %q, want no output from this request", path)
+	}
+	data, readErr := os.ReadFile(unrelated)
+	if readErr != nil || string(data) != "not this download" {
+		t.Fatalf("unrelated output changed: data=%q err=%v", data, readErr)
 	}
 }
 
@@ -289,6 +298,8 @@ func TestYtDlpDownloadReportsProgressFromLiteralMarker(t *testing.T) {
 	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
 
 	var progress []models.ProgressInfo
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_OUTPUT", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_OUTPUT")
 	if _, err := service.Download(context.Background(), task, func(p models.ProgressInfo) {
 		progress = append(progress, p)
 	}); err != nil {

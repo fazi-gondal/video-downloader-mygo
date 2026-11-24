@@ -246,5 +246,6 @@
   "settings.aryplus.desc": "Optional. Required for ARY Plus links. Stored locally; excluded from exported settings. ARYPLUS_API_KEY overrides it.",
   "settings.aryplus.key": "API key",
   "settings.aryplus.placeholder": "ak_…",
-  "errors.aryPlusKey": "ARY Plus needs an API key. Add it in Settings → ARY Plus."
+  "errors.aryPlusKey": "ARY Plus needs an API key. Add it in Settings → ARY Plus.",
+  "errors.outputAmbiguous": "The download finished, but its final file could not be identified. Check the download folder and retry."
 }

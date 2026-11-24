@@ -246,5 +246,6 @@
   "settings.aryplus.desc": "可选；使用 ARY Plus 链接时需要。只保存在本机，导出设置时不会包含。环境变量 ARYPLUS_API_KEY 优先。",
   "settings.aryplus.key": "API Key",
   "settings.aryplus.placeholder": "ak_…",
-  "errors.aryPlusKey": "ARY Plus 需要 API Key，请在设置 → ARY Plus 中填写。"
+  "errors.aryPlusKey": "ARY Plus 需要 API Key，请在设置 → ARY Plus 中填写。",
+  "errors.outputAmbiguous": "下载已结束，但无法确定最终文件。请检查下载目录后重试。"
 }

@@ -41,6 +41,12 @@ const (
 
 var errPromotedPathExists = errors.New("promoted output path already exists")
 
+// ErrStagedOutputMissing means yt-dlp exited without a usable final path and
+// the staging directory does not contain exactly one media file. Guessing
+// among .part, subtitle, thumbnail, or multiple media files can promote the
+// wrong file, so the download is reported as failed instead.
+var ErrStagedOutputMissing = errors.New("yt-dlp finished without reporting a single final media file")
+
 type boundedDiagnosticBuffer struct {
 	buf       bytes.Buffer
 	limit     int
@@ -450,7 +456,10 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		// select files created by this request. This avoids associating an
 		// unrelated or concurrently downloaded file from the shared output dir.
 		if _, inStaging := relativeStagingPath(stagingDir, lastPath); !inStaging || !isRegularFile(lastPath) {
-			lastPath = newestFile(stagingDir)
+			lastPath, err = singleStagedMediaFile(stagingDir)
+			if err != nil {
+				return "", fmt.Errorf("%w: %v", ErrStagedOutputMissing, err)
+			}
 		}
 		lastPath, err = promoteStagedDownload(stagingDir, task.Request.OutputDir, lastPath)
 		if err != nil {
@@ -1433,18 +1442,48 @@ func isUnavailableProgressValue(value string) bool {
 	}
 }
 
-func newestFile(dir string) string {
-	var newest string
-	var newestMod time.Time
-	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
-			return nil
+// stagedMediaExtensions are containers yt-dlp can write as a final download.
+// .part and sidecars such as .srt, .vtt, .jpg, .webp, .json, and .description
+// are deliberately absent.
+var stagedMediaExtensions = map[string]bool{
+	"avi": true, "flv": true, "m4a": true, "m4v": true, "mkv": true,
+	"mov": true, "mp3": true, "mp4": true, "ogg": true, "opus": true,
+	"ts": true, "wav": true, "webm": true, "aac": true, "flac": true,
+}
+
+// singleStagedMediaFile is the only fallback allowed when yt-dlp did not
+// report after_move:filepath. It returns the sole media file and refuses to
+// guess when the staging directory holds none or several.
+func singleStagedMediaFile(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("read staging directory: %w", err)
+	}
+	var files []string
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
+			continue
 		}
-		if info.ModTime().After(newestMod) {
-			newestMod = info.ModTime()
-			newest = path
+		name := entry.Name()
+		if strings.HasSuffix(strings.ToLower(name), ".part") {
+			continue
 		}
-		return nil
-	})
-	return newest
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+		if !stagedMediaExtensions[ext] {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		files = append(files, filepath.Join(dir, name))
+	}
+	switch len(files) {
+	case 1:
+		return files[0], nil
+	case 0:
+		return "", errors.New("no media file in staging directory")
+	default:
+		return "", fmt.Errorf("%d media files in staging directory", len(files))
+	}
 }

@@ -1841,6 +1841,8 @@ func (a *App) friendlyError(message string) string {
 		return a.tr("errors.ytdlpMissing")
 	case strings.Contains(lower, "ary plus api key") || strings.Contains(lower, "aryplus_api_key"):
 		return a.tr("errors.aryPlusKey")
+	case strings.Contains(lower, "without reporting a single final media file"):
+		return a.tr("errors.outputAmbiguous")
 	case strings.Contains(lower, "unsupported url"):
 		return a.tr("errors.unsupported")
 	case strings.Contains(lower, "http error 403"), strings.Contains(lower, "403: forbidden"):
