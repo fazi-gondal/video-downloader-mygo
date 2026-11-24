@@ -115,6 +115,10 @@ func (a *App) setupActions(c *ui.Context) {
 			a.setupDismissed = true
 			a.invalidate()
 		}
+		if ui.Button(c, a.tr("settings.tools.recheck")).Clicked() {
+			a.refreshToolChecks()
+			a.invalidate()
+		}
 	})
 	if a.setupFFmpegMissing() {
 		switch {
