@@ -19,6 +19,14 @@ func TestSingleStagedMediaFile(t *testing.T) {
 	write("video.mp4.part")
 	write("video.mp4")
 
+	if !isStagedMediaFile(filepath.Join(dir, "video.mp4")) {
+		t.Fatal("the final media file was rejected")
+	}
+	for _, name := range []string{"cover.jpg", "subs.srt", "video.mp4.part"} {
+		if isStagedMediaFile(filepath.Join(dir, name)) {
+			t.Fatalf("%s was accepted as a final media file", name)
+		}
+	}
 	got, err := singleStagedMediaFile(dir)
 	if err != nil {
 		t.Fatalf("singleStagedMediaFile: %v", err)

@@ -12,6 +12,7 @@ func TestValidURL(t *testing.T) {
 	}{
 		{"https://example.com/page", true},
 		{"http://93.184.216.34/page", true},
+		{"http://198.18.0.122/page", true}, // Clash/Surge fake-IP
 		{"http://127.0.0.1/page", false},
 		{"http://10.0.0.1/page", false},
 		{"http://192.168.1.1/page", false},

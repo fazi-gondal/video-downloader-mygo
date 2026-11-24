@@ -393,6 +393,8 @@ func (a *App) extractErrorText(err error) string {
 		return a.tr("extractor.errNoMedia")
 	case errors.Is(err, services.ErrNonPublicPage):
 		return a.tr("extractor.errPrivate")
+	case strings.Contains(strings.ToLower(err.Error()), "request failed"):
+		return a.tr("errors.network")
 	default:
 		return a.tr("extractor.errLoad", map[string]any{"err": err})
 	}

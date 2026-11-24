@@ -280,5 +280,7 @@
   "setup.stageLabel.installing": "安装",
   "setup.stageLabel.selfCheck": "自检",
   "setup.stageLabel.homebrew": "Homebrew 安装",
-  "extractor.errPrivate": "这个页面地址不允许访问，请使用公开的 http(s) 链接。"
+  "extractor.errPrivate": "这个页面地址不允许访问，请使用公开的 http(s) 链接。",
+  "setup.chooseFFmpegInvalid": "请选择 ffmpeg 程序，而不是 ffprobe。",
+  "setup.needsFFprobe": "FFmpeg 与 FFprobe 需放在同一文件夹。"
 }

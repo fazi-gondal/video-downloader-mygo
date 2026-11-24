@@ -463,7 +463,7 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		// The command runs in an isolated directory, so a fallback can only
 		// select files created by this request. This avoids associating an
 		// unrelated or concurrently downloaded file from the shared output dir.
-		if _, inStaging := relativeStagingPath(stagingDir, lastPath); !inStaging || !isRegularFile(lastPath) {
+		if _, inStaging := relativeStagingPath(stagingDir, lastPath); !inStaging || !isStagedMediaFile(lastPath) {
 			lastPath, err = singleStagedMediaFile(stagingDir)
 			if err != nil {
 				return "", fmt.Errorf("%w: %v", ErrStagedOutputMissing, err)
@@ -647,12 +647,22 @@ func moveStagedFile(source, destination string) error {
 	return os.Remove(source)
 }
 
-func isRegularFile(path string) bool {
+// isStagedMediaFile is the validation for both the after_move path and the
+// fallback candidates. It rejects sidecars, .part files, and symlinks.
+func isStagedMediaFile(path string) bool {
 	if path == "" {
 		return false
 	}
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	name := filepath.Base(path)
+	if strings.HasSuffix(strings.ToLower(name), ".part") {
+		return false
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+	return stagedMediaExtensions[ext]
 }
 
 func (s *YtDlpService) downloadArgs(req models.DownloadRequest) []string {
@@ -1469,22 +1479,13 @@ func singleStagedMediaFile(dir string) (string, error) {
 	}
 	var files []string
 	for _, entry := range entries {
-		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
+		if entry.IsDir() {
 			continue
 		}
-		name := entry.Name()
-		if strings.HasSuffix(strings.ToLower(name), ".part") {
-			continue
+		path := filepath.Join(dir, entry.Name())
+		if isStagedMediaFile(path) {
+			files = append(files, path)
 		}
-		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
-		if !stagedMediaExtensions[ext] {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		files = append(files, filepath.Join(dir, name))
 	}
 	switch len(files) {
 	case 1:

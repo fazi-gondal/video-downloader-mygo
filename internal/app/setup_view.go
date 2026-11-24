@@ -3,7 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -314,6 +318,20 @@ func (a *App) pickToolPath(tool string) {
 	}
 	path := paths[0]
 	a.updateOnMain(func() {
+		if tool == "ffmpeg" {
+			if !strings.HasPrefix(strings.ToLower(filepath.Base(path)), "ffmpeg") {
+				a.showToast(a.tr("setup.chooseFFmpegInvalid"))
+				return
+			}
+			ffprobeName := "ffprobe"
+			if runtime.GOOS == "windows" {
+				ffprobeName = "ffprobe.exe"
+			}
+			if _, err := os.Stat(filepath.Join(filepath.Dir(path), ffprobeName)); err != nil {
+				a.showToast(a.tr("setup.needsFFprobe"))
+				return
+			}
+		}
 		settings := a.settingsSnapshot()
 		if tool == "yt-dlp" {
 			settings.YtDlpPath = path

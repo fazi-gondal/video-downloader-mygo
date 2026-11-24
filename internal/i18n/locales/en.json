@@ -280,5 +280,7 @@
   "setup.stageLabel.installing": "Install",
   "setup.stageLabel.selfCheck": "Self-check",
   "setup.stageLabel.homebrew": "Homebrew install",
-  "extractor.errPrivate": "This page address is not allowed. Use a public http(s) URL."
+  "extractor.errPrivate": "This page address is not allowed. Use a public http(s) URL.",
+  "setup.chooseFFmpegInvalid": "Choose the ffmpeg binary, not ffprobe.",
+  "setup.needsFFprobe": "FFmpeg and FFprobe must be in the same folder."
 }
