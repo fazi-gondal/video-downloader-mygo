@@ -27,6 +27,8 @@ type HistoryEntry struct {
 	AudioFmt      string `json:"audio_format"`
 	OutputDir     string `json:"output_dir"`
 	OutputPath    string `json:"output_path"`
+	SourcePageURL string `json:"source_page_url,omitempty"`
+	SourceIndex   int    `json:"source_index,omitempty"`
 	State         string `json:"state"`
 	Error         string `json:"error"`
 	CreatedAt     string `json:"created_at"`
@@ -129,7 +131,8 @@ func (h *HistoryService) Record(task *models.DownloadTask) error {
 		Container: req.Container, MaxHeight: req.MaxHeight, MaxFPS: req.MaxFPS,
 		VideoFormatID: req.VideoFormatID, AudioFormatID: req.AudioFormatID,
 		AudioFmt: req.AudioFormat, OutputDir: req.OutputDir,
-		OutputPath: snapshot.OutputPath, State: string(snapshot.State), Error: snapshot.Error,
+		OutputPath: snapshot.OutputPath, SourcePageURL: req.SourcePageURL, SourceIndex: req.SourceIndex,
+		State: string(snapshot.State), Error: snapshot.Error,
 		CreatedAt: snapshot.CreatedAt.Format(time.RFC3339), FinishedAt: finished,
 	}
 	found := false

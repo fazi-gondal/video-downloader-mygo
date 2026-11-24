@@ -4,6 +4,100 @@ All notable user-visible changes are recorded here. Release tags use the version
 
 ## [Unreleased]
 
+### Added
+
+- **Page extractor**: recover every video from pages yt-dlp reports as
+  unsupported (including players whose stream URL is JSON-escaped in an inline
+  config), inline on Home. Select any subset, copy links, continue to the
+  download options, or queue everything with best-quality defaults.
+- **Native i18n** through MyGo's catalog (`en`, `zh-Hans`) with a Settings
+  language card (follow system / 简体中文 / English) that applies and persists
+  immediately. zh-Hant falls back to English.
+- **Tools status** in Settings: yt-dlp, FFmpeg, and FFprobe versions, paths, and
+  health with a re-check that runs off the render thread. The card also shows the
+  bundled version when a newer system yt-dlp is active, and accepts explicit
+  binary paths.
+- A newer system yt-dlp (Homebrew, MacPorts, or `PATH`) is used automatically, so
+  extractor fixes no longer require a new app release or reinstall. The bundled
+  yt-dlp was updated to 2026.11.23.
+- Friendly, localized download errors; failure badges; empty-state actions;
+  keyboard navigation shortcuts.
+- **Signed yt-dlp updates**: Settings → Tools (and the Home setup card) can
+  update yt-dlp from a project-owned signed manifest. The app verifies the
+  Ed25519 signature, asset SHA-256, and `--version`, then installs atomically
+  with rollback and cancellation. The update source is configurable.
+- **First-run tool setup**: a Home setup card shows yt-dlp/FFmpeg/FFprobe status
+  and can install FFmpeg with Homebrew or a pinned static build, choose an
+  existing binary, or defer. Installs show progress and can be cancelled;
+  downloads are checksum-verified, self-checked, and rolled back on failure.
+  App-managed tools live in `~/Library/Application Support/VideoDownloader/bin`.
+- All FFmpeg-dependent actions (download, merge, conversion, subtitle/thumbnail
+  embedding, audio extraction, history retry) check the tool state before
+  starting and open the same setup card instead of failing with a raw error.
+
+### Changed
+
+- Home hero rebuilt on one center axis with a fixed spacing scale; the
+  extractor expands in place with one synchronized height/offset animation
+  instead of switching pages.
+- Removed duplicate page headings; the extractor sidebar item is gone; the
+  theme toggle moved to the top bar as a sun/moon button.
+- History entries created by the extractor store their source page and
+  re-resolve it on retry, so expired direct links no longer fail.
+- macOS packages no longer bundle FFmpeg/FFprobe. They use the FFmpeg already
+  installed on the machine (or a path set in Settings → Tools), which keeps the
+  installer small and cannot ship a broken bundled dylib. Missing FFmpeg now
+  produces an actionable message instead of a raw loader error.
+- macOS release builds are Developer ID-signed and notarized when the Apple
+  signing secrets are configured; the workflow falls back to ad-hoc signing with
+  a warning when they are absent. The bundled yt-dlp helper gets its own
+  hardened-runtime entitlements, and `scripts/build-macos-signed.sh` supports
+  local signed builds.
+- The selected container is authoritative. MP4 stays MP4 even when the VP9
+  preference is on; VP9 applies to MKV/WebM. The UI explains the rule where the
+  container is chosen.
+- VP9 format sorting now compares resolution before codec, so a higher-resolution
+  H.264/AV1 stream is not skipped for a lower-resolution VP9 one.
+- Tool resolution now prefers the app-managed FFmpeg install, then bundled, then
+  system; yt-dlp still picks the newest of the app-managed, bundled, and system
+  copies. See `docs/design/tool-resolution.md`.
+
+### Security
+
+- ARY Plus now requires a user-provided API key. The bundled third-party key was
+  removed; the key is stored in the local settings file (owner-only) and excluded
+  from exported settings. `ARYPLUS_API_KEY` still overrides it.
+- The page extractor now uses the thumbnail loader's public-destination guard:
+  loopback, private, link-local, localhost, and reserved destinations are
+  rejected, DNS results are pinned, and every redirect is rechecked (limit 10).
+
+### Fixed
+- The app now enforces a single running instance: launching another copy
+  (for example the build output in `build/`) focuses the existing window and
+  exits instead of running a second instance against the same settings.
+- Closing the last window now quits the app instead of leaving a windowless
+  process behind, so clicking the Dock icon opens a fresh window.
+
+- Startup now removes stale `.mygo-download-*` staging directories older than
+  24 hours from known output directories, while keeping every paused task's
+  staging directory and skipping symlinks and unrelated directories.
+- When yt-dlp does not report `after_move:filepath`, the fallback accepts only
+  one media file in the staging tree (including playlist subdirectories);
+  `.part` files, sidecars, and multiple media files fail instead of promoting a
+  guess, and the staging tree is kept for recovery. Retry starts a fresh one.
+- Timed-out tool probes no longer block downloads or conversion; conversion no
+  longer requires yt-dlp, a failed Homebrew install offers the pinned static
+  build, and startup restores a managed tool left as an install backup.
+- Cancelling or pausing a download now terminates yt-dlp's whole process group,
+  including the ffmpeg child used for merging and post-processing. Paused
+  downloads keep their partial files for resume.
+- Settings → Tools **Check again** now applies and validates the path currently
+  shown in the form, not the last saved value.
+- The estimated final size follows the same resolution-first ordering as the
+  download instead of filtering VP9 first.
+- WebM downloads constrain the audio stream with `acodec=opus` instead of the
+  `.opus` extension, which yt-dlp does not use for normal Opus audio.
+
 ## [3.3.0] - 2026-11-20
 
 ### Added

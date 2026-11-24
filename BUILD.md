@@ -7,11 +7,13 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 - Go 1.27.3, as declared in `go.mod`.
 - Git.
 - MyGo v0.10.0 through the pinned Go tool in `go.mod`.
-- FFmpeg and yt-dlp on `PATH`, or downloaded into `resources/<platform>/bin`.
-- A supported yt-dlp JavaScript runtime such as Deno on `PATH` for extractor
-  workflows that require one; it is not bundled by the current release.
-- ARY Plus uses the built-in public client key. `ARYPLUS_API_KEY` can override
-  it at runtime, and `ARYPLUS_API_BASE` can select a compatible API endpoint.
+- yt-dlp and, on Windows/Linux, FFmpeg/FFprobe on `PATH`, or downloaded into
+  `resources/<platform>/bin`. On macOS, FFmpeg is not bundled: use the Home
+  setup card (Homebrew or a pinned static build), install it yourself, or set
+  its path in Settings → Tools.
+- ARY Plus is optional and requires a user-provided API key. Add it in
+  Settings → ARY Plus or set `ARYPLUS_API_KEY`; no third-party key is bundled.
+  `ARYPLUS_API_BASE` can select a compatible API endpoint.
 - TikTok, Instagram, X/Twitter, and YouTube Shorts downloads do not require a
   cookies file or browser-cookie configuration. The direct flow uses yt-dlp's
   best available video/audio selection and does not expose manual quality
@@ -52,7 +54,10 @@ Run `go test -race ./...` when a C compiler is available. Race testing is option
 
 ## Download bundled helper tools
 
-The application can use system tools, but release packages are intended to include platform-specific yt-dlp and FFmpeg binaries. Run the helper with Bash:
+The application can use system tools, but release packages include a
+platform-specific yt-dlp and, on Windows/Linux, static FFmpeg binaries. macOS
+deliberately ships only yt-dlp so the installer stays small and a broken
+bundled dylib cannot shadow a working system copy. Run the helper with Bash:
 
 ```bash
 # Current host platform.
@@ -71,25 +76,23 @@ The script writes to:
 resources/<platform>/bin/
 ```
 
-Supported target names include `windows-amd64`, `windows-arm64`, `linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64`. Windows/Linux FFmpeg archives are verified against the recorded SHA-256 values. macOS uses a Homebrew bottle on a runner matching the target architecture (`macos-13` for amd64 and `macos-latest` for arm64); Homebrew verifies that bottle before installation.
+Supported target names include `windows-amd64`, `windows-arm64`, `linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64`. Every FFmpeg archive is verified against the release's published checksum, with the pinned fallback values in the script. macOS downloads yt-dlp only; FFmpeg is selected from the user's machine at runtime.
 
 Optional environment variables:
 
 ```bash
-YTDLP_TAG=2026.08.19 FFMPEG_RELEASE=latest \
+YTDLP_TAG=2026.11.23 FFMPEG_RELEASE=latest \
   bash scripts/fetch-tools.sh linux-amd64
 ```
 
 The default yt-dlp version and SHA-256 checksums are recorded in the script.
-The FFmpeg rolling release is accepted only when its recorded checksum still
-matches; update the release name and checksum together when intentionally
-upgrading it. Do not commit the downloaded files: `resources/*/bin/*` is
+The FFmpeg rolling release is accepted only when its published checksum (or the
+pinned fallback) matches; update the release name and checksum together when
+intentionally upgrading it. Do not commit the downloaded files: `resources/*/bin/*` is
 ignored because FFmpeg binaries are large.
 
-The shared `resources/yt-dlp-plugins` directory is packaged with the
-application and loaded by yt-dlp through `--plugin-dirs`. Each child is a
-standard yt-dlp plugin package; this is how the ARY Plus extractor is available
-in local and packaged runs.
+ARY Plus is handled by the native Go resolver in `internal/services`; no
+yt-dlp plugin directory is required for it.
 
 ## Local production builds
 
@@ -120,10 +123,20 @@ Outputs are written below `build/`, as configured by `mygo.json`:
 
 `internal/tools` checks, in order:
 
-1. Packaged `resources/bin/<tool>`.
-2. Packaged `resources/<tool>`.
-3. Development `resources/<os>-<arch>/bin/<tool>`.
-4. System `PATH`.
+1. Explicit path from Settings → Tools, when it runs.
+2. The app-managed directory (`~/Library/Application Support/VideoDownloader/bin`
+   on macOS, the platform config directory elsewhere). A copy installed from
+   the Home setup card takes effect here.
+3. For yt-dlp, the newest of the app-managed, bundled, and system copies;
+   ties prefer app-managed, then bundled, then system.
+4. Packaged `resources/bin/<tool>` or `resources/<tool>` (development
+   `resources/<os>-<arch>/bin/<tool>` is also recognized).
+5. System `PATH` and the common package-manager directories.
+
+Every candidate is executed once (`-version` or `--version`) and cached, so a
+present-but-broken binary falls through instead of shadowing a working copy.
+The Settings Tools card shows the effective path, the bundled version when it
+differs, and a warning when a custom path does not run.
 
 The platform directories are flattened/selected by MyGo during packaging. During `go run`, the platform subdirectory remains in the repository, which is why the development lookup exists.
 
@@ -157,19 +170,114 @@ git push origin v3.3.0
 
 The release workflow validates the tag against `mygo.json`, creates a draft GitHub Release, builds the supported packages, uploads the artifacts, and publishes the release only after all platform jobs succeed.
 
+## yt-dlp update channel
+
+The app can update yt-dlp from Settings → Tools using a signed manifest. The
+channel release contains `yt-dlp-manifest.json` and `yt-dlp-manifest.sig`; the
+app verifies the Ed25519 signature with the public key embedded in
+`internal/services/ytdlpupdate.go` before parsing, then verifies the asset
+SHA-256 and `yt-dlp --version` before replacing the managed binary.
+
+Regenerate a keypair when rotating the channel:
+
+```bash
+go run ./cmd/ytdlp-manifest -keygen   -private-key ~/.config/video-downloader/ytdlp-manifest.key
+```
+
+Replace the embedded public key with the printed public value and rebuild. Add
+the private seed to the repository secret used by the manual channel workflow:
+
+```bash
+gh secret set YTDLP_MANIFEST_PRIVATE_KEY \
+  --repo <owner>/<repo> \
+  < ~/.config/video-downloader/ytdlp-manifest.key
+gh workflow run yt-dlp-channel.yml --repo <owner>/<repo> -f tag=<yt-dlp-tag>
+```
+
+Leave `tag` empty for the latest upstream release. The workflow downloads the
+upstream assets, signs the manifest, and updates the `yt-dlp-channel` release.
+Set the update source in Settings → Tools when the channel is not the default
+`fazi-gondal` repository. No automatic updates run.
+
 ## Signing
 
 Signing is optional for local development and not configured by default.
 
 ### macOS
 
-Set a Developer ID identity in `mygo.json` or pass the MyGo signing flag:
+Signing and notarization are optional. Without them the app is ad-hoc signed and
+users open it once through **System Settings → Privacy & Security → Open Anyway**
+(or right-click → Open). No paid Apple Developer account is required to build or
+use the app.
+
+Release macOS packages are Developer ID-signed and notarized when the Apple
+credentials are configured. Local development builds stay ad-hoc unless you use
+the signed build script.
+
+Prerequisites:
+
+- An Apple Developer Program membership.
+- A `Developer ID Application` certificate with its private key in the login
+  keychain. An Apple Development certificate cannot be notarized.
+- An app-specific password for the Apple ID that owns the team.
+
+Check the certificate:
 
 ```bash
-CGO_ENABLED=0 go tool mygo build -sign "Developer ID Application: …"
+security find-identity -v -p codesigning
 ```
 
-See the MyGo [GitHub Actions guide](https://mygo.egoist.dev/docs/github-actions) for notarization credentials and keychain setup.
+Local signed build:
+
+1. Export the `Developer ID Application` certificate and private key from
+   Keychain Access as a password-protected `.p12`, then import it into the login
+   keychain on the build Mac.
+2. Store the notary credentials once:
+
+   ```bash
+   xcrun notarytool store-credentials notary \
+     --apple-id "you@example.com" --team-id "TEAMID" \
+     --password "app-specific-password"
+   ```
+
+3. Build the app and DMG:
+
+   ```bash
+   MACOS_SIGNING_IDENTITY="Developer ID Application: Name (TEAMID)" \
+     bash scripts/build-macos-signed.sh
+   ```
+
+   The script adds `macos.signingIdentity` and `macos.notarize` to `mygo.json`
+   for the build, then restores the file on exit. No identity or credential is
+   written to the repository.
+
+4. Verify the result:
+
+   ```bash
+   codesign --verify --deep --strict "build/darwin-arm64/Video Downloader.app"
+   spctl --assess --type execute --verbose "build/darwin-arm64/Video Downloader.app"
+   xcrun stapler validate "build/darwin-arm64/Video Downloader.app"
+   ```
+
+The committed `mygo.json` only configures the bundled yt-dlp helper's
+hardened-runtime entitlements (`resources/yt-dlp.entitlements.plist`), because
+its PyInstaller launcher loads extracted libraries at runtime.
+
+For releases, add these repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE` | base64 of the password-protected Developer ID `.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | the `.p12` password |
+| `APPLE_ID` | the Apple ID of the developer account |
+| `APPLE_TEAM_ID` | the team ID in the identity, for example `TEAMID` |
+| `APPLE_APP_PASSWORD` | an app-specific password for the Apple ID |
+
+The release workflow imports the certificate and notary credentials into an
+ephemeral keychain, injects the signing/notarization configuration, and builds
+the app and DMG. If `MACOS_CERTIFICATE` is absent, it warns and builds an ad-hoc
+app as before; if the other secrets are missing, the release fails so a partial
+signing setup is not published silently.
 
 ### Windows
 
@@ -187,7 +295,7 @@ Configure a `.pfx` certificate through the MyGo Windows configuration and provid
 
 1. Checks that the tag matches `mygo.json`.
 2. Creates a draft GitHub Release.
-3. Fetches verified helper tools for Windows/Linux and architecture-matched Homebrew FFmpeg for macOS.
+3. Fetches verified helper tools for Windows/Linux; macOS fetches yt-dlp only.
 4. Builds Windows and Linux amd64/arm64 plus macOS arm64 with `go tool mygo` and `CGO_ENABLED=0`.
 5. Uploads Windows installers, Linux packages/archives/install script, and macOS disk images to the draft.
 6. Publishes the release only after every platform job succeeds.
@@ -217,7 +325,11 @@ Windows installer creation needs NSIS. The release workflow installs NSIS on Ubu
 
 ### FFmpeg or yt-dlp is missing
 
-Run the helper script using Bash, check `resources/<platform>/bin`, or install the tools on `PATH`. Restart the app after changing bundled resources.
+On macOS use the Home setup card to install FFmpeg with Homebrew or a pinned
+static build. Otherwise run the helper script using Bash, check
+`resources/<platform>/bin`, install the tools on `PATH`, or set an explicit path
+in Settings → Tools. Press **Check again** after changing tools; no restart is
+needed for an app-managed install.
 
 ### Linux executable does not start
 

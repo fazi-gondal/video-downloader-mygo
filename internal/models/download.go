@@ -2,6 +2,7 @@ package models
 
 import (
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,32 @@ const (
 	ModeAudioOnly  DownloadMode = "audio"
 	ModeVideoAudio DownloadMode = "video_audio"
 )
+
+// NormalizeContainer returns the canonical container name; an empty value
+// means the default MP4 container.
+func NormalizeContainer(container string) string {
+	container = strings.ToLower(strings.TrimSpace(container))
+	if container == "" {
+		return "mp4"
+	}
+	return container
+}
+
+// PreferVP9ForContainer reports whether the VP9 preference applies to a
+// container. MP4 stays MP4; the VP9 preference only applies to MKV and WebM.
+// Without this rule the UI would offer MP4 and silently produce MKV whenever
+// the preference was on.
+func PreferVP9ForContainer(container string, prefer bool) bool {
+	if !prefer {
+		return false
+	}
+	switch NormalizeContainer(container) {
+	case "mkv", "webm":
+		return true
+	default:
+		return false
+	}
+}
 
 // AudioSelectionMode controls which audio streams are included in a
 // video-plus-audio download. The zero value is the default: one best audio
@@ -110,6 +137,11 @@ type DownloadRequest struct {
 	// Playlist context
 	PlaylistTitle string
 	PlaylistIndex int
+
+	// Extractor context: the page the stream came from, so history can
+	// re-resolve an expired direct link instead of replaying it.
+	SourcePageURL string
+	SourceIndex   int
 
 	// UI-only
 	PlaylistBatchID           uint64
@@ -335,6 +367,7 @@ func (t *DownloadTask) ResetForRetry() {
 	t.ErrorDetail = ""
 	t.Progress = ProgressInfo{}
 	t.OutputPath = ""
+	t.stagingDir = ""
 	t.StartedAt = nil
 	t.FinishedAt = nil
 	t.State = StatePending

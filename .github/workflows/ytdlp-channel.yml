@@ -1,0 +1,54 @@
+# Build and publish the signed yt-dlp update manifest used by Settings → Tools.
+# The channel is a release whose assets are yt-dlp-manifest.json and .sig; it
+# never replaces the upstream yt-dlp binaries. Run this manually after adding
+# the YTDLP_MANIFEST_PRIVATE_KEY secret to the repository.
+name: yt-dlp update channel
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: yt-dlp release tag (leave empty for the latest release)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ytdlp-channel
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build signed manifest
+        env:
+          YTDLP_MANIFEST_PRIVATE_KEY: ${{ secrets.YTDLP_MANIFEST_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$YTDLP_MANIFEST_PRIVATE_KEY" ]; then
+            echo "::error::YTDLP_MANIFEST_PRIVATE_KEY is not configured."
+            exit 1
+          fi
+          go run ./cmd/ytdlp-manifest -tag "${{ inputs.tag }}" -out channel
+      - name: Publish channel assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view yt-dlp-channel --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create yt-dlp-channel --repo "$GITHUB_REPOSITORY" \
+              --title "yt-dlp update channel" \
+              --notes "Signed yt-dlp update manifest. Managed by the yt-dlp update channel workflow." \
+              --prerelease
+          fi
+          gh release upload yt-dlp-channel \
+            channel/yt-dlp-manifest.json channel/yt-dlp-manifest.sig \
+            --repo "$GITHUB_REPOSITORY" --clobber

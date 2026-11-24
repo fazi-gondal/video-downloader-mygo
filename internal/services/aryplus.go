@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/models"
@@ -19,13 +20,19 @@ import (
 
 const (
 	aryPlusDefaultAPIBase = "https://be.aryplus.tv"
-	aryPlusDefaultAPIKey  = "ak_37515186786306625012043079404171"
 )
 
 var (
 	aryPlusEpisodeRe = regexp.MustCompile(`^https?://(?:www\.)?aryplus\.tv/video/v2/(?P<platformid>\d+)/(?P<videoid>[\w]+)(?:/(?P<seriesid>[\w]+))?/?(?:[?#].*)?$`)
 	aryPlusSeriesRe  = regexp.MustCompile(`^https?://(?:(?:www\.)?aryplus\.tv/series|social\.aryplus\.tv/sharer/series)/(?P<id>[\w]+)/?(?:[?#].*)?$`)
+
+	aryPlusKeyMu   sync.RWMutex
+	aryPlusUserKey string
 )
+
+// ErrAryPlusAPIKeyMissing is returned when an ARY Plus URL is used without a
+// user-provided API key. No third-party credential is bundled with the app.
+var ErrAryPlusAPIKeyMissing = errors.New("ARY Plus API key is not configured; add it in Settings → ARY Plus or set ARYPLUS_API_KEY")
 
 // IsAryPlusURL reports whether rawURL is an ARY Plus episode or series URL.
 func IsAryPlusURL(rawURL string) bool {
@@ -64,11 +71,22 @@ func aryPlusAPIBase() string {
 	return aryPlusDefaultAPIBase
 }
 
+// SetAryPlusAPIKey updates the key used for ARY Plus API requests. The app
+// calls this from Settings; ARYPLUS_API_KEY still takes precedence for
+// development and portable setups.
+func SetAryPlusAPIKey(key string) {
+	aryPlusKeyMu.Lock()
+	aryPlusUserKey = strings.TrimSpace(key)
+	aryPlusKeyMu.Unlock()
+}
+
 func aryPlusAPIKey() string {
 	if key := strings.TrimSpace(os.Getenv("ARYPLUS_API_KEY")); key != "" {
 		return key
 	}
-	return aryPlusDefaultAPIKey
+	aryPlusKeyMu.RLock()
+	defer aryPlusKeyMu.RUnlock()
+	return aryPlusUserKey
 }
 
 func aryPlusCallAPI(ctx context.Context, endpoint string, query url.Values) (map[string]any, error) {
@@ -84,7 +102,7 @@ func aryPlusCallAPI(ctx context.Context, endpoint string, query url.Values) (map
 
 	apiKey := aryPlusAPIKey()
 	if apiKey == "" {
-		return nil, errors.New("ARYPLUS_API_KEY is not configured")
+		return nil, ErrAryPlusAPIKeyMissing
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("Referer", "https://aryplus.tv/")

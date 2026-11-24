@@ -52,3 +52,12 @@ func TestRestorePausedDownloadTaskPreservesRequestProgressAndStaging(t *testing.
 		t.Fatalf("restored progress/staging/time = %+v/%q/%v", got.Progress, got.StagingDir, got.CreatedAt)
 	}
 }
+
+func TestResetForRetryClearsStaging(t *testing.T) {
+	task := NewDownloadTask(DownloadRequest{URL: "https://example.com/video"})
+	task.SetStagingDir("/tmp/ambiguous-staging")
+	task.ResetForRetry()
+	if task.StagingDir() != "" {
+		t.Fatalf("staging dir after retry = %q, want empty", task.StagingDir())
+	}
+}

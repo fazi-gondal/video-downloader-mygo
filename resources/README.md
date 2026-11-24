@@ -34,19 +34,30 @@ resources/
 │       └── ffprobe
 ├── darwin-amd64/
 │   └── bin/
-│       ├── yt-dlp
-│       ├── ffmpeg
-│       └── ffprobe
+│       └── yt-dlp
 └── darwin-arm64/
     └── bin/
-        ├── yt-dlp
-        ├── ffmpeg
-        └── ffprobe
+        └── yt-dlp
 ```
 
 The `bin` directories are usually empty in Git because downloaded executables are ignored. The release workflow populates the matching directory before running `go tool mygo build`.
 
 `icon.png` is shared by application packages. Use a 1024×1024 PNG when replacing it.
+
+## App-managed tools
+
+Tools installed from the Home setup card live outside the `.app` bundle:
+
+```text
+~/Library/Application Support/VideoDownloader/bin/   # macOS
+%LOCALAPPDATA%/VideoDownloader/bin/                  # Windows
+~/.config/VideoDownloader/bin/                       # Linux
+```
+
+The resolver prefers this directory over the bundled and system copies for
+FFmpeg/FFprobe, so an install takes effect immediately. yt-dlp uses the newest
+of the app-managed, bundled, and system copies. See
+`docs/design/tool-resolution.md`.
 
 ## Fetch tools
 
@@ -65,7 +76,8 @@ The helper downloads:
 
 - yt-dlp release binaries from GitHub releases.
 - Static FFmpeg/FFprobe archives from `yt-dlp/FFmpeg-Builds` for Windows/Linux.
-- Architecture-matched FFmpeg/FFprobe from a verified Homebrew bottle for macOS.
+- Nothing for macOS FFmpeg: the app uses the FFmpeg installed on the machine,
+  or the path set in Settings → Tools.
 
 The helper requires `curl`, `unzip`, and `tar`/`xz` for the archive type. On Windows, run it from Git Bash or WSL; do not run this Bash script with Windows PowerShell directly.
 
@@ -77,27 +89,37 @@ this section control only the bundled yt-dlp and FFmpeg helper versions.
 The script supports:
 
 ```bash
-YTDLP_TAG=2026.08.19
+YTDLP_TAG=2026.11.23
 FFMPEG_RELEASE=latest
 ```
 
 Example:
 
 ```bash
-YTDLP_TAG=2026.08.19 FFMPEG_RELEASE=latest \
+YTDLP_TAG=2026.11.23 FFMPEG_RELEASE=latest \
   bash scripts/fetch-tools.sh linux-amd64
 ```
 
-The Windows/Linux archive checksums are recorded in the script. The `latest` FFmpeg archive is accepted only while its recorded checksum matches; update the release name and checksum together when intentionally upgrading it. Homebrew verifies macOS bottle checksums as part of `brew install`.
+The Windows/Linux archive checksums are recorded in the script. The `latest` FFmpeg archive is accepted only while its recorded checksum matches; update the release name and checksum together when intentionally upgrading it. macOS has no FFmpeg download to verify.
 
 ## Runtime lookup order
 
 `internal/tools/resolve.go` resolves each executable in this order:
 
-1. `App.Path(PathResources)/bin/<tool>` in a packaged app.
-2. `App.Path(PathResources)/<tool>` in a packaged app.
-3. `resources/<GOOS>-<GOARCH>/bin/<tool>` during local development.
-4. A matching executable on the system `PATH`.
+1. An explicit path from Settings → Tools, if it runs.
+2. The app-managed directory (`~/Library/Application Support/VideoDownloader/bin`
+   on macOS, the platform config directory elsewhere), if it runs.
+3. For yt-dlp, the newest of the app-managed, bundled, and system copies; ties
+   prefer app-managed, then bundled, then system.
+4. `App.Path(PathResources)/bin/<tool>` in a packaged app.
+5. `App.Path(PathResources)/<tool>` in a packaged app.
+6. `resources/<GOOS>-<GOARCH>/bin/<tool>` during local development.
+7. A matching executable in the common package-manager directories or on the
+   system `PATH`.
+
+Every candidate is probed by running it once, so a present-but-broken binary is
+skipped. macOS packages contain only yt-dlp; FFmpeg and FFprobe come from the
+app-managed directory, the system, or an explicit path.
 
 Tool names are:
 
@@ -112,9 +134,10 @@ Tool names are:
 The application includes native Go support for ARY Plus (`aryplus.tv`) episode URLs
 and series playlists, including the YouTube and Dailymotion platform redirects.
 Episode metadata, series episodes, and direct HLS stream sources are resolved
-directly via Go HTTP client requests using the built-in public client key.
-`ARYPLUS_API_KEY` can override the key and `ARYPLUS_API_BASE` can select a
-compatible API endpoint. Direct HLS streams are downloaded and merged by the
+directly via Go HTTP client requests. ARY Plus is optional and requires a
+user-provided API key, entered in Settings → ARY Plus or supplied through
+`ARYPLUS_API_KEY`; no third-party key is bundled. `ARYPLUS_API_BASE` can select
+a compatible API endpoint. Direct HLS streams are downloaded and merged by the
 bundled tools without requiring any external plugins.
 
 On Windows, `.exe` is added automatically. On Unix-like systems, downloaded files are marked executable by the helper script.
@@ -122,16 +145,17 @@ On Windows, `.exe` is added automatically. On Unix-like systems, downloaded file
 ## Conversion support
 
 The bundled FFmpeg and FFprobe binaries power the in-app Converter as well as
-download post-processing. Lossy audio targets expose 128, 192, 256, and 320
-kbps; FLAC and WAV remain lossless and do not receive a bitrate flag. Video
-conversion chooses codecs that match the target container and uses a remux
-only after FFprobe confirms that the source codecs are compatible.
+download post-processing when present. On macOS the app uses the system FFmpeg
+instead. Lossy audio targets expose 128, 192, 256, and 320 kbps; FLAC and WAV
+remain lossless and do not receive a bitrate flag. Video conversion chooses
+codecs that match the target container and uses a remux only after FFprobe
+confirms that the source codecs are compatible.
 
 ## Packaging behavior
 
 MyGo selects platform-named resource directories during packaging. A Windows package receives Windows resources; a Linux package receives Linux resources. Do not copy every platform's binaries into one flat directory because that can cause the wrong executable to be shipped.
 
-The release workflow downloads the helpers immediately before packaging and uploads the resulting installers and archives. Local `go run` uses the platform-directory fallback, so local development can use the same layout without flattening it manually. macOS helper downloads must run on a runner or machine with the target architecture.
+The release workflow downloads the helpers immediately before packaging and uploads the resulting installers and archives. Local `go run` uses the platform-directory fallback, so local development can use the same layout without flattening it manually. macOS packaging never downloads FFmpeg; it ships yt-dlp only and resolves FFmpeg on the user's machine.
 
 ## Repository policy
 

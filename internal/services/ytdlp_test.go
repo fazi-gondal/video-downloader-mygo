@@ -77,6 +77,9 @@ func writeYtDlpHelperOutput() {
 	path := filepath.Join(filepath.Dir(outputTemplate), "helper-"+name+".mp4")
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 	_ = os.WriteFile(path, []byte(name), 0o644)
+	if os.Getenv("GO_WANT_YTDLP_HELPER_AMBIGUOUS") == "1" {
+		_ = os.WriteFile(filepath.Join(filepath.Dir(outputTemplate), "helper-extra.webm"), []byte("extra"), 0o644)
+	}
 }
 
 func TestYtDlpHelperProcess(t *testing.T) {
@@ -194,15 +197,53 @@ func TestYtDlpDownloadDrainsStdoutAndStderrConcurrently(t *testing.T) {
 	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: t.TempDir()})
 	// The helper is selected by the environment inherited by the child process.
 	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_OUTPUT", "1")
 	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_OUTPUT")
 
 	path, err := service.Download(context.Background(), task, nil)
 	if err != nil {
 		t.Fatalf("Download() error = %v", err)
 	}
-	if path != "" {
-		t.Fatalf("Download() path = %q, want empty fallback for helper", path)
+	if path == "" {
+		t.Fatal("Download() returned an empty output path")
 	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("Download() output: %v", err)
+	}
+}
+
+func TestYtDlpDownloadKeepsAmbiguousStaging(t *testing.T) {
+	service := testYtDlpHelperService(t)
+	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: t.TempDir()})
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_OUTPUT", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_AMBIGUOUS", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_OUTPUT")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_AMBIGUOUS")
+
+	path, err := service.Download(context.Background(), task, nil)
+	if !errors.Is(err, ErrStagedOutputMissing) {
+		t.Fatalf("Download() error = %v, want ErrStagedOutputMissing", err)
+	}
+	if path != "" {
+		t.Fatalf("Download() path = %q, want empty", path)
+	}
+	staging := task.StagingDir()
+	if staging == "" {
+		t.Fatal("ambiguous download cleared its staging directory")
+	}
+	if _, statErr := os.Stat(staging); statErr != nil {
+		t.Fatalf("staging directory was removed: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(staging, "helper-video.mp4")); statErr != nil {
+		t.Fatalf("completed media was removed: %v", statErr)
+	}
+	if task.Snapshot().ErrorDetail != staging {
+		t.Fatalf("error detail = %q, want staging path %q", task.Snapshot().ErrorDetail, staging)
+	}
+	_ = os.RemoveAll(staging)
 }
 
 func TestYtDlpDownloadDoesNotUseUnrelatedOutputFile(t *testing.T) {
@@ -217,11 +258,15 @@ func TestYtDlpDownloadDoesNotUseUnrelatedOutputFile(t *testing.T) {
 	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
 
 	path, err := service.Download(context.Background(), task, nil)
-	if err != nil {
-		t.Fatalf("Download() error = %v", err)
+	if !errors.Is(err, ErrStagedOutputMissing) {
+		t.Fatalf("Download() error = %v, want ErrStagedOutputMissing", err)
 	}
 	if path != "" {
 		t.Fatalf("Download() path = %q, want no output from this request", path)
+	}
+	data, readErr := os.ReadFile(unrelated)
+	if readErr != nil || string(data) != "not this download" {
+		t.Fatalf("unrelated output changed: data=%q err=%v", data, readErr)
 	}
 }
 
@@ -289,6 +334,8 @@ func TestYtDlpDownloadReportsProgressFromLiteralMarker(t *testing.T) {
 	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
 
 	var progress []models.ProgressInfo
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_OUTPUT", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_OUTPUT")
 	if _, err := service.Download(context.Background(), task, func(p models.ProgressInfo) {
 		progress = append(progress, p)
 	}); err != nil {
@@ -828,9 +875,45 @@ func TestBuildDownloadArgsVideoOnlySelectsVideoFormats(t *testing.T) {
 
 	args := service.buildDownloadArgs(req)
 	got := formatArgument(args)
-	want := "bv[height<=?720][fps<=?30]/bv/b[height<=?720][fps<=?30]/b"
+	want := "bv[ext=mp4][height<=?720][fps<=?30]/bv[height<=?720][fps<=?30]/b[height<=?720][fps<=?30]/b"
 	if got != want {
 		t.Fatalf("video format selector = %q, want %q", got, want)
+	}
+}
+
+func TestBuildDownloadArgsVideoOnlyMKVRemuxesContainer(t *testing.T) {
+	req := models.DownloadRequest{
+		Mode:      models.ModeVideoOnly,
+		Container: "mkv",
+		PreferVP9: true,
+		OutputDir: t.TempDir(),
+	}
+
+	args := testYtDlpService().buildDownloadArgs(req)
+	if got := argumentValue(args, "--remux-video"); got != "mkv" {
+		t.Fatalf("remux output format = %q, want mkv", got)
+	}
+	if hasArgument(args, "--merge-output-format") {
+		t.Fatal("a single video stream should not request a merge container")
+	}
+	if got := argumentValue(args, "--format-sort"); got != "res,fps,vcodec:vp9,acodec:opus,acodec:m4a" {
+		t.Fatalf("format sort = %q, want resolution-first VP9 preference", got)
+	}
+}
+
+func TestBuildDownloadArgsWebmFiltersVideoAndAudio(t *testing.T) {
+	req := models.DownloadRequest{
+		Mode:      models.ModeVideoAudio,
+		Container: "webm",
+		OutputDir: t.TempDir(),
+	}
+
+	args := testYtDlpService().buildDownloadArgs(req)
+	if got := formatArgument(args); !strings.Contains(got, "bv*[ext=webm]") || !strings.Contains(got, "ba[acodec=opus]") {
+		t.Fatalf("webm format selector = %q, want webm video + Opus audio", got)
+	}
+	if got := argumentValue(args, "--merge-output-format"); got != "webm" {
+		t.Fatalf("merge output format = %q, want webm", got)
 	}
 }
 
@@ -1206,17 +1289,52 @@ func TestBuildDownloadArgsAudioOnlyDisablesSubtitleOptions(t *testing.T) {
 func TestBuildDownloadArgsPreferVP9UsesFormatSort(t *testing.T) {
 	req := models.DownloadRequest{
 		Mode:      models.ModeVideoAudio,
+		Container: "mkv",
+		PreferVP9: true,
+		OutputDir: t.TempDir(),
+	}
+
+	args := testYtDlpService().buildDownloadArgs(req)
+	if got := argumentValue(args, "--format-sort"); got != "res,fps,vcodec:vp9,acodec:opus,acodec:m4a" {
+		t.Fatalf("format sort = %q, want resolution-first VP9 preference", got)
+	}
+	if got := argumentValue(args, "--merge-output-format"); got != "mkv" {
+		t.Fatalf("merge output format = %q, want %q", got, "mkv")
+	}
+}
+
+func TestBuildDownloadArgsMP4KeepsSelectedContainerWithVP9Preference(t *testing.T) {
+	req := models.DownloadRequest{
+		Mode:      models.ModeVideoAudio,
 		Container: "mp4",
 		PreferVP9: true,
 		OutputDir: t.TempDir(),
 	}
 
 	args := testYtDlpService().buildDownloadArgs(req)
-	if got := argumentValue(args, "--format-sort"); got != "vcodec:vp9,res,fps,acodec:opus,acodec:m4a" {
-		t.Fatalf("format sort = %q, want VP9 preference", got)
+	if got := argumentValue(args, "--merge-output-format"); got != "mp4" {
+		t.Fatalf("merge output format = %q, want the selected mp4 container", got)
 	}
-	if got := argumentValue(args, "--merge-output-format"); got != "mkv" {
-		t.Fatalf("merge output format = %q, want %q", got, "mkv")
+	if hasArgument(args, "--format-sort") {
+		t.Fatal("MP4 must not use the VP9 format preference")
+	}
+	if got := formatArgument(args); !strings.Contains(got, "[ext=mp4]") {
+		t.Fatalf("mp4 format selector = %q, want an mp4 video/m4a audio preference", got)
+	}
+}
+
+func TestBuildDownloadArgsMP4KeepsSelectedContainerForOpus(t *testing.T) {
+	req := models.DownloadRequest{
+		Mode:          models.ModeVideoAudio,
+		Container:     "mp4",
+		VideoFormatID: "137",
+		AudioFormatID: "251",
+		OutputDir:     t.TempDir(),
+	}
+
+	args := testYtDlpService().buildDownloadArgs(req)
+	if got := argumentValue(args, "--merge-output-format"); got != "mp4" {
+		t.Fatalf("merge output format = %q, want the selected mp4 container", got)
 	}
 }
 
@@ -1453,9 +1571,10 @@ func TestVideoAudioSelectorMuxedFallbacks(t *testing.T) {
 		t.Errorf("videoAudioSelector(explicit) = %q, want %q", gotExplicit, wantExplicit)
 	}
 
-	// When resolution cap is chosen (e.g. 720p with default VP9 preference):
+	// When resolution cap is chosen with an MKV container and VP9 preference:
 	reqHeight := models.DownloadRequest{
 		MaxHeight: 720,
+		Container: "mkv",
 		PreferVP9: true,
 		Mode:      models.ModeVideoAudio,
 	}
@@ -1463,6 +1582,19 @@ func TestVideoAudioSelectorMuxedFallbacks(t *testing.T) {
 	wantHeight := "bv*[height<=?720]+ba/bv*[height<=?720]/b[height<=?720]/b"
 	if gotHeight != wantHeight {
 		t.Errorf("videoAudioSelector(height) = %q, want %q", gotHeight, wantHeight)
+	}
+
+	// MP4 is the default container, and it stays MP4 even when the VP9
+	// preference is on, so the output matches the selected container.
+	reqMP4Default := models.DownloadRequest{
+		MaxHeight: 720,
+		PreferVP9: true,
+		Mode:      models.ModeVideoAudio,
+	}
+	gotMP4Default := videoAudioSelector(reqMP4Default)
+	wantMP4Default := "bv*[ext=mp4][height<=?720]+ba[ext=m4a]/bv*[height<=?720]+ba/b[height<=?720]/b"
+	if gotMP4Default != wantMP4Default {
+		t.Errorf("videoAudioSelector(default mp4) = %q, want %q", gotMP4Default, wantMP4Default)
 	}
 
 	// When MP4 container is chosen with height cap:

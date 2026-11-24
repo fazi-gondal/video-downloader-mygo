@@ -312,6 +312,44 @@ func TestContainerSelectionLocksToMKVAndRestoresPreference(t *testing.T) {
 	}
 }
 
+func TestContainerSelectionIgnoresAudioTracksForVideoOnly(t *testing.T) {
+	a := &App{
+		mode:               models.ModeVideoOnly,
+		container:          "webm",
+		preferredContainer: "webm",
+		audioTracksMode:    audioTracksAll,
+		subtitleMode:       subtitleModeNone,
+		selectedAudio:      map[string]*bool{},
+		selectedSubtitle:   map[string]*bool{},
+	}
+	a.syncContainerSelection()
+	if a.container != "webm" {
+		t.Fatalf("video-only container = %q, want webm without an audio lock", a.container)
+	}
+}
+
+func TestBestVideoFormatPrefersResolutionBeforeVP9(t *testing.T) {
+	formats := []models.FormatInfo{
+		{ID: "vp9-1080", Ext: "webm", IsVideo: true, VCodec: "vp9", Height: 1080, FPS: 30, TBR: 3000},
+		{ID: "h264-2160", Ext: "mp4", IsVideo: true, VCodec: "avc1.640028", Height: 2160, FPS: 30, TBR: 15000},
+	}
+	got := bestVideoFormatForRequest(formats, 0, "mkv", true)
+	if got == nil || got.ID != "h264-2160" {
+		t.Fatalf("best format = %#v, want the higher-resolution H.264 stream", got)
+	}
+}
+
+func TestBestVideoFormatUsesVP9AtEqualResolution(t *testing.T) {
+	formats := []models.FormatInfo{
+		{ID: "h264-1080", Ext: "mp4", IsVideo: true, VCodec: "avc1.640028", Height: 1080, FPS: 30, TBR: 5000},
+		{ID: "vp9-1080", Ext: "webm", IsVideo: true, VCodec: "vp9", Height: 1080, FPS: 30, TBR: 4000},
+	}
+	got := bestVideoFormatForRequest(formats, 0, "mkv", true)
+	if got == nil || got.ID != "vp9-1080" {
+		t.Fatalf("best format = %#v, want VP9 at equal resolution", got)
+	}
+}
+
 func TestEstimatedFinalSizeUsesSelectedFormatsAndResolutionFallback(t *testing.T) {
 	a := &App{
 		currentMedia: &models.MediaInfo{
@@ -462,7 +500,7 @@ func TestEstimatedFinalSizeAudioOnlyUsesSelectedAudio(t *testing.T) {
 }
 
 func TestDownloadMetricsShowsEstimatedTotalSpeedAndETA(t *testing.T) {
-	metrics := downloadMetrics(models.ProgressInfo{
+	metrics := (&App{lang: "en"}).downloadMetrics(models.ProgressInfo{
 		DownloadedBytes: 1024,
 		TotalBytes:      4096,
 		TotalIsEstimate: true,
@@ -477,7 +515,7 @@ func TestDownloadMetricsShowsEstimatedTotalSpeedAndETA(t *testing.T) {
 }
 
 func TestDownloadMetricsExplainsUnknownProgressFields(t *testing.T) {
-	metrics := downloadMetrics(models.ProgressInfo{DownloadedBytes: 1024})
+	metrics := (&App{lang: "en"}).downloadMetrics(models.ProgressInfo{DownloadedBytes: 1024})
 	for _, want := range []string{"1.0 KB / size unknown", "speed calculating", "ETA calculating"} {
 		if !strings.Contains(metrics, want) {
 			t.Fatalf("metrics %q does not contain %q", metrics, want)

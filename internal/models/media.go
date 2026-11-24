@@ -85,16 +85,20 @@ type MediaInfo struct {
 	Is360             bool // source exposes YouTube's spherical/mesh video formats
 	IsLive            bool
 	OriginalURL       string
+	SourcePageURL     string
+	SourceIndex       int
 }
 
 // PlaylistEntry is one item inside a playlist.
 type PlaylistEntry struct {
-	ID        string
-	Title     string
-	URL       string
-	Duration  float64
-	Thumbnail string
-	Index     int
+	ID            string
+	Title         string
+	URL           string
+	Duration      float64
+	Thumbnail     string
+	Index         int
+	SourcePageURL string
+	SourceIndex   int
 }
 
 // PlaylistInfo is the result of analyzing a playlist/channel URL.

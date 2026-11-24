@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
@@ -27,6 +28,7 @@ import (
 // YtDlpService wraps the yt-dlp CLI. All methods are blocking and must
 // be called from worker goroutines (never the UI thread).
 type YtDlpService struct {
+	mu         sync.Mutex
 	ffmpegPath string
 	ytdlpPath  string
 	settings   func() config.AppSettings
@@ -38,6 +40,12 @@ const (
 )
 
 var errPromotedPathExists = errors.New("promoted output path already exists")
+
+// ErrStagedOutputMissing means yt-dlp exited without a usable final path and
+// the staging directory does not contain exactly one media file. Guessing
+// among .part, subtitle, thumbnail, or multiple media files can promote the
+// wrong file, so the download is reported as failed instead.
+var ErrStagedOutputMissing = errors.New("yt-dlp finished without reporting a single final media file")
 
 type boundedDiagnosticBuffer struct {
 	buf       bytes.Buffer
@@ -79,12 +87,12 @@ func (b *boundedDiagnosticBuffer) String() string {
 }
 
 func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtDlpService {
-	yt := tools.YtDlp()
+	yt := tools.YtDlpFast()
 	if yt == "" {
 		yt = "yt-dlp" // hope PATH at exec time
 	}
 	if ffmpegPath == "" {
-		ffmpegPath = tools.FFmpeg()
+		ffmpegPath = tools.FFmpegFast()
 	}
 	return &YtDlpService{
 		ffmpegPath: ffmpegPath,
@@ -93,7 +101,52 @@ func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtD
 	}
 }
 
-func (s *YtDlpService) Bin() string { return s.ytdlpPath }
+// SetBinaryPath adopts a path already verified by the tool check without
+// probing it again on the UI thread.
+func (s *YtDlpService) SetBinaryPath(path string) {
+	if path == "" {
+		return
+	}
+	s.mu.Lock()
+	s.ytdlpPath = path
+	s.mu.Unlock()
+}
+
+// SetFFmpegPath keeps --ffmpeg-location aligned with the path selected by the
+// tool check without re-resolving yt-dlp on the UI thread.
+func (s *YtDlpService) SetFFmpegPath(path string) {
+	s.mu.Lock()
+	s.ffmpegPath = path
+	s.mu.Unlock()
+}
+
+// RefreshPaths re-resolves yt-dlp and adopts the ffmpeg path selected by the
+// tool check in one lock, so a download cannot observe a new yt-dlp with an
+// old ffmpeg path. Existing processes are unaffected. An empty resolution
+// replaces a removed custom path with the bare command name instead of leaving
+// a stale path behind.
+func (s *YtDlpService) RefreshPaths(ffmpegPath string) {
+	ytdlpPath := tools.YtDlp()
+	if ytdlpPath == "" {
+		ytdlpPath = "yt-dlp"
+	}
+	s.mu.Lock()
+	s.ytdlpPath = ytdlpPath
+	s.ffmpegPath = ffmpegPath
+	s.mu.Unlock()
+}
+
+func (s *YtDlpService) ffmpegBin() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ffmpegPath
+}
+
+func (s *YtDlpService) binary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ytdlpPath
+}
 
 // Analyze performs a fast flat extraction (good for playlists).
 func (s *YtDlpService) Analyze(ctx context.Context, url string) (any, error) {
@@ -203,22 +256,11 @@ func (s *YtDlpService) fetchFormatsAryPlus(ctx context.Context, rawURL string) (
 
 func validateYtDlpURL(rawURL string) error {
 	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return errors.New("media URL is empty")
-	}
 	if strings.HasPrefix(rawURL, "-") {
 		return errors.New("media URL must not begin with '-'")
 	}
-
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid media URL: %w", err)
-	}
-	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
-		return errors.New("media URL must use http or https")
-	}
-	if parsed.Hostname() == "" {
-		return errors.New("media URL must include a host")
+	if _, err := parseHTTPURL(rawURL); err != nil {
+		return fmt.Errorf("media URL: %w", err)
 	}
 	return nil
 }
@@ -290,7 +332,7 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, s.ytdlpPath, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
+	cmd := exec.CommandContext(runCtx, s.binary(), args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 	prepareBackgroundCmd(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -312,8 +354,20 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		defer close(taskWatchExited)
 		select {
 		case <-task.Done():
-			cancel()
-			_ = cmd.Process.Kill()
+			// Kill the whole process group, not just yt-dlp: during merge,
+			// remux, subtitle, and audio-extraction phases yt-dlp's ffmpeg
+			// child inherits the output pipe and would otherwise keep running.
+			if !watchFinished(taskWatchDone) {
+				terminateProcessTree(cmd)
+				cancel()
+			}
+		case <-ctx.Done():
+			// A caller that cancels the context directly gets the same
+			// process-tree cleanup, not just CommandContext's leader kill.
+			if !watchFinished(taskWatchDone) {
+				terminateProcessTree(cmd)
+				cancel()
+			}
 		case <-taskWatchDone:
 		}
 	}()
@@ -420,8 +474,16 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		// The command runs in an isolated directory, so a fallback can only
 		// select files created by this request. This avoids associating an
 		// unrelated or concurrently downloaded file from the shared output dir.
-		if _, inStaging := relativeStagingPath(stagingDir, lastPath); !inStaging || !isRegularFile(lastPath) {
-			lastPath = newestFile(stagingDir)
+		if _, inStaging := relativeStagingPath(stagingDir, lastPath); !inStaging || !isStagedRegularFile(lastPath) {
+			lastPath, err = singleStagedMediaFile(stagingDir)
+			if err != nil {
+				// Keep the staging tree: it may hold the completed media, a
+				// playlist subdirectory, or resumable parts. The old code
+				// deleted it and told the user to look in an empty folder.
+				cleanupStaging = false
+				task.SetErrorDetail(stagingDir)
+				return "", fmt.Errorf("%w: %v (staging kept at %s)", ErrStagedOutputMissing, err, stagingDir)
+			}
 		}
 		lastPath, err = promoteStagedDownload(stagingDir, task.Request.OutputDir, lastPath)
 		if err != nil {
@@ -429,6 +491,15 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		}
 	}
 	return lastPath, nil
+}
+
+func watchFinished(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
 }
 
 // DiscardPartial removes a paused task's staging directory when the user
@@ -592,12 +663,35 @@ func moveStagedFile(source, destination string) error {
 	return os.Remove(source)
 }
 
-func isRegularFile(path string) bool {
+// isStagedRegularFile trusts an after_move path inside staging unless it is a
+// symlink, a non-file, or a .part file. The extension is not restricted: the
+// reported final path is authoritative.
+func isStagedRegularFile(path string) bool {
 	if path == "" {
 		return false
 	}
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return !strings.HasSuffix(strings.ToLower(filepath.Base(path)), ".part")
+}
+
+// isStagedMediaFile is the whitelist used only when guessing a fallback file.
+func isStagedMediaFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	name := filepath.Base(path)
+	if strings.HasSuffix(strings.ToLower(name), ".part") {
+		return false
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+	return stagedMediaExtensions[ext]
 }
 
 func (s *YtDlpService) downloadArgs(req models.DownloadRequest) []string {
@@ -649,8 +743,8 @@ func (s *YtDlpService) baseArgsForURL(rawURL string, noCookies bool) []string {
 		// requiring an external JavaScript runtime on the user's machine.
 		"--no-js-runtimes",
 	}
-	if s.ffmpegPath != "" {
-		args = append(args, "--ffmpeg-location", s.ffmpegPath)
+	if ffmpegPath := s.ffmpegBin(); ffmpegPath != "" {
+		args = append(args, "--ffmpeg-location", ffmpegPath)
 	}
 	if st.Proxy != "" {
 		args = append(args, "--proxy", st.Proxy)
@@ -789,22 +883,21 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		args = append(args, "-f", videoFormatSelector(req))
 		if embedSubtitles {
 			args = append(args, "--merge-output-format", "mkv", "--remux-video", "mkv")
+		} else if models.NormalizeContainer(req.Container) == "mkv" {
+			// A single stream keeps its native extension; remux it so the
+			// selected MKV container is what the user actually receives.
+			args = append(args, "--remux-video", "mkv")
 		}
 	default: // VIDEO_AUDIO
 		args = append(args, "-f", videoAudioSelector(req))
-		merge := req.Container
-		if merge == "" {
-			merge = "mp4"
-		}
+		merge := models.NormalizeContainer(req.Container)
 		// MKV is the reliable VLC target for text subtitles and also supports
 		// the multiple audio streams requested by the multi-audio selector.
+		// The container is otherwise exactly what the user chose: a VP9
+		// preference or an Opus track must not silently turn MP4 into MKV.
 		multiAudio := requiresMultiAudio(req)
 		if multiAudio || embedSubtitles {
 			merge = "mkv"
-		} else if req.PreferVP9 || strings.Contains(strings.ToLower(req.AudioFormatID), "opus") {
-			if merge == "mp4" {
-				merge = "mkv"
-			}
 		}
 		if multiAudio {
 			args = append(args, "--audio-multistreams")
@@ -814,10 +907,10 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 			args = append(args, "--remux-video", "mkv")
 		}
 	}
-	if req.PreferVP9 && req.Mode != models.ModeAudioOnly && req.VideoFormatID == "" {
-		// Sorting is preferable to filtering: it keeps VP9 as the first choice
-		// while retaining a working fallback when a video has no VP9 stream.
-		args = append(args, "--format-sort", "vcodec:vp9,res,fps,acodec:opus,acodec:m4a")
+	if models.PreferVP9ForContainer(req.Container, req.PreferVP9) && req.Mode != models.ModeAudioOnly && req.VideoFormatID == "" {
+		// Resolution is compared before the codec, so a 2160p H.264 stream is
+		// preferred over a 1080p VP9 one; at equal resolution VP9 still wins.
+		args = append(args, "--format-sort", "res,fps,vcodec:vp9,acodec:opus,acodec:m4a")
 	}
 
 	if req.Mode != models.ModeAudioOnly {
@@ -873,19 +966,31 @@ func videoFormatSelector(req models.DownloadRequest) string {
 		return req.VideoFormatID
 	}
 	filters := videoFilters(req)
-	sel := preferredVideoSelector(req, "bv", filters)
-	if filters != "" {
-		return sel + "/bv/b" + filters + "/b"
+	container := models.NormalizeContainer(req.Container)
+	selector := "bv"
+	switch container {
+	case "mp4":
+		selector = "bv[ext=mp4]"
+	case "webm":
+		selector = "bv[ext=webm]"
 	}
-	return sel + "/bv/b"
+	preferred := preferredVideoSelector(req, selector, filters)
+	if filters != "" {
+		return preferred + "/bv" + filters + "/b" + filters + "/b"
+	}
+	return preferred + "/bv/b"
 }
 
-// bestAudioSelector prefers Opus at the highest available bitrate, then any bestaudio.
-func bestAudioSelector(req models.DownloadRequest) string {
-	if selector := audioFormatSelector(req); selector != "ba/b" {
-		return selector
+// containerVideoAudioSelector builds the container-specific video+audio
+// selector. The audio selector is a full format expression such as
+// "ba[ext=m4a]" or "ba[acodec=opus]", because yt-dlp's ext field for Opus
+// audio is "webm", not "opus".
+func containerVideoAudioSelector(container, audioSelector string, req models.DownloadRequest, filters string) string {
+	video := preferredVideoSelector(req, "bv*[ext="+container+"]", "")
+	if filters != "" {
+		return video + filters + "+" + audioSelector + "/bv*" + filters + "+ba/b" + filters + "/b"
 	}
-	return "ba/b"
+	return video + "+" + audioSelector + "/bv*+ba/b"
 }
 
 func videoAudioSelector(req models.DownloadRequest) string {
@@ -926,26 +1031,23 @@ func videoAudioSelector(req models.DownloadRequest) string {
 	// is only for automatic selection; otherwise a user-selected format could be
 	// silently replaced by the MP4 fallback expression.
 	if req.VideoFormatID != "" || req.AudioFormatID != "" {
-		a := bestAudioSelector(req)
+		a := audioFormatSelector(req)
 		if req.VideoFormatID != "" {
 			return video + "+" + a + "/" + video + "/b"
 		}
 		return video + "+" + a + "/b"
 	}
 
-	// mp4 container: prefer H.264 + AAC (reliable merge into .mp4).
-	// Otherwise allow any best video + best audio, with a progressive fallback.
-	a := bestAudioSelector(req)
+	// mp4 container: keep an mp4 video + m4a audio when available.
+	// webm container: prefer a webm video + Opus. Otherwise allow any best video
+	// + best audio, with a progressive fallback.
+	a := audioFormatSelector(req)
 	filters := videoFilters(req)
-	if req.Container == "mp4" && !req.PreferVP9 {
-		mp4Video := "bv*[ext=mp4]"
-		if req.Is360 {
-			mp4Video += "[protocol=m3u8_native]"
-		}
-		if filters != "" {
-			return mp4Video + filters + "+ba[ext=m4a]/bv*" + filters + "+ba/b" + filters + "/b"
-		}
-		return mp4Video + "+ba[ext=m4a]/bv*+ba/b"
+	switch models.NormalizeContainer(req.Container) {
+	case "mp4":
+		return containerVideoAudioSelector("mp4", "ba[ext=m4a]", req, filters)
+	case "webm":
+		return containerVideoAudioSelector("webm", "ba[acodec=opus]", req, filters)
 	}
 
 	if filters != "" {
@@ -1077,7 +1179,7 @@ func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, s.ytdlpPath, args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
+	cmd := exec.CommandContext(ctx, s.binary(), args...) // #nosec G204 -- exec.CommandContext passes argv directly without a shell.
 	prepareBackgroundCmd(cmd)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -1087,11 +1189,7 @@ func (s *YtDlpService) run(ctx context.Context, args []string) ([]byte, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		msg := strings.TrimSpace(diagnostics.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return nil, fmt.Errorf("%s", msg)
+		return nil, ytDlpRunError(diagnostics.String(), err)
 	}
 	return stdout.Bytes(), nil
 }
@@ -1391,18 +1489,43 @@ func isUnavailableProgressValue(value string) bool {
 	}
 }
 
-func newestFile(dir string) string {
-	var newest string
-	var newestMod time.Time
-	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
+// stagedMediaExtensions are containers yt-dlp can write as a final download.
+// .part and sidecars such as .srt, .vtt, .jpg, .webp, .json, and .description
+// are deliberately absent.
+var stagedMediaExtensions = map[string]bool{
+	"3gp": true, "aac": true, "avi": true, "flac": true, "flv": true,
+	"m2ts": true, "m4a": true, "m4b": true, "m4v": true, "mkv": true,
+	"mov": true, "mp3": true, "mp4": true, "mpeg": true, "mpg": true,
+	"ogg": true, "opus": true, "ts": true, "wav": true, "webm": true,
+	"wmv": true,
+}
+
+// singleStagedMediaFile is the only fallback allowed when yt-dlp did not
+// report after_move:filepath. It returns the sole media file and refuses to
+// guess when the staging directory holds none or several.
+func singleStagedMediaFile(dir string) (string, error) {
+	var files []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info == nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
-		if info.ModTime().After(newestMod) {
-			newestMod = info.ModTime()
-			newest = path
+		if isStagedMediaFile(path) {
+			files = append(files, path)
 		}
 		return nil
 	})
-	return newest
+	if err != nil {
+		return "", fmt.Errorf("read staging tree: %w", err)
+	}
+	switch len(files) {
+	case 1:
+		return files[0], nil
+	case 0:
+		return "", errors.New("no media file in staging tree")
+	default:
+		return "", fmt.Errorf("%d media files in staging tree", len(files))
+	}
 }

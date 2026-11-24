@@ -63,7 +63,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - Press **Enter** in the Home URL field to start analysis without clicking the
   Analyze button.
 - Direct one-click HD downloads for TikTok, Instagram, X/Twitter, and YouTube Shorts. The metadata card provides the download action without a quality picker and without browser cookies.
-- ARY Plus episode and series downloads through the bundled yt-dlp plugin.
+- ARY Plus episode and series downloads through the native resolver, with a user-provided API key.
 - Video thumbnail loading with bounded, validated image decoding.
 - Human-readable media title, uploader, duration, extractor, audio-track, and subtitle information.
 - Playlist selection with select-all, select-none, persistent per-entry checkboxes, and batch progress.
@@ -167,14 +167,28 @@ stream size, the app estimates it from bitrate and duration and displays `~`.
 
 ### Runtime requirements
 
-- Release packages include `yt-dlp`, `ffmpeg`, and `ffprobe` for extraction,
-  merging, post-processing, and conversion.
+- Release packages include `yt-dlp`. Windows and Linux packages also include
+  static `ffmpeg`/`ffprobe` for merging, post-processing, and conversion.
+- macOS packages use the FFmpeg you install or one installed from the Home
+  setup card (Homebrew or a pinned static build). The app finds it in its managed
+  directory, on `PATH`, or through the path field in Settings → Tools.
 - Local source runs can use the bundled platform directory or matching tools on
   `PATH`.
 - Internet access for media extraction and remote thumbnails.
 - On Linux, the native MyGo runtime libraries required by the distribution format, including GTK/WebKit dependencies where they are not already installed by the package manager.
 
-The application first looks for bundled tools and then falls back to `PATH`. See [Bundled tools](#bundled-tools).
+The application uses an explicit path from Settings first. For FFmpeg and
+FFprobe it then prefers its app-managed install, then the bundled copy, then the
+system; for yt-dlp it uses the newest of the app-managed, bundled, and system
+copies. See [Bundled tools](#bundled-tools) and
+[docs/design/tool-resolution.md](docs/design/tool-resolution.md).
+
+yt-dlp can be updated from Settings → Tools without reinstalling the app. The
+update is fetched from a signed manifest channel, verified with an embedded
+Ed25519 public key, checksum-checked, self-checked, and installed into the
+app-managed directory with rollback. The default source is a
+`yt-dlp-channel` release; a fork can point the update-source field at its own
+channel. See [Signed yt-dlp updates](docs/design/yt-dlp-updates.md).
 
 ## Install prebuilt releases
 
@@ -199,7 +213,9 @@ The Linux archive may require GTK/WebKit runtime packages on minimal distributio
 
 ### macOS
 
-The current release workflow targets macOS arm64. Local builds can also target macOS amd64 when run on a compatible environment. The workflow bundles yt-dlp and an architecture-matched FFmpeg/FFprobe Homebrew bottle. Unsigned/ad-hoc builds may be blocked by Gatekeeper; configure Developer ID signing and notarization for public distribution.
+The current release workflow targets macOS arm64. Local builds can also target macOS amd64 when run on a compatible environment. The macOS package bundles yt-dlp only; it uses the FFmpeg you install (Homebrew, MacPorts, or a static build) so the installer stays small and a broken bundled dylib cannot shadow a working copy.
+
+**No paid Apple Developer account is required to use the app.** Release packages are ad-hoc signed unless the repository owner configures Developer ID signing. On first launch, open **System Settings → Privacy & Security**, scroll to **Security**, and choose **Open Anyway** for Video Downloader (or right-click the app and choose **Open**). Locally built apps are not quarantined. Developer ID signing and notarization are optional for maintainers; see [BUILD.md](BUILD.md#macos).
 
 ## Run from source
 
@@ -272,49 +288,66 @@ resources/
     ffmpeg
     ffprobe
   linux-arm64/bin/       # same three Unix executables
-  darwin-amd64/bin/      # yt-dlp plus Homebrew FFmpeg/FFprobe in releases
-  darwin-arm64/bin/      # yt-dlp plus Homebrew FFmpeg/FFprobe in releases
+  darwin-amd64/bin/      # yt-dlp only; FFmpeg comes from the system
+  darwin-arm64/bin/      # yt-dlp only; FFmpeg comes from the system
 ```
 
 The helper script supports these environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `YTDLP_TAG` | `2026.08.19` | yt-dlp release tag used for the download URL |
+| `YTDLP_TAG` | `2026.11.23` | yt-dlp release tag used for the download URL |
 | `FFMPEG_RELEASE` | `latest` | FFmpeg-Builds release tag used for the archive URL |
 
 Example:
 
 ```bash
-YTDLP_TAG=2026.08.19 FFMPEG_RELEASE=latest bash scripts/fetch-tools.sh linux-amd64
+YTDLP_TAG=2026.11.23 FFMPEG_RELEASE=latest bash scripts/fetch-tools.sh linux-amd64
 ```
 
 The script requires `curl`, `unzip`, and `tar`/`xz` as appropriate for the
-target archive. It verifies SHA-256 checksums before extracting only `yt-dlp`,
-`ffmpeg`, and `ffprobe` into the platform resource directory, and marks Unix
-executables as executable. Update the recorded checksum when intentionally
-upgrading a helper release. macOS FFmpeg/FFprobe are installed from a
-architecture-matched Homebrew bottle; the release workflow runs those jobs on
-matching macOS runners.
+target archive. It verifies SHA-256 checksums before extracting `yt-dlp` (and
+`ffmpeg`/`ffprobe` on Windows/Linux) into the platform resource directory, and
+marks Unix executables as executable. Update the recorded checksum when
+intentionally upgrading a helper release. macOS intentionally downloads only
+yt-dlp; the app uses the FFmpeg installed on the machine.
 
-The release currently does not bundle a JavaScript runtime. yt-dlp may use a
-runtime such as Deno for some modern YouTube challenge flows; install a
-supported runtime on `PATH` when yt-dlp reports that one is required, or use a
-source build with the runtime available. This behavior should be verified
-against the target sites before promising complete extractor parity.
+The app does not bundle a JavaScript runtime and currently passes
+`--no-js-runtimes` to yt-dlp. The configured YouTube clients returned the same
+format count and maximum resolution with and without that flag on the tested
+public video, a Shorts URL, and a 360-candidate URL; the flag stays until a URL
+shows a real difference. A system yt-dlp installed with Homebrew, MacPorts, or
+on `PATH` is used automatically when it is newer than the bundled copy, and a
+custom binary path can be set in Settings → Tools.
 
-Runtime lookup order is:
+Runtime lookup order:
 
-1. Packaged `resources/bin/<tool>`.
-2. Packaged `resources/<tool>`.
-3. Development `resources/<os>-<arch>/bin/<tool>`.
-4. A matching executable on `PATH`.
+For `ffmpeg` and `ffprobe`:
+
+1. Explicit path from Settings → Tools (only when the binary runs).
+2. App-managed directory: `~/Library/Application Support/VideoDownloader/bin`
+   on macOS, the platform config directory elsewhere.
+3. Packaged `resources/bin/<tool>` or `resources/<tool>` (Windows/Linux).
+4. Development `resources/<os>-<arch>/bin/<tool>`.
+5. System `PATH` and common package-manager directories.
+
+For `yt-dlp`, an explicit path wins, then the highest version among the
+app-managed, bundled, and system copies. Ties prefer the app-managed copy, then
+the bundled copy, then the system copy. A system copy that is newer than the
+bundled one is used automatically; `youtube-dl` is the last fallback.
+
+On macOS, the Home setup card can install FFmpeg with Homebrew or a pinned
+static build. The download is verified, self-checked, and moved into the
+managed directory only after both binaries pass; failures and cancellation keep
+the previous working copy. Nothing is installed without a click, and nothing
+writes inside the `.app` bundle.
 
 The bundled ARY Plus extractor supports aryplus.tv episode URLs and series
 playlists, multi-quality HLS streams up to 4K, thumbnails, and DRM checks.
-ARY Plus API access uses the built-in public client key; you may override it
-with `ARYPLUS_API_KEY` and set `ARYPLUS_API_BASE` to use a compatible API
-endpoint.
+ARY Plus is optional and requires your own API key: add it in Settings →
+ARY Plus (stored locally and excluded from exported settings) or set
+`ARYPLUS_API_KEY`. No third-party key is bundled. `ARYPLUS_API_BASE` can
+select a compatible API endpoint.
 
 ## Using the application
 
@@ -419,8 +452,12 @@ Current settings fields are:
 | `multi_audio` | boolean | Enable all available audio tracks by default. |
 | `embed_thumbnail` | boolean | Embed thumbnail metadata where supported. |
 | `embed_metadata` | boolean | Embed metadata and chapters. |
-| `prefer_vp9_video` | boolean | Prefer VP9 video when available; yt-dlp falls back automatically when it is unavailable. |
+| `prefer_vp9_video` | boolean | Prefer VP9 in MKV/WebM. MP4 stays MP4; the selected container is always honored. |
 | `theme_mode` | string | `system`, `dark`, or `light`. |
+| `ytdlp_path` | string | Optional yt-dlp binary path; empty selects automatically. |
+| `ffmpeg_path` | string | Optional FFmpeg binary path; empty selects automatically. |
+| `ytdlp_manifest_url` | string | Optional yt-dlp update channel base URL; empty uses the project channel. |
+| `aryplus_api_key` | string | Optional user-provided ARY Plus API key; stored locally and excluded from exports. |
 
 The Settings page is the preferred way to edit this file. It validates numeric ranges, proxy schemes, headers, cookies-browser input, subtitle languages, and theme values before writing.
 
@@ -528,11 +565,15 @@ CGO_ENABLED=1 go test -race ./... -count=1
 
 ### `yt-dlp` or FFmpeg is not found
 
-- Install the tools and ensure they are on `PATH`.
-- Or run `bash scripts/fetch-tools.sh <platform>` and rebuild.
+- On macOS, use the Home setup card to install FFmpeg with Homebrew or a
+  pinned static build. The macOS package does not bundle FFmpeg.
+- Or install the tools and ensure they are on `PATH`.
+- Or set the binary path in Settings → Tools, then choose **Check again**.
+- Or run `bash scripts/fetch-tools.sh <platform>` and rebuild (Windows/Linux
+  bundles FFmpeg; macOS downloads yt-dlp only).
 - Confirm the expected file exists under `resources/<platform>/bin`.
-- Restart the app after changing resources.
-- Check the Settings dependency section for the resolved path.
+- Check the Settings dependency section for the resolved path and the bundled
+  version, if any.
 
 ### Subtitle downloads return HTTP 429
 
@@ -545,6 +586,19 @@ This is intentional. MKV is the reliable container for several audio streams and
 ### The format list is empty
 
 Initial analysis is intentionally lightweight. Open the format section and choose **Load available formats**. This runs the full yt-dlp format extraction only when needed.
+
+### macOS blocks the app after download
+
+Ad-hoc signed builds are not notarized. To open one:
+
+1. Double-click the app once and dismiss the warning.
+2. Open **System Settings → Privacy & Security**.
+3. In the **Security** section, choose **Open Anyway** for Video Downloader.
+4. Confirm **Open**.
+
+If the button is not shown, right-click the app in Finder and choose **Open**.
+This is expected for an ad-hoc build; no Apple Developer account is needed.
+Developer ID signing and notarization are optional for maintainers.
 
 ### Windows SmartScreen warns about the installer
 
@@ -561,7 +615,8 @@ Check these first:
 - The tag exactly matches `mygo.json`.
 - The GitHub runner can access GitHub release assets.
 - `curl`, `unzip`, and `xz-utils` are installed on the build runner.
-- The requested FFmpeg asset exists for the selected platform.
+- The requested FFmpeg asset exists for the selected Windows/Linux platform.
+  macOS intentionally has no FFmpeg asset.
 - The helper script was invoked with Bash.
 - The Go tool is available through `go tool mygo`; do not replace it with an unpinned `go install ...@latest` command.
 

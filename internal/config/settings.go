@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -28,6 +29,11 @@ type AppSettings struct {
 	EmbedMetadata       bool              `json:"embed_metadata"`
 	PreferVP9Video      bool              `json:"prefer_vp9_video"`
 	ThemeMode           string            `json:"theme_mode"` // system | dark | light
+	Language            string            `json:"language"`   // system | en | zh-Hans
+	YtDlpPath           string            `json:"ytdlp_path,omitempty"`
+	FFmpegPath          string            `json:"ffmpeg_path,omitempty"`
+	YtDlpManifestURL    string            `json:"ytdlp_manifest_url,omitempty"`
+	ARYPlusAPIKey       string            `json:"aryplus_api_key,omitempty"`
 }
 
 func DefaultSettings() AppSettings {
@@ -44,6 +50,7 @@ func DefaultSettings() AppSettings {
 		EmbedMetadata:       true,
 		PreferVP9Video:      true,
 		ThemeMode:           "system",
+		Language:            "system",
 		CustomHeaders:       map[string]string{},
 	}
 }
@@ -122,9 +129,16 @@ func (r *SettingsRepository) Load() (AppSettings, error) {
 	if s.ThemeMode == "" {
 		s.ThemeMode = def.ThemeMode
 	}
+	if s.Language == "" {
+		s.Language = def.Language
+	}
 	if s.CustomHeaders == nil {
 		s.CustomHeaders = map[string]string{}
 	}
+	s.YtDlpPath = strings.TrimSpace(s.YtDlpPath)
+	s.FFmpegPath = strings.TrimSpace(s.FFmpegPath)
+	s.YtDlpManifestURL = strings.TrimSpace(s.YtDlpManifestURL)
+	s.ARYPlusAPIKey = strings.TrimSpace(s.ARYPlusAPIKey)
 	return s, nil
 }
 
@@ -134,6 +148,10 @@ func (r *SettingsRepository) Save(s AppSettings) error {
 	if r.initErr != nil {
 		return r.initErr
 	}
+	s.YtDlpPath = strings.TrimSpace(s.YtDlpPath)
+	s.FFmpegPath = strings.TrimSpace(s.FFmpegPath)
+	s.YtDlpManifestURL = strings.TrimSpace(s.YtDlpManifestURL)
+	s.ARYPlusAPIKey = strings.TrimSpace(s.ARYPlusAPIKey)
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode settings: %w", err)

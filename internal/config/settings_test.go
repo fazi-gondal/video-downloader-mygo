@@ -142,3 +142,19 @@ func TestSettingsRepositorySaveFailurePreservesDestination(t *testing.T) {
 		t.Fatalf("temporary settings files remain after failure: %v", leftovers)
 	}
 }
+
+func TestSettingsRepositoryRoundTripsAryPlusKey(t *testing.T) {
+	repo := &SettingsRepository{path: filepath.Join(t.TempDir(), "settings.json")}
+	settings := DefaultSettings()
+	settings.ARYPlusAPIKey = "  user-provided-key  "
+	if err := repo.Save(settings); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := repo.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.ARYPlusAPIKey != "user-provided-key" {
+		t.Fatalf("ARYPlusAPIKey = %q, want the trimmed key", got.ARYPlusAPIKey)
+	}
+}

@@ -10,18 +10,32 @@ import (
 )
 
 func main() {
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
 	a := app.New()
+	mygo.App.OnSecondInstance(func([]string, string) {
+		a.ShowMainWindow()
+	})
 	mygo.App.OnWindowAllClosed(func() {
 		// If the user chose "Minimize to tray", the window is hidden but the
-		// tray icon keeps the app alive. Do NOT shut down in that case.
+		// tray icon keeps the app alive. Do NOT quit in that case.
 		if a.HasTray() {
 			return
 		}
-		a.Shutdown()
+		// A listener keeps the process alive with no window. Quit instead, so
+		// clicking the Dock icon launches a fresh window rather than
+		// activating a windowless process. main's deferred Shutdown still runs
+		// after Run returns.
+		mygo.App.Quit()
 	})
 	defer a.Shutdown()
 
 	mygo.App.WhenReady(func() {
+		// Declare the app's languages so MyGo's Locale() picks the user's
+		// preferred one among them; English is the source language.
+		mygo.App.SetLanguages("en", "zh-Hans")
+		a.SetInitialLocale()
 		// Default title bar = native OS chrome (Windows caption buttons,
 		// macOS traffic lights, Linux window decorations). No Frameless,
 		// no TitleBarHidden.

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Download yt-dlp + static ffmpeg/ffprobe into resources/<platform>/bin/
+# Download yt-dlp for every platform, and static ffmpeg/ffprobe for
+# Windows/Linux, into resources/<platform>/bin/
 # Usage:
 #   ./scripts/fetch-tools.sh                  # host platform only
 #   ./scripts/fetch-tools.sh all              # every platform (for CI packaging)
@@ -10,10 +11,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RES="$ROOT/resources"
 
 # Pin versions and checksums for reproducible builds (bump together when updating).
-# FFmpeg-Builds publishes its rolling build under the immutable-by-content
-# checksum below; a changed rolling asset fails verification until its checksum
-# is deliberately updated here.
-YTDLP_TAG="${YTDLP_TAG:-2026.08.19}"
+# FFmpeg-Builds publishes a checksums.sha256 file with each release; the script
+# verifies against that published checksum, falling back to the pinned values
+# below when the release file is unavailable.
+YTDLP_TAG="${YTDLP_TAG:-2026.11.23}"
 FFMPEG_RELEASE="${FFMPEG_RELEASE:-latest}"
 
 fetch() {
@@ -73,21 +74,20 @@ ytdlp_url() {
 ytdlp_sha256() {
 	local plat="$1"
 	case "$plat" in
-		windows-amd64) echo "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a" ;;
-		windows-arm64) echo "05b438997bafc3affdfda9d041353c9d73e04dc842207254b655b0887c4445b0" ;;
-		linux-amd64)   echo "58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a" ;;
-		linux-arm64)   echo "b16e4dab368a816cd05d477d698a605a6ae87ccee1c8ffd38fa21d7254141fcc" ;;
-		darwin-amd64|darwin-arm64) echo "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202" ;;
+		windows-amd64) echo "622ed48023cac1daa52a3bf3a6ac38f03514de214b5f0fa069389fd0f6d17e5c" ;;
+		windows-arm64) echo "9bb324203d02970b70dab6c9f6a48bd5ff185db7859d562cdacd1dc655ccb72a" ;;
+		linux-amd64)   echo "249ddb058234276bc449b9cd9492aad9f133bda5923c61a9e39983ae114ef17d" ;;
+		linux-arm64)   echo "fb847a2e4a9ddc8cf5fcfb4bb7f42ba8969ecf72068def0278074f9d300bd13c" ;;
+		darwin-amd64|darwin-arm64) echo "57654854886d0398a798895aadf5173e2749fbb5e249b9f3728022ab376e11fb" ;;
 		*) echo "" ;;
 	esac
 }
 
 # --- ffmpeg static builds ---
-# Windows/Linux: yt-dlp/FFmpeg-Builds
-# macOS: Homebrew's verified ffmpeg bottle on a runner matching the target
-# architecture. The yt-dlp build repository does not publish macOS archives.
+# Windows/Linux: yt-dlp/FFmpeg-Builds. macOS deliberately bundles no FFmpeg:
+# the app uses a Homebrew or user-supplied build there, so the installer stays
+# small and a broken bundled dylib cannot shadow a working system copy.
 #
-# Practical approach: yt-dlp's recommended static builds
 # https://github.com/yt-dlp/FFmpeg-Builds/releases
 
 ffmpeg_archive_url() {
@@ -98,7 +98,6 @@ ffmpeg_archive_url() {
     windows-arm64) echo "$base/ffmpeg-master-latest-winarm64-gpl.zip" ;;
     linux-amd64)   echo "$base/ffmpeg-master-latest-linux64-gpl.tar.xz" ;;
     linux-arm64)   echo "$base/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" ;;
-    darwin-amd64|darwin-arm64) echo "" ;; # installed from a verified Homebrew bottle
     *) echo ""; return 1 ;;
   esac
 }
@@ -130,30 +129,6 @@ get_ffmpeg_expected_sha256() {
   ffmpeg_sha256 "$plat"
 }
 
-install_macos_ffmpeg() {
-  local plat="$1"
-  local dir="$RES/$plat/bin"
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "  ERROR: brew is required to bundle FFmpeg for $plat" >&2
-    return 1
-  fi
-
-  # Homebrew verifies the bottle checksum before installing it. The runner
-  # must match the target architecture (macos-13 for amd64, macos-latest for
-  # arm64); otherwise an incompatible executable could be packaged silently.
-  brew install --formula ffmpeg
-  local prefix
-  prefix="$(brew --prefix ffmpeg)"
-  [ -x "$prefix/bin/ffmpeg" ] || { echo "  ERROR: brew ffmpeg missing" >&2; return 1; }
-  [ -x "$prefix/bin/ffprobe" ] || { echo "  ERROR: brew ffprobe missing" >&2; return 1; }
-  cp -f "$prefix/bin/ffmpeg" "$dir/ffmpeg"
-  cp -f "$prefix/bin/ffprobe" "$dir/ffprobe"
-  chmod +x "$dir/ffmpeg" "$dir/ffprobe"
-  echo "  ok: Homebrew FFmpeg $("$dir/ffmpeg" -version | awk 'NR==1 {print $3}')"
-  echo "  sha256: $(sha256 "$dir/ffmpeg")  ffmpeg"
-  echo "  sha256: $(sha256 "$dir/ffprobe")  ffprobe"
-}
-
 install_platform() {
   local plat="$1"
   local dir="$RES/$plat/bin"
@@ -178,7 +153,10 @@ install_platform() {
   # ffmpeg
   case "$plat" in
     darwin-amd64|darwin-arm64)
-      install_macos_ffmpeg "$plat"
+      # Remove a stale bundle from an older checkout so local packaging cannot
+      # silently ship FFmpeg after the release rule changed.
+      rm -f "$dir/ffmpeg" "$dir/ffprobe"
+      echo "  (skip ffmpeg — macOS uses the user's FFmpeg to keep the package small)"
       echo "  ok: $(ls -1 "$dir")"
       return 0
       ;;
