@@ -1851,7 +1851,8 @@ func (a *App) friendlyError(message string) string {
 		return a.tr("errors.rateLimited")
 	case strings.Contains(lower, "no space left"):
 		return a.tr("errors.disk")
-	case strings.Contains(lower, "network"), strings.Contains(lower, "timed out"), strings.Contains(lower, "connection"):
+	case strings.Contains(lower, "network"), strings.Contains(lower, "timed out"), strings.Contains(lower, "connection"),
+		strings.Contains(lower, "load page: request failed"):
 		return a.tr("errors.network")
 	}
 	return message

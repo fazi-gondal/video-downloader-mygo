@@ -1,9 +1,15 @@
 package services
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const siteExtractFixture = `<!doctype html><html><head>
@@ -146,4 +152,58 @@ func TestParseSitePagePrefersPrimaryForSamePlayer(t *testing.T) {
 	if len(result.Videos) != 1 || strings.Contains(result.Videos[0].MediaURL, "265") {
 		t.Fatalf("Videos = %#v, want only the primary stream", result.Videos)
 	}
+}
+
+func TestExtractSiteMediaRejectsNonPublicURLs(t *testing.T) {
+	for _, raw := range []string{
+		"http://127.0.0.1/",
+		"http://192.168.1.1/",
+		"http://localhost/",
+		"http://[::1]/",
+		"http://169.254.1.1/",
+	} {
+		if _, err := ExtractSiteMedia(t.Context(), raw); err == nil {
+			t.Fatalf("ExtractSiteMedia(%q) succeeded, want a non-public rejection", raw)
+		}
+	}
+}
+
+func TestExtractSiteMediaFetchesPublicPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, siteExtractFixture)
+	}))
+	defer server.Close()
+
+	result, err := extractSiteMediaWithClient(t.Context(), "http://93.184.216.34/page", publicSiteTestClient(server))
+	if err != nil {
+		t.Fatalf("extractSiteMediaWithClient: %v", err)
+	}
+	if len(result.Videos) != 2 {
+		t.Fatalf("Videos = %d, want 2", len(result.Videos))
+	}
+}
+
+func TestExtractSiteMediaRejectsPrivateRedirect(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://127.0.0.1/secret", http.StatusFound)
+	}))
+	defer server.Close()
+
+	_, err := extractSiteMediaWithClient(t.Context(), "http://93.184.216.34/page", publicSiteTestClient(server))
+	if err == nil {
+		t.Fatal("private redirect was not rejected")
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), server.URL) {
+		t.Fatalf("error includes redirect details: %v", err)
+	}
+}
+
+func publicSiteTestClient(server *httptest.Server) *http.Client {
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	target := server.Listener.Addr().String()
+	dialer := &net.Dialer{}
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, target)
+	}
+	return &http.Client{Transport: transport, Timeout: 5 * time.Second}
 }

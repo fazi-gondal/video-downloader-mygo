@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fazi-gondal/video-downloader-mygo/internal/netguard"
 )
 
 // SiteVideo is one playable stream recovered from a webpage.
@@ -92,9 +94,19 @@ func unescapeJSString(s string) string {
 // text inside an inline script; pages that encrypt the config are reported as
 // unsupported.
 func ExtractSiteMedia(ctx context.Context, pageURL string) (*SiteExtractResult, error) {
+	return extractSiteMediaWithClient(ctx, pageURL, &http.Client{Timeout: 30 * time.Second})
+}
+
+// extractSiteMediaWithClient is the same fetch with an injectable client for
+// tests. The client is always wrapped with the public-destination guard, so a
+// redirect to a loopback, private, or link-local address is rejected.
+func extractSiteMediaWithClient(ctx context.Context, pageURL string, client *http.Client) (*SiteExtractResult, error) {
 	parsed, err := parseHTTPURL(pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid page URL: %w", err)
+	}
+	if !netguard.ValidURL(parsed) {
+		return nil, errors.New("page URL is not public")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
@@ -105,11 +117,16 @@ func ExtractSiteMedia(ctx context.Context, pageURL string) (*SiteExtractResult, 
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	requestClient := netguard.WrapClient(client)
+	resp, err := requestClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("load page: %w", err)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// net/http errors can embed redirect targets and signed query values.
+		return nil, errors.New("load page: request failed")
 	}
+	defer requestClient.CloseIdleConnections()
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("load page: HTTP %d", resp.StatusCode)
