@@ -323,6 +323,9 @@ func New() *App {
 			a.toastUntil = time.Now().Add(5 * time.Second)
 		}
 	}
+	if a.resumeStore != nil {
+		go a.cleanupStaleStagingDirs()
+	}
 	a.refreshToolChecks()
 	go a.pumpDownloadEvents()
 	go a.pumpConversionEvents()
@@ -362,6 +365,59 @@ func (a *App) restoreResumableDownloads() error {
 	a.tasks = a.manager.Snapshots()
 	a.tasksMu.Unlock()
 	return nil
+}
+
+// cleanupStaleStagingDirs removes old .mygo-download-* directories left by a
+// crash. It only scans known output directories, never follows symlinks, and
+// keeps every staging directory recorded by a paused task. Errors are logged;
+// startup and downloads are never blocked.
+func (a *App) cleanupStaleStagingDirs() {
+	if a.resumeStore == nil {
+		return
+	}
+	snapshots, err := a.resumeStore.Load()
+	if err != nil {
+		log.Printf("staging cleanup: cannot read paused downloads: %v", err)
+		return
+	}
+
+	dirs := []string{a.settingsSnapshot().DownloadDir}
+	keep := make(map[string]bool)
+	addSnapshot := func(snapshot models.DownloadTaskSnapshot) {
+		if snapshot.StagingDir != "" {
+			keep[snapshot.StagingDir] = true
+		}
+		if snapshot.Request.OutputDir != "" {
+			dirs = append(dirs, snapshot.Request.OutputDir)
+		}
+	}
+	for _, snapshot := range snapshots {
+		addSnapshot(snapshot)
+	}
+	if a.manager != nil {
+		for _, snapshot := range a.manager.Snapshots() {
+			addSnapshot(snapshot)
+		}
+	}
+	if a.history != nil {
+		entries, err := a.history.List(500)
+		if err != nil {
+			log.Printf("staging cleanup: read history: %v", err)
+		}
+		for _, entry := range entries {
+			if entry.OutputDir != "" {
+				dirs = append(dirs, entry.OutputDir)
+			}
+		}
+	}
+
+	result := services.CleanupStaleStagingDirs(dirs, keep, services.DefaultStaleStagingAge, time.Now())
+	for _, path := range result.Removed {
+		log.Printf("staging cleanup: removed %s", path)
+	}
+	for _, err := range result.Errors {
+		log.Printf("staging cleanup: %v", err)
+	}
 }
 
 func (a *App) persistResumableDownloads() error {
