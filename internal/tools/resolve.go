@@ -2,12 +2,13 @@
 package tools
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +20,20 @@ var (
 	once   sync.Once
 	resDir string
 
-	healthMu sync.Mutex
-	healthOK = map[string]bool{}
+	probeMu         sync.Mutex
+	probeCache      = map[string]probeResult{}
+	probeGeneration uint64
+
+	overrideMu sync.RWMutex
+	overrides  = map[string]string{}
 )
+
+type probeResult struct {
+	ok       bool
+	version  string
+	timedOut bool
+	expires  time.Time
+}
 
 // ResourcesDir is the app's resources folder (Contents/Resources on macOS,
 // next to the executable elsewhere, or ./resources under go run).
@@ -87,23 +99,88 @@ func lookIn(dir, name string) string {
 	// directory. MyGo flattens the matching directory in packaged apps, so
 	// try the flat layout first and the platform layout second.
 	for _, p := range candidates {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		if fileExists(p) {
 			return p
 		}
 	}
 	return ""
 }
 
-// Resolve returns the first usable path of a tool: bundled resource first,
-// then the usual install directories, then PATH. A bundled binary can be
-// present but broken (for example a dynamically linked FFmpeg whose Homebrew
-// libraries are gone), so each candidate is probed by running it before it is
-// accepted.
-func Resolve(name string) string {
-	for _, p := range resolveCandidates(name) {
-		if p == "" {
-			continue
+func bundledPath(name string) string {
+	return lookIn(ResourcesDir(), name)
+}
+
+// SetOverrides records optional user-provided binary paths. Empty values
+// restore automatic selection. The override is only used after it passes the
+// same runtime probe as every other candidate, so a mistyped path cannot
+// disable a working tool. Call ResetProbeCache when the binary at an existing
+// path may have changed.
+func SetOverrides(ytdlpPath, ffmpegPath string) {
+	overrideMu.Lock()
+	overrides = map[string]string{}
+	if p := strings.TrimSpace(ytdlpPath); p != "" {
+		overrides["yt-dlp"] = p
+	}
+	if p := strings.TrimSpace(ffmpegPath); p != "" {
+		overrides["ffmpeg"] = p
+	}
+	overrideMu.Unlock()
+}
+
+func overrideFor(name string) string {
+	overrideMu.RLock()
+	defer overrideMu.RUnlock()
+	if p := overrides[name]; p != "" {
+		return p
+	}
+	if name == "ffprobe" {
+		if ffmpegPath := overrides["ffmpeg"]; ffmpegPath != "" {
+			// A user-supplied ffmpeg normally ships with its ffprobe sibling.
+			return filepath.Join(filepath.Dir(ffmpegPath), exeName("ffprobe"))
 		}
+	}
+	return ""
+}
+
+// ResolveFast chooses an existing candidate without running it. Startup uses
+// this so a slow Gatekeeper scan of yt-dlp cannot delay the window; an async
+// tool check replaces the paths after probing.
+func ResolveFast(name string) string {
+	if p := overrideFor(name); p != "" && fileExists(p) {
+		return p
+	}
+	if p := bundledPath(name); p != "" {
+		return p
+	}
+	for _, p := range installedCandidates(name) {
+		if fileExists(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
+}
+
+// Resolve returns the first usable tool path. An explicit user override wins;
+// otherwise a usable bundled binary is preferred, and finally the usual
+// package-manager directories and PATH. A bundled binary can be present but
+// broken (for example a dynamically linked FFmpeg whose Homebrew libraries are
+// gone), so each candidate is run before it is accepted.
+func Resolve(name string) string {
+	if strings.EqualFold(name, "yt-dlp") {
+		return resolveYtDlp()
+	}
+	if p := overrideFor(name); p != "" && usable(p, name) {
+		return p
+	}
+	if p := bundledPath(name); p != "" && usable(p, name) {
+		return p
+	}
+	for _, p := range installedCandidates(name) {
 		if usable(p, name) {
 			return p
 		}
@@ -111,20 +188,83 @@ func Resolve(name string) string {
 	return ""
 }
 
-func resolveCandidates(name string) []string {
+// resolveYtDlp applies one extra rule: when both a bundled and a system yt-dlp
+// are usable, the newer version wins. yt-dlp's extractors change frequently,
+// and a site fix should not require a new app release or a reinstall.
+func resolveYtDlp() string {
+	if p := chooseYtDlp(overrideFor("yt-dlp"), bundledPath("yt-dlp"), installedCandidates("yt-dlp")); p != "" {
+		return p
+	}
+	for _, p := range installedCandidates("youtube-dl") {
+		if usable(p, "youtube-dl") {
+			return p
+		}
+	}
+	return ""
+}
+
+func chooseYtDlp(override, bundled string, installed []string) string {
+	if override != "" && usable(override, "yt-dlp") {
+		return override
+	}
+
+	system := ""
+	systemVersion := ""
+	for _, p := range installed {
+		if p == "" || p == bundled {
+			continue
+		}
+		result := probe(p, "yt-dlp")
+		if !result.ok {
+			continue
+		}
+		if system == "" || compareVersions(result.version, systemVersion) > 0 {
+			system = p
+			systemVersion = result.version
+		}
+	}
+
+	var bundledProbe probeResult
+	if bundled != "" {
+		bundledProbe = probe(bundled, "yt-dlp")
+	}
+	bundledOK := bundled != "" && (bundledProbe.ok || bundledProbe.timedOut)
+	switch {
+	case bundledOK && system != "":
+		if !bundledProbe.ok {
+			// A verified system binary is better than an unverified bundled one.
+			return system
+		}
+		if compareVersions(systemVersion, bundledProbe.version) > 0 {
+			return system
+		}
+		return bundled
+	case bundledOK:
+		return bundled
+	default:
+		return system
+	}
+}
+
+func installedCandidates(name string) []string {
 	var out []string
-	if p := lookIn(ResourcesDir(), name); p != "" {
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
 		out = append(out, p)
 	}
 	if runtime.GOOS != "windows" {
 		// A packaged app launched from Finder has launchd's minimal PATH, so
 		// look in the common package manager directories explicitly.
 		for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"} {
-			out = append(out, filepath.Join(dir, exeName(name)))
+			add(filepath.Join(dir, exeName(name)))
 		}
 	}
 	if p, err := exec.LookPath(name); err == nil {
-		out = append(out, p)
+		add(p)
 	}
 	return out
 }
@@ -132,67 +272,154 @@ func resolveCandidates(name string) []string {
 // ResetProbeCache forgets cached health probes, so Check again can pick up a
 // tool installed while the app is running.
 func ResetProbeCache() {
-	healthMu.Lock()
-	healthOK = map[string]bool{}
-	healthMu.Unlock()
+	probeMu.Lock()
+	probeCache = map[string]probeResult{}
+	probeGeneration++
+	probeMu.Unlock()
 }
 
 // usable reports whether path runs, caching the answer per binary. The probe
 // runs outside the lock so unrelated tools resolve concurrently.
 func usable(path, name string) bool {
-	healthMu.Lock()
-	ok, found := healthOK[path]
-	healthMu.Unlock()
-	if found {
-		return ok
-	}
-
-	ok, timedOut := runVersion(path, name)
-	if timedOut {
-		// A probe that ran out of time says nothing about the binary; let a
-		// later call try again instead of disabling the tool for the session.
-		return false
-	}
-
-	healthMu.Lock()
-	healthOK[path] = ok
-	healthMu.Unlock()
-	return ok
+	return probe(path, name).ok
 }
 
-func runVersion(path, name string) (ok bool, timedOut bool) {
+func probe(path, name string) probeResult {
+	key := strings.ToLower(name) + "\x00" + path
+	probeMu.Lock()
+	cached, found := probeCache[key]
+	generation := probeGeneration
+	probeMu.Unlock()
+	if found && (cached.expires.IsZero() || time.Now().Before(cached.expires)) {
+		return cached
+	}
+
+	version, ok, timedOut := runVersion(path, name)
+	result := probeResult{ok: ok, version: version, timedOut: timedOut}
+	if timedOut {
+		// A probe that ran out of time says nothing about the binary; retry
+		// later instead of disabling the tool for the session, but do not
+		// re-run an expensive probe on every Resolve in the meantime.
+		result.expires = time.Now().Add(30 * time.Second)
+	}
+
+	probeMu.Lock()
+	// A reset (Check again) started while this probe was running; do not
+	// repopulate the new cache with a result from the old generation.
+	if generation == probeGeneration {
+		probeCache[key] = result
+	}
+	probeMu.Unlock()
+	return result
+}
+
+func probeVersion(path, name string) string {
+	return probe(path, name).version
+}
+
+func runVersion(path, name string) (version string, ok bool, timedOut bool) {
 	flag := "-version"
-	timeout := 3 * time.Second
+	timeout := 5 * time.Second
 	switch strings.ToLower(name) {
 	case "yt-dlp", "youtube-dl":
 		flag = "--version"
 		// The yt-dlp launcher is a large self-extracting binary; a cold start
-		// under Gatekeeper or a loaded machine can take several seconds.
-		timeout = 15 * time.Second
+		// under Gatekeeper or a loaded machine can take many seconds.
+		timeout = 30 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, flag)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	// A launcher can spawn a child that inherits stdout/stderr; without
+	// WaitDelay, Run would wait for that child even after the deadline.
+	cmd.WaitDelay = 2 * time.Second
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
 	err := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
-		return false, true
+		return "", false, true
 	}
-	return err == nil, false
+	line := strings.TrimSpace(strings.SplitN(out.String(), "\n", 2)[0])
+	if err != nil {
+		// A loader error such as "dyld: …" is not a version.
+		return "", false, false
+	}
+	return shortVersion(name, line), true, false
 }
 
-func FFmpeg() string  { return Resolve("ffmpeg") }
-func FFprobe() string { return Resolve("ffprobe") }
+func shortVersion(name, line string) string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	switch strings.ToLower(name) {
+	case "ffmpeg", "ffprobe":
+		if len(fields) >= 3 && strings.EqualFold(fields[1], "version") {
+			return fields[2]
+		}
+	}
+	if len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
+}
+
+func compareVersions(a, b string) int {
+	ap, bp := versionNumbers(a), versionNumbers(b)
+	for i := 0; i < len(ap) || i < len(bp); i++ {
+		var av, bv int
+		if i < len(ap) {
+			av = ap[i]
+		}
+		if i < len(bp) {
+			bv = bp[i]
+		}
+		if av != bv {
+			if av > bv {
+				return 1
+			}
+			return -1
+		}
+	}
+	return 0
+}
+
+func versionNumbers(version string) []int {
+	var numbers []int
+	var current strings.Builder
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		n, err := strconv.Atoi(current.String())
+		if err == nil {
+			numbers = append(numbers, n)
+		}
+		current.Reset()
+	}
+	for _, r := range version {
+		if r >= '0' && r <= '9' {
+			current.WriteRune(r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return numbers
+}
+
+func FFmpeg() string      { return Resolve("ffmpeg") }
+func FFprobe() string     { return Resolve("ffprobe") }
+func FFmpegFast() string  { return ResolveFast("ffmpeg") }
+func FFprobeFast() string { return ResolveFast("ffprobe") }
+func YtDlpFast() string   { return ResolveFast("yt-dlp") }
 
 func YtDlp() string {
-	if p := Resolve("yt-dlp"); p != "" {
+	if p := resolveYtDlp(); p != "" {
 		return p
 	}
 	// A probe can fail on a cold start; the bundled binary is still a better
 	// guess than the bare name, which a Finder-launched app cannot find on PATH.
-	if p := lookIn(ResourcesDir(), "yt-dlp"); p != "" {
+	if p := bundledPath("yt-dlp"); p != "" {
 		return p
 	}
-	return Resolve("youtube-dl")
+	return ""
 }

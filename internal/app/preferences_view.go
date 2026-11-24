@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -188,7 +189,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			ui.Checkbox(c, &a.settingsDraft.EmbedThumbnail, a.tr("Embed thumbnail"))
 			ui.Checkbox(c, &a.settingsDraft.EmbedMetadata, a.tr("Embed metadata and chapters"))
 			ui.Checkbox(c, &a.settingsDraft.MultiAudio, a.tr("Download multiple audio tracks when available"))
-			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, a.tr("Prefer VP9 video when available (fallback automatically)"))
+			ui.Checkbox(c, &a.settingsDraft.PreferVP9Video, a.tr("Prefer VP9 video in MKV or WebM"))
 		})
 
 		settingsCard(c, appui.IconVideo, a.tr("Subtitles"), a.tr("Use comma-separated yt-dlp language codes, such as en, ur, or all."), func() {
@@ -214,12 +215,7 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 		})
 
 		settingsCard(c, appui.IconAbout, a.tr("settings.tools.title"), a.tr("settings.tools.desc"), func() {
-			for _, check := range a.toolChecks {
-				a.toolStatusRow(c, check)
-			}
-			if ui.Button(c, a.tr("settings.tools.recheck")).Clicked() {
-				a.refreshToolChecks()
-			}
+			a.toolsCardContent(c)
 		})
 
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
@@ -253,7 +249,9 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 					a.showToast(a.tr("Could not save settings: ") + err.Error())
 					return
 				}
-				a.applySettings(saved)
+				if a.applySettings(saved) {
+					a.refreshToolChecks()
+				}
 				a.settingsRateLimit = strconv.Itoa(saved.RateLimitKbps)
 				a.settingsSubtitleLangs = strings.Join(saved.SubtitleLangs, ", ")
 				if a.manager != nil {
@@ -437,26 +435,89 @@ func techChip(c *ui.Context, label string) {
 	})
 }
 
-// toolStatusRow shows one dependency with its version, path, and health.
+// toolsCardContent renders the path fields, health rows, and re-check action.
+// It is kept separate so the settings snapshot can render the card alone.
+func (a *App) toolsCardContent(c *ui.Context) {
+	t := c.Theme()
+	ui.Text(c, a.tr("settings.tools.pathsDesc")).FontSize(11).TextColor(t.TextMuted)
+	settingsLabeledInput(c, a.tr("settings.tools.ytdlpPath"), &a.settingsDraft.YtDlpPath, a.tr("settings.tools.autoPath"))
+	settingsLabeledInput(c, a.tr("settings.tools.ffmpegPath"), &a.settingsDraft.FFmpegPath, a.tr("settings.tools.autoPath"))
+	if len(a.toolChecks) == 0 {
+		ui.Text(c, a.tr("settings.tools.checking")).FontSize(11).TextColor(t.TextMuted)
+	}
+	for _, check := range a.toolChecks {
+		a.toolStatusRow(c, check)
+	}
+	if ui.Button(c, a.tr("settings.tools.recheck")).Clicked() {
+		// Apply the paths currently shown in the form before probing, so
+		// "Check again" validates the value the user just typed rather than
+		// the last saved value. Saving still persists it.
+		a.appliedYtDlpPath = a.settingsDraft.YtDlpPath
+		a.appliedFFmpegPath = a.settingsDraft.FFmpegPath
+		tools.SetOverrides(a.settingsDraft.YtDlpPath, a.settingsDraft.FFmpegPath)
+		a.refreshToolChecks()
+	}
+}
+
+// toolStatusRow shows one dependency with its effective version, where it came
+// from, and the bundled version when a newer system copy won.
 func (a *App) toolStatusRow(c *ui.Context, check tools.Check) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, check.Name).FontSize(13).Bold().Width(70)
-		ui.Column(c).Grow(1).Gap(1).Children(func() {
-			version := check.Version
-			if version == "" {
-				version = "—"
+	ui.Column(c).FillWidth().Gap(3).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Children(func() {
+			ui.Text(c, check.Name).FontSize(13).Bold().Width(70)
+			ui.Column(c).Grow(1).Gap(1).Children(func() {
+				version := check.Version
+				if version == "" {
+					version = "—"
+				}
+				source := ""
+				switch check.Source {
+				case tools.SourceBuiltin:
+					source = a.tr("settings.tools.source.builtin")
+				case tools.SourceSystem:
+					source = a.tr("settings.tools.source.system")
+				case tools.SourceCustom:
+					source = a.tr("settings.tools.source.custom")
+				}
+				label := version
+				if source != "" {
+					label = a.tr("settings.tools.versionSource", map[string]any{"version": version, "source": source})
+				}
+				ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Ellipsis("…")
+				if check.Path != "" {
+					ui.Text(c, check.Path).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
+				}
+				if check.BuiltinPath != "" && check.BuiltinVersion != "" && check.Path != check.BuiltinPath {
+					ui.Text(c, a.tr("settings.tools.builtinVersion", map[string]any{"version": check.BuiltinVersion})).FontSize(11).TextColor(t.TextMuted)
+				}
+			})
+			status, color := a.tr("settings.tools.missing"), t.Danger
+			switch {
+			case check.OK:
+				status, color = a.tr("settings.tools.available"), t.Success
+			case check.TimedOut:
+				status, color = a.tr("settings.tools.timedOut"), t.Accent
+			case check.Path != "":
+				status, color = a.tr("settings.tools.unavailable"), t.Danger
 			}
-			ui.Text(c, version).FontSize(12).TextColor(t.TextMuted).Ellipsis("…")
-			ui.Text(c, check.Path).FontSize(11).TextColor(t.TextMuted).Ellipsis("…")
+			ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(999).Padding(4, 10).Children(func() {
+				ui.Text(c, status).FontSize(11).Bold().TextColor(color)
+			})
 		})
-		status, color := a.tr("settings.tools.missing"), t.Danger
-		if check.OK {
-			status, color = a.tr("settings.tools.available"), t.Success
+		if check.TimedOut {
+			ui.Text(c, a.tr("settings.tools.timedOutDetail")).FontSize(11).TextColor(t.TextMuted)
 		}
-		ui.Row(c).Background(t.SurfaceHover).Border(1, t.Border).Radius(999).Padding(4, 10).Children(func() {
-			ui.Text(c, status).FontSize(11).Bold().TextColor(color)
-		})
+		if check.Name == "ffmpeg" && !check.OK && !check.TimedOut {
+			hint := a.tr("settings.tools.ffmpegHint")
+			if runtime.GOOS == "darwin" {
+				hint = a.tr("settings.tools.ffmpegHintMac")
+			}
+			ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted)
+		}
+		if check.OverridePath != "" && !check.OverrideOK {
+			ui.Text(c, a.tr("settings.tools.overrideUnavailable", map[string]any{"path": check.OverridePath})).FontSize(11).TextColor(t.Danger)
+		}
 	})
 }
 
@@ -488,21 +549,27 @@ func languageOnlySettings(settings config.AppSettings, language string) config.A
 	return settings
 }
 
-// refreshToolChecks probes the bundled tools off the render thread; yt-dlp can
-// take seconds to answer on a cold start.
+// refreshToolChecks probes the tools off the render thread; yt-dlp can take
+// seconds to answer on a cold start. The running services adopt the resolved
+// paths immediately; already-running processes keep their own copy.
 func (a *App) refreshToolChecks() {
+	a.toolCheckToken++
+	token := a.toolCheckToken
 	go func() {
 		tools.ResetProbeCache()
 		checks := tools.ProbeAll()
-		if !a.hasUnfinishedDownloads() {
+		a.updateOnMain(func() {
+			if a.toolCheckToken != token {
+				return
+			}
+			ffmpegPath := ""
 			if a.ffmpeg != nil {
 				a.ffmpeg.RefreshTools()
+				ffmpegPath = a.ffmpeg.Path()
 			}
 			if a.ytdlp != nil {
-				a.ytdlp.RefreshBinary()
+				a.ytdlp.RefreshPaths(ffmpegPath)
 			}
-		}
-		a.updateOnMain(func() {
 			a.toolChecks = checks
 			a.invalidate()
 		})

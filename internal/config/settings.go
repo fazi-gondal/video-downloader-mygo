@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -29,6 +30,8 @@ type AppSettings struct {
 	PreferVP9Video      bool              `json:"prefer_vp9_video"`
 	ThemeMode           string            `json:"theme_mode"` // system | dark | light
 	Language            string            `json:"language"`   // system | en | zh-Hans
+	YtDlpPath           string            `json:"ytdlp_path,omitempty"`
+	FFmpegPath          string            `json:"ffmpeg_path,omitempty"`
 }
 
 func DefaultSettings() AppSettings {
@@ -130,6 +133,8 @@ func (r *SettingsRepository) Load() (AppSettings, error) {
 	if s.CustomHeaders == nil {
 		s.CustomHeaders = map[string]string{}
 	}
+	s.YtDlpPath = strings.TrimSpace(s.YtDlpPath)
+	s.FFmpegPath = strings.TrimSpace(s.FFmpegPath)
 	return s, nil
 }
 
@@ -139,6 +144,8 @@ func (r *SettingsRepository) Save(s AppSettings) error {
 	if r.initErr != nil {
 		return r.initErr
 	}
+	s.YtDlpPath = strings.TrimSpace(s.YtDlpPath)
+	s.FFmpegPath = strings.TrimSpace(s.FFmpegPath)
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode settings: %w", err)

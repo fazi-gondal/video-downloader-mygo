@@ -22,7 +22,7 @@ const ffprobeDurationTimeout = 5 * time.Second
 
 // FFmpegService locates ffmpeg/ffprobe and runs conversions.
 type FFmpegService struct {
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	ffmpeg     string
 	ffprobe    string
 	remuxMu    sync.Mutex
@@ -38,31 +38,40 @@ type remuxCacheEntry struct {
 
 func NewFFmpegService() *FFmpegService {
 	return &FFmpegService{
-		ffmpeg:     tools.FFmpeg(),
-		ffprobe:    tools.FFprobe(),
+		ffmpeg:     tools.FFmpegFast(),
+		ffprobe:    tools.FFprobeFast(),
 		remuxCache: make(map[string]remuxCacheEntry),
 	}
 }
 
-// RefreshTools re-resolves tools that were missing at startup, so installing
-// FFmpeg while the app runs can be picked up by Check again.
+// RefreshTools re-resolves both binaries after a settings or Check again
+// action. Existing conversions keep the path they started with; the next job
+// uses the freshly selected one.
 func (s *FFmpegService) RefreshTools() {
+	ffmpegPath := tools.FFmpeg()
+	ffprobePath := tools.FFprobe()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ffmpeg == "" {
-		s.ffmpeg = tools.FFmpeg()
-	}
-	if s.ffprobe == "" {
-		s.ffprobe = tools.FFprobe()
-	}
+	// Clear stale custom paths too: a removed binary must not leave
+	// Available() true and a removed --ffmpeg-location on the next download.
+	s.ffmpeg = ffmpegPath
+	s.ffprobe = ffprobePath
+	s.mu.Unlock()
+}
+
+func (s *FFmpegService) paths() (string, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ffmpeg, s.ffprobe
 }
 
 func (s *FFmpegService) Available() bool {
-	return s.ffmpeg != ""
+	ffmpegPath, _ := s.paths()
+	return ffmpegPath != ""
 }
 
 func (s *FFmpegService) Path() string {
-	return s.ffmpeg
+	ffmpegPath, _ := s.paths()
+	return ffmpegPath
 }
 
 // CanRemux conservatively reports whether a container-only conversion is a
@@ -89,8 +98,8 @@ func (s *FFmpegService) CanRemux(source, target string) bool {
 	}
 
 	result := fallbackRemuxDecision(srcExt, targetExt)
-	if s.ffprobe != "" {
-		if streams, ok := s.probeCodecs(source); ok {
+	if _, ffprobePath := s.paths(); ffprobePath != "" {
+		if streams, ok := s.probeCodecs(source, ffprobePath); ok {
 			result = codecsFitContainer(streams, targetExt)
 		}
 	}
@@ -103,7 +112,8 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s.ffmpeg == "" {
+	ffmpegPath, _ := s.paths()
+	if ffmpegPath == "" {
 		return "", fmt.Errorf("ffmpeg not found on PATH")
 	}
 	req := job.Request
@@ -143,7 +153,7 @@ func (s *FFmpegService) Convert(ctx context.Context, job *models.ConversionJob, 
 		<-watchExited
 	}()
 
-	cmd := s.commandContext(runCtx, s.ffmpeg, args...)
+	cmd := s.commandContext(runCtx, ffmpegPath, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -274,12 +284,13 @@ func fileMissing(path string) bool {
 }
 
 func (s *FFmpegService) probeDuration(ctx context.Context, path string) float64 {
-	if s.ffprobe == "" {
+	_, ffprobePath := s.paths()
+	if ffprobePath == "" {
 		return 0
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, ffprobeDurationTimeout)
 	defer cancel()
-	cmd := s.commandContext(probeCtx, s.ffprobe, "-v", "error", "-show_entries", "format=duration", // #nosec G204 -- ffprobe receives argv directly without a shell.
+	cmd := s.commandContext(probeCtx, ffprobePath, "-v", "error", "-show_entries", "format=duration", // #nosec G204 -- ffprobe receives argv directly without a shell.
 		"-of", "default=noprint_wrappers=1:nokey=1", path)
 	out, err := cmd.Output()
 	if err != nil {
@@ -293,7 +304,8 @@ func (s *FFmpegService) probeDuration(ctx context.Context, path string) float64 
 // It returns an error when FFprobe is unavailable, the file has no video
 // stream, or the probe fails.
 func (s *FFmpegService) ProbeVideoHeight(ctx context.Context, path string) (int, error) {
-	if s.ffprobe == "" {
+	_, ffprobePath := s.paths()
+	if ffprobePath == "" {
 		return 0, fmt.Errorf("ffprobe not found")
 	}
 	if ctx == nil {
@@ -301,7 +313,7 @@ func (s *FFmpegService) ProbeVideoHeight(ctx context.Context, path string) (int,
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, ffprobeDurationTimeout)
 	defer cancel()
-	cmd := s.commandContext(probeCtx, s.ffprobe,
+	cmd := s.commandContext(probeCtx, ffprobePath,
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=height",
@@ -484,12 +496,15 @@ type probeResult struct {
 	Streams []probedStream `json:"streams"`
 }
 
-func (s *FFmpegService) probeCodecs(path string) ([]probedStream, bool) {
+func (s *FFmpegService) probeCodecs(path, ffprobePath string) ([]probedStream, bool) {
+	if ffprobePath == "" {
+		return nil, false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext( // #nosec G204 -- ffprobe receives argv directly without a shell.
 		ctx,
-		s.ffprobe,
+		ffprobePath,
 		"-v", "error",
 		"-show_entries", "stream=codec_type,codec_name",
 		"-of", "json",

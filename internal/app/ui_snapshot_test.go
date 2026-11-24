@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
+	"github.com/fazi-gondal/video-downloader-mygo/internal/tools"
 	appui "github.com/fazi-gondal/video-downloader-mygo/internal/ui"
 )
 
@@ -47,15 +48,51 @@ func TestSettingsSnapshot(t *testing.T) {
 	a.settingsDraft.Language = "zh-Hans"
 	a.maxConcurrentSlider = 4
 	a.concurrentFragmentsSlider = 1
+	a.toolChecks = []tools.Check{
+		{
+			Name: "yt-dlp", Path: "/opt/homebrew/bin/yt-dlp", Version: "2026.11.23", OK: true,
+			BuiltinPath:    "/Applications/Video Downloader.app/Contents/Resources/bin/yt-dlp",
+			BuiltinVersion: "2026.08.19", Source: "system",
+		},
+		{Name: "ffmpeg", Path: "/opt/homebrew/bin/ffmpeg", Version: "7.1.1", OK: true, Source: "system"},
+		{Name: "ffprobe", Path: "/opt/homebrew/bin/ffprobe", Version: "7.1.1", OK: true, Source: "system"},
+	}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(appui.NativeTheme(true))
 		ui.Column(c).Grow(1).Padding(16).Children(func() {
 			a.refinedSettingsPage(c)
 		})
-	}, 980, 900)
+	}, 980, 1400)
 	tt.SetLocale("zh-Hans")
 	tt.Frame()
 	saveSnapshot(t, "settings.png", tt)
+}
+
+func TestToolsCardSnapshot(t *testing.T) {
+	a := &App{lang: "zh-Hans", settingsDraft: config.DefaultSettings()}
+	a.toolChecks = []tools.Check{
+		{
+			Name: "yt-dlp", Path: "/opt/homebrew/bin/yt-dlp", Version: "2026.11.23", OK: true,
+			BuiltinPath:    "/Applications/Video Downloader.app/Contents/Resources/bin/yt-dlp",
+			BuiltinVersion: "2026.08.19", Source: "system",
+		},
+		{Name: "ffmpeg", Path: "/opt/homebrew/bin/ffmpeg", OK: false, Source: "system"},
+		{
+			Name: "ffprobe", Path: "", OK: false, TimedOut: true,
+			OverridePath: "/Users/me/bin/ffprobe", OverrideOK: false,
+		},
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(appui.NativeTheme(true))
+		ui.Column(c).Grow(1).Padding(16).Children(func() {
+			settingsCard(c, appui.IconAbout, a.tr("settings.tools.title"), a.tr("settings.tools.desc"), func() {
+				a.toolsCardContent(c)
+			})
+		})
+	}, 900, 470)
+	tt.SetLocale("zh-Hans")
+	tt.Frame()
+	saveSnapshot(t, "tools.png", tt)
 }
 
 func heroShell(a *App, dark bool) func(c *ui.Context) {

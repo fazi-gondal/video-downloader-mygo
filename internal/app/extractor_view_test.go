@@ -204,6 +204,14 @@ func TestFriendlyErrorMapsFFmpegFailure(t *testing.T) {
 	if !strings.Contains(got, "FFmpeg") {
 		t.Fatalf("friendly error = %q", got)
 	}
+	dyld := a.friendlyError("dyld: Library not loaded: /opt/homebrew/opt/x265/lib/libx265.dylib")
+	if !strings.Contains(dyld, "FFmpeg") {
+		t.Fatalf("dyld error = %q", dyld)
+	}
+	missing := a.friendlyError(`start yt-dlp: exec: "yt-dlp": executable file not found in $PATH`)
+	if !strings.Contains(missing, "yt-dlp") {
+		t.Fatalf("missing yt-dlp error = %q", missing)
+	}
 	if !strings.Contains(a.friendlyError("ERROR: Unsupported URL: https://example.com"), "网页提取") {
 		t.Fatalf("unsupported error not mapped")
 	}

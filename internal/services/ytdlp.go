@@ -81,12 +81,12 @@ func (b *boundedDiagnosticBuffer) String() string {
 }
 
 func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtDlpService {
-	yt := tools.YtDlp()
+	yt := tools.YtDlpFast()
 	if yt == "" {
 		yt = "yt-dlp" // hope PATH at exec time
 	}
 	if ffmpegPath == "" {
-		ffmpegPath = tools.FFmpeg()
+		ffmpegPath = tools.FFmpegFast()
 	}
 	return &YtDlpService{
 		ffmpegPath: ffmpegPath,
@@ -95,22 +95,26 @@ func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtD
 	}
 }
 
-func (s *YtDlpService) Bin() string {
+// RefreshPaths re-resolves yt-dlp and adopts the ffmpeg path selected by the
+// tool check in one lock, so a download cannot observe a new yt-dlp with an
+// old ffmpeg path. Existing processes are unaffected. An empty resolution
+// replaces a removed custom path with the bare command name instead of leaving
+// a stale path behind.
+func (s *YtDlpService) RefreshPaths(ffmpegPath string) {
+	ytdlpPath := tools.YtDlp()
+	if ytdlpPath == "" {
+		ytdlpPath = "yt-dlp"
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ytdlpPath
+	s.ytdlpPath = ytdlpPath
+	s.ffmpegPath = ffmpegPath
+	s.mu.Unlock()
 }
 
-// RefreshBinary re-resolves yt-dlp when it was missing at startup, so a tool
-// installed while the app runs can be picked up by Check again.
-func (s *YtDlpService) RefreshBinary() {
+func (s *YtDlpService) ffmpegBin() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ytdlpPath == "" || s.ytdlpPath == "yt-dlp" {
-		if p := tools.YtDlp(); p != "" {
-			s.ytdlpPath = p
-		}
-	}
+	return s.ffmpegPath
 }
 
 func (s *YtDlpService) binary() string {
@@ -325,8 +329,20 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		defer close(taskWatchExited)
 		select {
 		case <-task.Done():
-			cancel()
-			_ = cmd.Process.Kill()
+			// Kill the whole process group, not just yt-dlp: during merge,
+			// remux, subtitle, and audio-extraction phases yt-dlp's ffmpeg
+			// child inherits the output pipe and would otherwise keep running.
+			if !watchFinished(taskWatchDone) {
+				terminateProcessTree(cmd)
+				cancel()
+			}
+		case <-ctx.Done():
+			// A caller that cancels the context directly gets the same
+			// process-tree cleanup, not just CommandContext's leader kill.
+			if !watchFinished(taskWatchDone) {
+				terminateProcessTree(cmd)
+				cancel()
+			}
 		case <-taskWatchDone:
 		}
 	}()
@@ -442,6 +458,15 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		}
 	}
 	return lastPath, nil
+}
+
+func watchFinished(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
 }
 
 // DiscardPartial removes a paused task's staging directory when the user
@@ -662,8 +687,8 @@ func (s *YtDlpService) baseArgsForURL(rawURL string, noCookies bool) []string {
 		// requiring an external JavaScript runtime on the user's machine.
 		"--no-js-runtimes",
 	}
-	if s.ffmpegPath != "" {
-		args = append(args, "--ffmpeg-location", s.ffmpegPath)
+	if ffmpegPath := s.ffmpegBin(); ffmpegPath != "" {
+		args = append(args, "--ffmpeg-location", ffmpegPath)
 	}
 	if st.Proxy != "" {
 		args = append(args, "--proxy", st.Proxy)
@@ -802,22 +827,21 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 		args = append(args, "-f", videoFormatSelector(req))
 		if embedSubtitles {
 			args = append(args, "--merge-output-format", "mkv", "--remux-video", "mkv")
+		} else if models.NormalizeContainer(req.Container) == "mkv" {
+			// A single stream keeps its native extension; remux it so the
+			// selected MKV container is what the user actually receives.
+			args = append(args, "--remux-video", "mkv")
 		}
 	default: // VIDEO_AUDIO
 		args = append(args, "-f", videoAudioSelector(req))
-		merge := req.Container
-		if merge == "" {
-			merge = "mp4"
-		}
+		merge := models.NormalizeContainer(req.Container)
 		// MKV is the reliable VLC target for text subtitles and also supports
 		// the multiple audio streams requested by the multi-audio selector.
+		// The container is otherwise exactly what the user chose: a VP9
+		// preference or an Opus track must not silently turn MP4 into MKV.
 		multiAudio := requiresMultiAudio(req)
 		if multiAudio || embedSubtitles {
 			merge = "mkv"
-		} else if req.PreferVP9 || strings.Contains(strings.ToLower(req.AudioFormatID), "opus") {
-			if merge == "mp4" {
-				merge = "mkv"
-			}
 		}
 		if multiAudio {
 			args = append(args, "--audio-multistreams")
@@ -827,10 +851,10 @@ func (s *YtDlpService) buildDownloadArgs(req models.DownloadRequest) []string {
 			args = append(args, "--remux-video", "mkv")
 		}
 	}
-	if req.PreferVP9 && req.Mode != models.ModeAudioOnly && req.VideoFormatID == "" {
-		// Sorting is preferable to filtering: it keeps VP9 as the first choice
-		// while retaining a working fallback when a video has no VP9 stream.
-		args = append(args, "--format-sort", "vcodec:vp9,res,fps,acodec:opus,acodec:m4a")
+	if models.PreferVP9ForContainer(req.Container, req.PreferVP9) && req.Mode != models.ModeAudioOnly && req.VideoFormatID == "" {
+		// Resolution is compared before the codec, so a 2160p H.264 stream is
+		// preferred over a 1080p VP9 one; at equal resolution VP9 still wins.
+		args = append(args, "--format-sort", "res,fps,vcodec:vp9,acodec:opus,acodec:m4a")
 	}
 
 	if req.Mode != models.ModeAudioOnly {
@@ -886,19 +910,31 @@ func videoFormatSelector(req models.DownloadRequest) string {
 		return req.VideoFormatID
 	}
 	filters := videoFilters(req)
-	sel := preferredVideoSelector(req, "bv", filters)
-	if filters != "" {
-		return sel + "/bv/b" + filters + "/b"
+	container := models.NormalizeContainer(req.Container)
+	selector := "bv"
+	switch container {
+	case "mp4":
+		selector = "bv[ext=mp4]"
+	case "webm":
+		selector = "bv[ext=webm]"
 	}
-	return sel + "/bv/b"
+	preferred := preferredVideoSelector(req, selector, filters)
+	if filters != "" {
+		return preferred + "/bv" + filters + "/b" + filters + "/b"
+	}
+	return preferred + "/bv/b"
 }
 
-// bestAudioSelector prefers Opus at the highest available bitrate, then any bestaudio.
-func bestAudioSelector(req models.DownloadRequest) string {
-	if selector := audioFormatSelector(req); selector != "ba/b" {
-		return selector
+// containerVideoAudioSelector builds the container-specific video+audio
+// selector. The audio selector is a full format expression such as
+// "ba[ext=m4a]" or "ba[acodec=opus]", because yt-dlp's ext field for Opus
+// audio is "webm", not "opus".
+func containerVideoAudioSelector(container, audioSelector string, req models.DownloadRequest, filters string) string {
+	video := preferredVideoSelector(req, "bv*[ext="+container+"]", "")
+	if filters != "" {
+		return video + filters + "+" + audioSelector + "/bv*" + filters + "+ba/b" + filters + "/b"
 	}
-	return "ba/b"
+	return video + "+" + audioSelector + "/bv*+ba/b"
 }
 
 func videoAudioSelector(req models.DownloadRequest) string {
@@ -939,26 +975,23 @@ func videoAudioSelector(req models.DownloadRequest) string {
 	// is only for automatic selection; otherwise a user-selected format could be
 	// silently replaced by the MP4 fallback expression.
 	if req.VideoFormatID != "" || req.AudioFormatID != "" {
-		a := bestAudioSelector(req)
+		a := audioFormatSelector(req)
 		if req.VideoFormatID != "" {
 			return video + "+" + a + "/" + video + "/b"
 		}
 		return video + "+" + a + "/b"
 	}
 
-	// mp4 container: prefer H.264 + AAC (reliable merge into .mp4).
-	// Otherwise allow any best video + best audio, with a progressive fallback.
-	a := bestAudioSelector(req)
+	// mp4 container: keep an mp4 video + m4a audio when available.
+	// webm container: prefer a webm video + Opus. Otherwise allow any best video
+	// + best audio, with a progressive fallback.
+	a := audioFormatSelector(req)
 	filters := videoFilters(req)
-	if req.Container == "mp4" && !req.PreferVP9 {
-		mp4Video := "bv*[ext=mp4]"
-		if req.Is360 {
-			mp4Video += "[protocol=m3u8_native]"
-		}
-		if filters != "" {
-			return mp4Video + filters + "+ba[ext=m4a]/bv*" + filters + "+ba/b" + filters + "/b"
-		}
-		return mp4Video + "+ba[ext=m4a]/bv*+ba/b"
+	switch models.NormalizeContainer(req.Container) {
+	case "mp4":
+		return containerVideoAudioSelector("mp4", "ba[ext=m4a]", req, filters)
+	case "webm":
+		return containerVideoAudioSelector("webm", "ba[acodec=opus]", req, filters)
 	}
 
 	if filters != "" {

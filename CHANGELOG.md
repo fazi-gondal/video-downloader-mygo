@@ -14,7 +14,12 @@ All notable user-visible changes are recorded here. Release tags use the version
   language card (follow system / 简体中文 / English) that applies and persists
   immediately. zh-Hant falls back to English.
 - **Tools status** in Settings: yt-dlp, FFmpeg, and FFprobe versions, paths, and
-  health with a re-check that runs off the render thread.
+  health with a re-check that runs off the render thread. The card also shows the
+  bundled version when a newer system yt-dlp is active, and accepts explicit
+  binary paths.
+- A newer system yt-dlp (Homebrew, MacPorts, or `PATH`) is used automatically, so
+  extractor fixes no longer require a new app release or reinstall. The bundled
+  yt-dlp was updated to 2026.11.23.
 - Friendly, localized download errors; failure badges; empty-state actions;
   keyboard navigation shortcuts.
 
@@ -27,8 +32,27 @@ All notable user-visible changes are recorded here. Release tags use the version
   theme toggle moved to the top bar as a sun/moon button.
 - History entries created by the extractor store their source page and
   re-resolve it on retry, so expired direct links no longer fail.
-- macOS packaging uses pinned static FFmpeg/FFprobe builds; the fetch script
-  rejects Homebrew-linked binaries, and bundled tools are probed at runtime.
+- macOS packages no longer bundle FFmpeg/FFprobe. They use the FFmpeg already
+  installed on the machine (or a path set in Settings → Tools), which keeps the
+  installer small and cannot ship a broken bundled dylib. Missing FFmpeg now
+  produces an actionable message instead of a raw loader error.
+- The selected container is authoritative. MP4 stays MP4 even when the VP9
+  preference is on; VP9 applies to MKV/WebM. The UI explains the rule where the
+  container is chosen.
+- VP9 format sorting now compares resolution before codec, so a higher-resolution
+  H.264/AV1 stream is not skipped for a lower-resolution VP9 one.
+
+### Fixed
+
+- Cancelling or pausing a download now terminates yt-dlp's whole process group,
+  including the ffmpeg child used for merging and post-processing. Paused
+  downloads keep their partial files for resume.
+- Settings → Tools **Check again** now applies and validates the path currently
+  shown in the form, not the last saved value.
+- The estimated final size follows the same resolution-first ordering as the
+  download instead of filtering VP9 first.
+- WebM downloads constrain the audio stream with `acodec=opus` instead of the
+  `.opus` extension, which yt-dlp does not use for normal Opus audio.
 
 ## [3.3.0] - 2026-11-20
 

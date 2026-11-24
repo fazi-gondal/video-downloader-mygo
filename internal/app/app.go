@@ -103,6 +103,9 @@ type App struct {
 	extractToken      uint64
 	extractCancel     context.CancelFunc
 	toolChecks        []tools.Check
+	toolCheckToken    uint64
+	appliedYtDlpPath  string
+	appliedFFmpegPath string
 	lang              string
 
 	mode                models.DownloadMode
@@ -219,12 +222,17 @@ func (a *App) publishSettingsDraft() {
 	a.setSettings(a.settingsDraft)
 }
 
-func (a *App) applySettings(settings config.AppSettings) {
+func (a *App) applySettings(settings config.AppSettings) (toolPathsChanged bool) {
 	settings = cloneAppSettings(settings)
+	toolPathsChanged = a.appliedYtDlpPath != settings.YtDlpPath || a.appliedFFmpegPath != settings.FFmpegPath
+	tools.SetOverrides(settings.YtDlpPath, settings.FFmpegPath)
+	a.appliedYtDlpPath = settings.YtDlpPath
+	a.appliedFFmpegPath = settings.FFmpegPath
 	a.setSettings(settings)
 	a.settingsDraft = cloneAppSettings(settings)
 	a.settingsDraftReady = true
 	a.syncPerformanceSliders(settings)
+	return toolPathsChanged
 }
 
 func (a *App) syncPerformanceSliders(settings config.AppSettings) {
@@ -239,12 +247,15 @@ func New() *App {
 	if err != nil {
 		log.Println("settings:", err)
 	}
+	tools.SetOverrides(settings.YtDlpPath, settings.FFmpegPath)
 	ffmpeg := services.NewFFmpegService()
 	a := &App{
 		settingsRepo:         repo,
 		settings:             cloneAppSettings(settings),
 		settingsDraft:        cloneAppSettings(settings),
 		settingsDraftReady:   true,
+		appliedYtDlpPath:     settings.YtDlpPath,
+		appliedFFmpegPath:    settings.FFmpegPath,
 		ffmpeg:               ffmpeg,
 		page:                 PageDashboard,
 		mode:                 models.ModeVideoAudio,
@@ -1280,12 +1291,12 @@ func (a *App) configPanel(c *ui.Context) {
 	if a.mode != models.ModeAudioOnly {
 		// ── Bento: container/fps left | resolution right ──────────────────
 		a.configSectionTitle(c, a.tr("Video options"))
+		containerLocked := a.containerSelectionLocked()
+		ct := a.container
 		ui.Row(c).FillWidth().Gap(20).AlignItems(ui.Start).Children(func() {
 			// left column: container
 			ui.Column(c).Gap(8).Grow(5).Children(func() {
 				ui.Text(c, a.tr("Container")).FontSize(12).TextColor(t.TextMuted)
-				ct := a.container
-				containerLocked := a.containerSelectionLocked()
 				a.chipGroup(c, "container", []string{"mp4", "mkv", "webm"}, ct, containerLocked, func(opt string) {
 					a.container = opt
 					a.preferredContainer = opt
@@ -1315,6 +1326,11 @@ func (a *App) configPanel(c *ui.Context) {
 				})
 			})
 		})
+		if containerLocked {
+			ui.Text(c, a.tr("config.containerLocked")).FontSize(11).TextColor(t.TextMuted)
+		} else if ct == "mp4" && a.settingsDraft.PreferVP9Video {
+			ui.Text(c, a.tr("config.mp4VP9Note")).FontSize(11).TextColor(t.TextMuted)
+		}
 		ui.Box(c).FillWidth().Height(1).Background(t.Border)
 	}
 
@@ -1758,8 +1774,13 @@ func (a *App) configSummaryChip(c *ui.Context, text string) {
 func (a *App) friendlyError(message string) string {
 	lower := strings.ToLower(message)
 	switch {
-	case strings.Contains(lower, "ffmpeg not found"), strings.Contains(lower, "ffmpeg is not installed"):
+	case strings.Contains(lower, "ffmpeg not found"), strings.Contains(lower, "ffmpeg is not installed"),
+		strings.Contains(lower, "dyld"), strings.Contains(lower, "library not loaded"),
+		strings.Contains(lower, "image not found"):
 		return a.tr("errors.ffmpegMissing")
+	case strings.Contains(lower, "yt-dlp") && (strings.Contains(lower, "not found") ||
+		strings.Contains(lower, "executable file not found")):
+		return a.tr("errors.ytdlpMissing")
 	case strings.Contains(lower, "unsupported url"):
 		return a.tr("errors.unsupported")
 	case strings.Contains(lower, "http error 403"), strings.Contains(lower, "403: forbidden"):
@@ -1958,11 +1979,18 @@ func (a *App) startPlaylistDownloads() {
 }
 
 func (a *App) containerSelectionLocked() bool {
-	if a.audioTracksMode == audioTracksAll {
-		return true
+	// Audio-track selection only affects video+audio downloads. The zero mode
+	// is treated as video+audio for older callers.
+	if a.mode == models.ModeVideoAudio || a.mode == "" {
+		if a.audioTracksMode == audioTracksAll {
+			return true
+		}
+		if a.audioTracksMode == audioTracksCustom && countSelected(a.selectedAudio) > 1 {
+			return true
+		}
 	}
-	if a.audioTracksMode == audioTracksCustom && countSelected(a.selectedAudio) > 1 {
-		return true
+	if a.mode == models.ModeAudioOnly {
+		return false
 	}
 	if a.subtitleMode == subtitleModeAll {
 		return true
@@ -2080,12 +2108,12 @@ func (a *App) estimatedFinalSize() (int64, bool) {
 					}
 				}
 				if selected == 0 {
-					addFormat(bestAudioFormatForRequest(m.Formats, a.container, settings.PreferVP9Video))
+					addFormat(bestAudioFormatForRequest(m.Formats, a.container))
 				}
 			default:
 				format := findFormat(m.Formats, a.selectedAudioFormat)
 				if format == nil {
-					format = bestAudioFormatForRequest(m.Formats, a.container, settings.PreferVP9Video)
+					format = bestAudioFormatForRequest(m.Formats, a.container)
 				}
 				addFormat(format)
 			}
@@ -2094,7 +2122,7 @@ func (a *App) estimatedFinalSize() (int64, bool) {
 	if a.mode == models.ModeAudioOnly {
 		format := findFormat(m.Formats, a.selectedAudioFormat)
 		if format == nil {
-			format = bestAudioFormatForRequest(m.Formats, a.container, settings.PreferVP9Video)
+			format = bestAudioFormatForRequest(m.Formats, a.container)
 		}
 		addFormat(format)
 	}
@@ -2158,32 +2186,53 @@ func bestVideoFormatForRequest(formats []models.FormatInfo, maxHeight int, conta
 		candidates = videoOnly
 	}
 
-	container = strings.ToLower(strings.TrimSpace(container))
-	if container == "mp4" && !preferVP9 {
+	container = models.NormalizeContainer(container)
+	vp9Preferred := models.PreferVP9ForContainer(container, preferVP9)
+	switch container {
+	case "mp4":
 		mp4 := filterFormats(candidates, func(format *models.FormatInfo) bool {
 			return strings.EqualFold(format.Ext, "mp4")
 		})
 		if len(mp4) > 0 {
 			candidates = mp4
 		}
-	}
-	if preferVP9 {
-		vp9 := filterFormats(candidates, func(format *models.FormatInfo) bool {
-			return strings.Contains(strings.ToLower(format.VCodec), "vp9")
+	case "webm":
+		webm := filterFormats(candidates, func(format *models.FormatInfo) bool {
+			return strings.EqualFold(format.Ext, "webm")
 		})
-		if len(vp9) > 0 {
-			candidates = vp9
+		if len(webm) > 0 {
+			candidates = webm
 		}
 	}
 
+	// Mirror the download's res-first --format-sort. Filtering to VP9 here
+	// would estimate a 1080p VP9 stream while yt-dlp downloads a 2160p H.264
+	// or AV1 stream; VP9 is only a tie-breaker at equal resolution and FPS.
 	best := candidates[0]
 	for _, format := range candidates[1:] {
-		if formatHeight(*format) > formatHeight(*best) ||
-			(formatHeight(*format) == formatHeight(*best) && format.TBR > best.TBR) {
+		bestHeight, formatHeightValue := formatHeight(*best), formatHeight(*format)
+		switch {
+		case formatHeightValue > bestHeight:
+			best = format
+		case formatHeightValue < bestHeight:
+			continue
+		case format.FPS > best.FPS:
+			best = format
+		case format.FPS < best.FPS:
+			continue
+		case vp9Preferred && isVP9Format(*format) != isVP9Format(*best):
+			if isVP9Format(*format) {
+				best = format
+			}
+		case format.TBR > best.TBR:
 			best = format
 		}
 	}
 	return best
+}
+
+func isVP9Format(format models.FormatInfo) bool {
+	return strings.Contains(strings.ToLower(format.VCodec), "vp9")
 }
 
 func filterFormats(formats []*models.FormatInfo, keep func(*models.FormatInfo) bool) []*models.FormatInfo {
@@ -2208,7 +2257,7 @@ func formatIsVideoOnly(format *models.FormatInfo) bool {
 	return format != nil && format.IsVideo && !format.IsAudio
 }
 
-func bestAudioFormatForRequest(formats []models.FormatInfo, container string, preferVP9 bool) *models.FormatInfo {
+func bestAudioFormatForRequest(formats []models.FormatInfo, container string) *models.FormatInfo {
 	candidates := make([]*models.FormatInfo, 0, len(formats))
 	for i := range formats {
 		if formatIsAudioOnly(&formats[i]) {
@@ -2219,10 +2268,10 @@ func bestAudioFormatForRequest(formats []models.FormatInfo, container string, pr
 		return nil
 	}
 
-	container = strings.ToLower(strings.TrimSpace(container))
+	container = models.NormalizeContainer(container)
 	preferredExt := ""
 	preferredCodec := ""
-	if container == "mp4" && !preferVP9 {
+	if container == "mp4" {
 		preferredExt = "m4a"
 	} else {
 		preferredCodec = "opus"
@@ -2720,7 +2769,7 @@ func (a *App) converterPage(c *ui.Context) {
 		ui.Text(c, a.tr("Remux or re-encode your local media with FFmpeg.")).FontSize(12).TextColor(t.TextMuted)
 		if !a.ffmpeg.Available() {
 			ui.Row(c).Background(t.Surface).Border(1, t.Danger).Radius(12).Padding(12).Children(func() {
-				ui.Text(c, a.tr("FFmpeg not found on PATH. Install FFmpeg to enable conversion.")).FontSize(13).TextColor(t.Danger)
+				ui.Text(c, a.tr("converter.ffmpegMissing")).FontSize(13).TextColor(t.Danger)
 			})
 			return
 		}
@@ -3169,7 +3218,9 @@ func (a *App) importSettings() {
 		if validated.CustomHeaders == nil {
 			validated.CustomHeaders = map[string]string{}
 		}
-		a.applySettings(validated)
+		if a.applySettings(validated) {
+			a.refreshToolChecks()
+		}
 		a.settingsHeaders = ""
 		for key, value := range validated.CustomHeaders {
 			a.settingsHeaders += key + ": " + value + "\n"

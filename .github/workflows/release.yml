@@ -56,7 +56,8 @@ jobs:
             os: ubuntu-latest
             platform: linux/arm64
             fetch: linux-arm64
-          # macOS helper binaries are installed by Homebrew on an Apple Silicon runner.
+          # macOS bundles only yt-dlp and uses the user's FFmpeg, so the app
+          # stays small and cannot ship an unusable bundled dylib.
           - name: macOS arm64
             os: macos-latest
             platform: darwin/arm64
@@ -76,15 +77,23 @@ jobs:
       - name: Verify bundled tools
         shell: bash
         run: |
-          if [[ "${{ matrix.fetch }}" == windows-* ]]; then
-            test -f "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
-            test -f "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
-            test -f "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
-          else
-            test -x "resources/${{ matrix.fetch }}/bin/yt-dlp"
-            test -x "resources/${{ matrix.fetch }}/bin/ffmpeg"
-            test -x "resources/${{ matrix.fetch }}/bin/ffprobe"
-          fi
+          case "${{ matrix.fetch }}" in
+            windows-*)
+              test -f "resources/${{ matrix.fetch }}/bin/yt-dlp.exe"
+              test -f "resources/${{ matrix.fetch }}/bin/ffmpeg.exe"
+              test -f "resources/${{ matrix.fetch }}/bin/ffprobe.exe"
+              ;;
+            darwin-*)
+              test -x "resources/${{ matrix.fetch }}/bin/yt-dlp"
+              test ! -e "resources/${{ matrix.fetch }}/bin/ffmpeg"
+              test ! -e "resources/${{ matrix.fetch }}/bin/ffprobe"
+              ;;
+            *)
+              test -x "resources/${{ matrix.fetch }}/bin/yt-dlp"
+              test -x "resources/${{ matrix.fetch }}/bin/ffmpeg"
+              test -x "resources/${{ matrix.fetch }}/bin/ffprobe"
+              ;;
+          esac
       - name: Build package
         env:
           GH_TOKEN: ${{ github.token }}
