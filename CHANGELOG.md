@@ -72,6 +72,8 @@ All notable user-visible changes are recorded here. Release tags use the version
   rejected, DNS results are pinned, and every redirect is rechecked (limit 10).
 
 ### Fixed
+- Closing the last window now quits the app instead of leaving a windowless
+  process behind, so clicking the Dock icon opens a fresh window.
 
 - Startup now removes stale `.mygo-download-*` staging directories older than
   24 hours from known output directories, while keeping every paused task's

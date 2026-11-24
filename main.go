@@ -13,11 +13,15 @@ func main() {
 	a := app.New()
 	mygo.App.OnWindowAllClosed(func() {
 		// If the user chose "Minimize to tray", the window is hidden but the
-		// tray icon keeps the app alive. Do NOT shut down in that case.
+		// tray icon keeps the app alive. Do NOT quit in that case.
 		if a.HasTray() {
 			return
 		}
-		a.Shutdown()
+		// A listener keeps the process alive with no window. Quit instead, so
+		// clicking the Dock icon launches a fresh window rather than
+		// activating a windowless process. main's deferred Shutdown still runs
+		// after Run returns.
+		mygo.App.Quit()
 	})
 	defer a.Shutdown()
 
