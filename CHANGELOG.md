@@ -22,6 +22,10 @@ All notable user-visible changes are recorded here. Release tags use the version
   yt-dlp was updated to 2026.11.23.
 - Friendly, localized download errors; failure badges; empty-state actions;
   keyboard navigation shortcuts.
+- **Signed yt-dlp updates**: Settings → Tools (and the Home setup card) can
+  update yt-dlp from a project-owned signed manifest. The app verifies the
+  Ed25519 signature, asset SHA-256, and `--version`, then installs atomically
+  with rollback and cancellation. The update source is configurable.
 - **First-run tool setup**: a Home setup card shows yt-dlp/FFmpeg/FFprobe status
   and can install FFmpeg with Homebrew or a pinned static build, choose an
   existing binary, or defer. Installs show progress and can be cancelled;
@@ -73,8 +77,12 @@ All notable user-visible changes are recorded here. Release tags use the version
   24 hours from known output directories, while keeping every paused task's
   staging directory and skipping symlinks and unrelated directories.
 - When yt-dlp does not report `after_move:filepath`, the fallback accepts only
-  one media file in staging; `.part` files, sidecars, and multiple media files
-  fail the download instead of promoting a guess.
+  one media file in the staging tree (including playlist subdirectories);
+  `.part` files, sidecars, and multiple media files fail instead of promoting a
+  guess, and the staging tree is kept for recovery. Retry starts a fresh one.
+- Timed-out tool probes no longer block downloads or conversion; conversion no
+  longer requires yt-dlp, a failed Homebrew install offers the pinned static
+  build, and startup restores a managed tool left as an install backup.
 - Cancelling or pausing a download now terminates yt-dlp's whole process group,
   including the ffmpeg child used for merging and post-processing. Paused
   downloads keep their partial files for resume.

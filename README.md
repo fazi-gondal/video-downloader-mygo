@@ -183,6 +183,13 @@ system; for yt-dlp it uses the newest of the app-managed, bundled, and system
 copies. See [Bundled tools](#bundled-tools) and
 [docs/design/tool-resolution.md](docs/design/tool-resolution.md).
 
+yt-dlp can be updated from Settings → Tools without reinstalling the app. The
+update is fetched from a signed manifest channel, verified with an embedded
+Ed25519 public key, checksum-checked, self-checked, and installed into the
+app-managed directory with rollback. The default source is a
+`yt-dlp-channel` release; a fork can point the update-source field at its own
+channel. See [Signed yt-dlp updates](docs/design/yt-dlp-updates.md).
+
 ## Install prebuilt releases
 
 Release artifacts are published from version tags by `.github/workflows/release.yml`.
@@ -449,6 +456,7 @@ Current settings fields are:
 | `theme_mode` | string | `system`, `dark`, or `light`. |
 | `ytdlp_path` | string | Optional yt-dlp binary path; empty selects automatically. |
 | `ffmpeg_path` | string | Optional FFmpeg binary path; empty selects automatically. |
+| `ytdlp_manifest_url` | string | Optional yt-dlp update channel base URL; empty uses the project channel. |
 | `aryplus_api_key` | string | Optional user-provided ARY Plus API key; stored locally and excluded from exports. |
 
 The Settings page is the preferred way to edit this file. It validates numeric ranges, proxy schemes, headers, cookies-browser input, subtitle languages, and theme values before writing.

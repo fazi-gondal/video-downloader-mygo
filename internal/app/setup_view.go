@@ -85,35 +85,54 @@ func (a *App) setupToolRow(c *ui.Context, check tools.Check) {
 	})
 }
 
+func (a *App) toolInstallStatusRow(c *ui.Context) bool {
+	t := c.Theme()
+	if !a.toolInstallRunning {
+		if a.toolInstallErr != "" {
+			ui.Text(c, a.toolInstallErr).FontSize(11).TextColor(t.Danger).MaxWidth(680)
+		}
+		return false
+	}
+	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Spinner(c)
+		ui.Text(c, a.toolInstallStageText()).FontSize(12).TextColor(t.TextMuted).Grow(1)
+		if a.toolInstallTotal > 0 {
+			ui.Progress(c, float64(a.toolInstallDownloaded)/float64(a.toolInstallTotal)).Width(140)
+		}
+		if ui.Button(c, a.tr("setup.cancel")).Clicked() {
+			a.cancelToolInstall()
+		}
+	})
+	if a.toolInstallErr != "" {
+		ui.Text(c, a.toolInstallErr).FontSize(11).TextColor(t.TextMuted).MaxWidth(680)
+	}
+	return true
+}
+
 func (a *App) setupActions(c *ui.Context) {
 	t := c.Theme()
-	if a.toolInstallRunning {
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c)
-			ui.Text(c, a.toolInstallStageText()).FontSize(12).TextColor(t.TextMuted).Grow(1)
-			if a.toolInstallTotal > 0 {
-				ui.Progress(c, float64(a.toolInstallDownloaded)/float64(a.toolInstallTotal)).Width(140)
-			}
-			if ui.Button(c, a.tr("setup.cancel")).Clicked() {
-				a.cancelToolInstall()
-			}
-		})
+	if a.toolInstallStatusRow(c) {
 		return
-	}
-	if a.toolInstallErr != "" {
-		ui.Text(c, a.toolInstallErr).FontSize(11).TextColor(t.Danger).MaxWidth(680)
 	}
 	ui.Row(c).FillWidth().Gap(8).Children(func() {
 		brew := services.HomebrewPath()
 		_, staticAvailable := services.StaticToolSource()
-		if a.setupFFmpegMissing() && (brew != "" || staticAvailable) {
+		if a.setupFFmpegMissing() && !a.toolInstallSucceeded && (brew != "" || staticAvailable) {
 			label := a.tr("setup.download")
 			if brew != "" {
 				label = a.tr("setup.installBrew")
 			}
 			if ui.PrimaryButton(c, label).Clicked() {
-				a.startToolInstall()
+				a.startToolInstall(false)
 			}
+		}
+		if a.toolInstallErr != "" && brew != "" && staticAvailable && !a.toolInstallSucceeded {
+			if ui.Button(c, a.tr("setup.download")).Clicked() {
+				a.startToolInstall(true)
+			}
+		}
+		if ui.Button(c, a.tr("settings.tools.updateYtDlp")).Clicked() {
+			a.startYtDlpUpdate(a.settingsSnapshot().YtDlpManifestURL)
 		}
 		if ui.Button(c, a.tr("setup.later")).Clicked() {
 			a.setupDismissed = true
@@ -124,7 +143,9 @@ func (a *App) setupActions(c *ui.Context) {
 			a.invalidate()
 		}
 	})
-	if a.setupFFmpegMissing() {
+	if a.setupFFmpegMissing() && a.toolInstallSucceeded {
+		ui.Text(c, a.tr("settings.tools.checking")).FontSize(11).TextColor(t.TextMuted)
+	} else if a.setupFFmpegMissing() {
 		switch {
 		case services.HomebrewPath() != "":
 			ui.Text(c, a.tr("setup.brewDetected")).FontSize(11).TextColor(t.TextMuted)
@@ -148,6 +169,9 @@ func (a *App) setupFFmpegMissing() bool {
 }
 
 func (a *App) setToolCheck(check tools.Check) {
+	if check.Name == "ffmpeg" || check.Name == "ffprobe" {
+		a.toolInstallSucceeded = false
+	}
 	for i := range a.toolChecks {
 		if a.toolChecks[i].Name == check.Name {
 			a.toolChecks[i] = check
@@ -191,6 +215,8 @@ func (a *App) toolStatusLabel(check tools.Check, t *ui.Theme) (string, ui.Color)
 func (a *App) toolInstallStageText() string {
 	name := a.toolInstallName
 	switch a.toolInstallStage {
+	case services.ToolStageChecking:
+		return a.tr("setup.stage.checking")
 	case services.ToolStageDownloading:
 		return a.tr("setup.stage.downloading", map[string]any{"name": name})
 	case services.ToolStageVerifying:
@@ -208,6 +234,8 @@ func (a *App) toolInstallStageText() string {
 
 func (a *App) toolStageLabel(stage services.ToolInstallStage) string {
 	switch stage {
+	case services.ToolStageChecking:
+		return a.tr("setup.stageLabel.checking")
 	case services.ToolStageDownloading:
 		return a.tr("setup.stageLabel.downloading")
 	case services.ToolStageVerifying:
@@ -237,12 +265,15 @@ func (a *App) toolInstallErrorText(err error) string {
 	return a.tr("setup.failed", map[string]any{"err": err.Error()})
 }
 
-func (a *App) startToolInstall() {
-	if a.toolInstallRunning {
+func (a *App) startToolInstall(useStatic bool) {
+	if a.toolInstallRunning || a.toolInstallSucceeded {
 		return
 	}
 	brew := services.HomebrewPath()
 	source, staticAvailable := services.StaticToolSource()
+	if useStatic {
+		brew = ""
+	}
 	if brew == "" && !staticAvailable {
 		a.toolInstallErr = a.tr("setup.installUnavailable")
 		a.invalidate()
@@ -251,6 +282,7 @@ func (a *App) startToolInstall() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	a.toolInstallRunning = true
+	a.toolInstallSucceeded = false
 	a.toolInstallCancel = cancel
 	a.toolInstallStage = services.ToolStagePreparing
 	a.toolInstallName = ""
@@ -287,6 +319,7 @@ func (a *App) startToolInstall() {
 			switch {
 			case err == nil:
 				a.toolInstallErr = ""
+				a.toolInstallSucceeded = true
 				a.showToast(a.tr("setup.installed"))
 				a.refreshToolChecks()
 			case errors.Is(err, context.Canceled):
@@ -305,6 +338,101 @@ func (a *App) cancelToolInstall() {
 		a.toolInstallCancel()
 		a.invalidate()
 	}
+}
+
+func (a *App) currentYtDlpVersion() string {
+	for _, check := range a.toolChecks {
+		if check.Name == "yt-dlp" {
+			return check.Version
+		}
+	}
+	return ""
+}
+
+func (a *App) ytDlpUpdateErrorText(err error) string {
+	switch {
+	case errors.Is(err, services.ErrYtDlpManifestSignature), errors.Is(err, services.ErrYtDlpManifestFormat):
+		return a.tr("setup.manifestInvalid")
+	case errors.Is(err, services.ErrYtDlpManifestUnavailable):
+		return a.tr("setup.manifestUnavailable")
+	default:
+		return a.toolInstallErrorText(err)
+	}
+}
+
+func (a *App) startYtDlpUpdate(manifestURL string) {
+	if a.toolInstallRunning {
+		return
+	}
+	currentVersion := a.currentYtDlpVersion()
+	ctx, cancel := context.WithCancel(context.Background())
+	a.toolInstallRunning = true
+	a.toolInstallCancel = cancel
+	a.toolInstallStage = services.ToolStageChecking
+	a.toolInstallName = "yt-dlp"
+	a.toolInstallDownloaded = 0
+	a.toolInstallTotal = 0
+	a.toolInstallErr = ""
+	a.invalidate()
+
+	go func() {
+		defer cancel()
+		finish := func(err error, version string) {
+			a.updateOnMain(func() {
+				a.toolInstallRunning = false
+				a.toolInstallCancel = nil
+				switch {
+				case err == nil:
+					a.toolInstallErr = ""
+					if version != "" {
+						a.showToast(a.tr("setup.ytdlpUpdated", map[string]any{"version": version}))
+					} else {
+						a.showToast(a.tr("setup.ytdlpUpToDate", map[string]any{"version": currentVersion}))
+					}
+					if version != "" {
+						a.refreshToolChecks()
+					}
+				case errors.Is(err, context.Canceled):
+					a.toolInstallErr = a.tr("setup.cancelled")
+				default:
+					a.toolInstallErr = a.ytDlpUpdateErrorText(err)
+				}
+				a.invalidate()
+			})
+		}
+
+		update, err := services.CheckYtDlpUpdate(ctx, manifestURL, services.YtDlpManifestPublicKey())
+		if err != nil {
+			finish(err, "")
+			return
+		}
+		if currentVersion != "" && services.CompareYtDlpVersions(update.Version, currentVersion) <= 0 {
+			finish(nil, "")
+			return
+		}
+
+		var lastReport time.Time
+		err = services.InstallYtDlpUpdate(ctx, update, services.YtDlpInstallOptions{ManagedDir: tools.ManagedDir()}, func(progress services.ToolInstallProgress) {
+			if progress.Stage == services.ToolStageDownloading &&
+				!lastReport.IsZero() && time.Since(lastReport) < 200*time.Millisecond &&
+				(progress.Total <= 0 || progress.Downloaded < progress.Total) {
+				return
+			}
+			lastReport = time.Now()
+			a.updateOnMain(func() {
+				a.toolInstallStage = progress.Stage
+				a.toolInstallName = progress.Name
+				a.toolInstallDownloaded = progress.Downloaded
+				a.toolInstallTotal = progress.Total
+				a.invalidate()
+			})
+		})
+		if err != nil {
+			finish(err, "")
+			return
+		}
+		finish(nil, update.Version)
+	}()
 }
 
 func (a *App) pickToolPath(tool string) {
@@ -355,7 +483,9 @@ func (a *App) pickToolPath(tool string) {
 func (a *App) toolReady(name string) bool {
 	for _, check := range a.toolChecks {
 		if check.Name == name {
-			return check.OK
+			// A timed-out probe is not proof that the binary is missing; the
+			// resolver keeps using it too. The card still shows the timeout.
+			return check.OK || check.TimedOut
 		}
 	}
 	if a.ffmpeg == nil {
@@ -375,8 +505,8 @@ func (a *App) toolReady(name string) bool {
 // requireTools blocks an action before it reaches yt-dlp or FFmpeg and opens
 // the same setup card on Home. needProbe is set for conversion, which uses
 // ffprobe for duration and codec checks.
-func (a *App) requireTools(needProbe bool) bool {
-	if a.toolReady("yt-dlp") && a.toolReady("ffmpeg") && (!needProbe || a.toolReady("ffprobe")) {
+func (a *App) requireTools(needYtDlp, needProbe bool) bool {
+	if (!needYtDlp || a.toolReady("yt-dlp")) && a.toolReady("ffmpeg") && (!needProbe || a.toolReady("ffprobe")) {
 		return true
 	}
 	a.setupDismissed = false

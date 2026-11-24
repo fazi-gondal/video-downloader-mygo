@@ -282,5 +282,13 @@
   "setup.stageLabel.homebrew": "Homebrew 安装",
   "extractor.errPrivate": "这个页面地址不允许访问，请使用公开的 http(s) 链接。",
   "setup.chooseFFmpegInvalid": "请选择 ffmpeg 程序，而不是 ffprobe。",
-  "setup.needsFFprobe": "FFmpeg 与 FFprobe 需放在同一文件夹。"
+  "setup.needsFFprobe": "FFmpeg 与 FFprobe 需放在同一文件夹。",
+  "settings.tools.ytdlpManifestURL": "yt-dlp 更新源",
+  "settings.tools.updateYtDlp": "更新 yt-dlp",
+  "setup.stage.checking": "正在检查 yt-dlp 更新…",
+  "setup.stageLabel.checking": "更新检查",
+  "setup.ytdlpUpToDate": "yt-dlp 已是最新（{version}）。",
+  "setup.ytdlpUpdated": "yt-dlp 已更新到 {version}。",
+  "setup.manifestUnavailable": "无法读取 yt-dlp 更新源，请检查设置 → 工具状态里的地址。",
+  "setup.manifestInvalid": "yt-dlp 更新清单无效或签名不匹配。"
 }

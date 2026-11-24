@@ -282,5 +282,13 @@
   "setup.stageLabel.homebrew": "Homebrew install",
   "extractor.errPrivate": "This page address is not allowed. Use a public http(s) URL.",
   "setup.chooseFFmpegInvalid": "Choose the ffmpeg binary, not ffprobe.",
-  "setup.needsFFprobe": "FFmpeg and FFprobe must be in the same folder."
+  "setup.needsFFprobe": "FFmpeg and FFprobe must be in the same folder.",
+  "settings.tools.ytdlpManifestURL": "yt-dlp update source",
+  "settings.tools.updateYtDlp": "Update yt-dlp",
+  "setup.stage.checking": "Checking for yt-dlp updates…",
+  "setup.stageLabel.checking": "Update check",
+  "setup.ytdlpUpToDate": "yt-dlp is up to date ({version}).",
+  "setup.ytdlpUpdated": "yt-dlp updated to {version}.",
+  "setup.manifestUnavailable": "Could not read the yt-dlp update source. Check the address in Settings → Tools.",
+  "setup.manifestInvalid": "The yt-dlp update manifest is not valid or its signature does not match."
 }

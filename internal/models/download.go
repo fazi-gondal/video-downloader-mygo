@@ -367,6 +367,7 @@ func (t *DownloadTask) ResetForRetry() {
 	t.ErrorDetail = ""
 	t.Progress = ProgressInfo{}
 	t.OutputPath = ""
+	t.stagingDir = ""
 	t.StartedAt = nil
 	t.FinishedAt = nil
 	t.State = StatePending

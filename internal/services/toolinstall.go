@@ -22,6 +22,7 @@ type ToolInstallStage string
 
 const (
 	ToolStagePreparing   ToolInstallStage = "preparing"
+	ToolStageChecking    ToolInstallStage = "checking"
 	ToolStageDownloading ToolInstallStage = "downloading"
 	ToolStageVerifying   ToolInstallStage = "verifying"
 	ToolStageInstalling  ToolInstallStage = "installing"
@@ -202,7 +203,7 @@ func installStatic(ctx context.Context, opts ToolInstallOptions, source ToolInst
 	}
 
 	report(ToolStageInstalling, "", 0, 0)
-	if err := installToolFiles(ctx, work, opts.ManagedDir, opts.Rename); err != nil {
+	if err := installToolFiles(ctx, work, opts.ManagedDir, []string{"ffmpeg", "ffprobe"}, opts.Rename); err != nil {
 		return &ToolInstallError{Stage: ToolStageInstalling, Err: err}
 	}
 	return nil
@@ -291,24 +292,32 @@ func downloadTool(ctx context.Context, client *http.Client, url, expectedSHA256,
 }
 
 func selfCheckTool(ctx context.Context, path string) error {
-	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(checkCtx, path, "-version")
-	cmd.WaitDelay = 2 * time.Second
-	if err := cmd.Run(); err != nil {
-		if checkCtx.Err() != nil {
-			return checkCtx.Err()
-		}
-		return err
-	}
-	return nil
+	_, err := selfCheckToolFlag(ctx, path, "-version")
+	return err
 }
 
-func installToolFiles(ctx context.Context, work, managed string, rename func(string, string) error) error {
+func selfCheckToolFlag(ctx context.Context, path, flag string) (string, error) {
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(checkCtx, path, flag)
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
+	if err != nil {
+		if checkCtx.Err() != nil {
+			return "", checkCtx.Err()
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func installToolFiles(ctx context.Context, work, managed string, names []string, rename func(string, string) error) error {
 	if rename == nil {
 		rename = os.Rename
 	}
-	names := []string{"ffmpeg", "ffprobe"}
+	if len(names) == 0 {
+		return errors.New("no tool files to install")
+	}
 	backups := make(map[string]string, len(names))
 	var backedUp []string
 	restoreBackups := func() {

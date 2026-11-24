@@ -416,6 +416,11 @@ func shortVersion(name, line string) string {
 	return ""
 }
 
+// CompareVersions compares yt-dlp-style dotted date versions.
+func CompareVersions(a, b string) int {
+	return compareVersions(a, b)
+}
+
 func compareVersions(a, b string) int {
 	ap, bp := versionNumbers(a), versionNumbers(b)
 	for i := 0; i < len(ap) || i < len(bp); i++ {
@@ -473,7 +478,7 @@ func YtDlp() string {
 	// A probe can fail on a cold start; an app-managed or bundled binary is
 	// still a better guess than the bare name, which a Finder-launched app
 	// cannot find on PATH.
-	if p := managedPath("yt-dlp"); p != "" {
+	if p := managedPath("yt-dlp"); p != "" && fileExists(p) {
 		return p
 	}
 	if p := bundledPath("yt-dlp"); p != "" {

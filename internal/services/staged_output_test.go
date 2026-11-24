@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+func TestSingleStagedMediaFileFindsPlaylistSubdir(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "My Playlist")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	media := filepath.Join(sub, "01 - Episode.mp4")
+	if err := os.WriteFile(media, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "cover.jpg"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := singleStagedMediaFile(dir)
+	if err != nil || got != media {
+		t.Fatalf("singleStagedMediaFile = %q, %v; want %q", got, err, media)
+	}
+}
+
 func TestSingleStagedMediaFile(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name string) {

@@ -114,6 +114,7 @@ type App struct {
 	toolInstallDownloaded int64
 	toolInstallTotal      int64
 	toolInstallErr        string
+	toolInstallSucceeded  bool
 	lang                  string
 
 	mode                models.DownloadMode
@@ -257,6 +258,7 @@ func New() *App {
 		log.Println("settings:", err)
 	}
 	tools.SetOverrides(settings.YtDlpPath, settings.FFmpegPath)
+	tools.RecoverManagedTools(time.Now())
 	services.SetAryPlusAPIKey(settings.ARYPlusAPIKey)
 	ffmpeg := services.NewFFmpegService()
 	a := &App{
@@ -1932,7 +1934,7 @@ func (a *App) startDownload() {
 	if a.currentMedia == nil {
 		return
 	}
-	if !a.requireTools(false) {
+	if !a.requireTools(true, false) {
 		return
 	}
 	req := a.buildRequest(mediaURL(a.currentMedia), a.currentMedia.Title, a.currentMedia.Thumbnail, "", 0)
@@ -1960,7 +1962,7 @@ func (a *App) startDirectHDDownload() {
 	if !a.isDirectHDMedia() {
 		return
 	}
-	if !a.requireTools(false) {
+	if !a.requireTools(true, false) {
 		return
 	}
 	req := a.buildDirectHDRequest()
@@ -2010,7 +2012,7 @@ func (a *App) startPlaylistDownloads() {
 	if a.currentPlaylist == nil {
 		return
 	}
-	if !a.requireTools(false) {
+	if !a.requireTools(true, false) {
 		return
 	}
 	requests := make([]models.DownloadRequest, 0, len(a.currentPlaylist.Entries))
@@ -2638,7 +2640,7 @@ func (a *App) downloadsPage(c *ui.Context) {
 						}
 						if task.State == models.StatePaused {
 							if ui.Button(c.Key("resume-"+task.ID), "Resume").Clicked() {
-								if a.requireTools(false) {
+								if a.requireTools(true, false) {
 									a.manager.Resume(task.ID)
 								}
 							}
@@ -2650,7 +2652,7 @@ func (a *App) downloadsPage(c *ui.Context) {
 						}
 						if task.State == models.StateError || task.State == models.StateCancelled {
 							if ui.Button(c.Key("retry-"+task.ID), "Retry").Clicked() {
-								if a.requireTools(false) {
+								if a.requireTools(true, false) {
 									a.manager.Retry(task.ID)
 								}
 							}
@@ -2952,7 +2954,7 @@ func (a *App) converterPage(c *ui.Context) {
 						a.showToast(a.tr("Enter a source path"))
 						return
 					}
-					if !a.requireTools(true) {
+					if !a.requireTools(false, true) {
 						return
 					}
 					mode := models.ConversionReencode
@@ -3163,7 +3165,7 @@ func (a *App) historyPage(c *ui.Context) {
 						Children(func() {
 							ui.Icon(c, appui.IconDownload).FontSize(16).TextColor(t.TextMuted)
 						}).Clicked() {
-						if !a.requireTools(false) {
+						if !a.requireTools(true, false) {
 							return
 						}
 						settings := a.settingsDraftSnapshot()
@@ -3213,9 +3215,8 @@ func (a *App) historyPage(c *ui.Context) {
 // because the direct m3u8 URL stored at download time carries an auth key
 // that expires.
 func (a *App) requeueHistorySource(entry services.HistoryEntry, req models.DownloadRequest) {
-	if !a.requireTools(false) {
-		return
-	}
+	// The click handler already checked the tools on the UI thread; this
+	// function runs in a worker and must not read UI state or change pages.
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 

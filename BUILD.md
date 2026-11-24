@@ -170,6 +170,35 @@ git push origin v3.3.0
 
 The release workflow validates the tag against `mygo.json`, creates a draft GitHub Release, builds the supported packages, uploads the artifacts, and publishes the release only after all platform jobs succeed.
 
+## yt-dlp update channel
+
+The app can update yt-dlp from Settings → Tools using a signed manifest. The
+channel release contains `yt-dlp-manifest.json` and `yt-dlp-manifest.sig`; the
+app verifies the Ed25519 signature with the public key embedded in
+`internal/services/ytdlpupdate.go` before parsing, then verifies the asset
+SHA-256 and `yt-dlp --version` before replacing the managed binary.
+
+Regenerate a keypair when rotating the channel:
+
+```bash
+go run ./cmd/ytdlp-manifest -keygen   -private-key ~/.config/video-downloader/ytdlp-manifest.key
+```
+
+Replace the embedded public key with the printed public value and rebuild. Add
+the private seed to the repository secret used by the manual channel workflow:
+
+```bash
+gh secret set YTDLP_MANIFEST_PRIVATE_KEY \
+  --repo <owner>/<repo> \
+  < ~/.config/video-downloader/ytdlp-manifest.key
+gh workflow run yt-dlp-channel.yml --repo <owner>/<repo> -f tag=<yt-dlp-tag>
+```
+
+Leave `tag` empty for the latest upstream release. The workflow downloads the
+upstream assets, signs the manifest, and updates the `yt-dlp-channel` release.
+Set the update source in Settings → Tools when the channel is not the default
+`fazi-gondal` repository. No automatic updates run.
+
 ## Signing
 
 Signing is optional for local development and not configured by default.

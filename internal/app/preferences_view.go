@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/fazi-gondal/video-downloader-mygo/internal/config"
+	"github.com/fazi-gondal/video-downloader-mygo/internal/services"
 	"github.com/fazi-gondal/video-downloader-mygo/internal/tools"
 	appui "github.com/fazi-gondal/video-downloader-mygo/internal/ui"
 )
@@ -449,21 +450,30 @@ func (a *App) toolsCardContent(c *ui.Context) {
 	ui.Text(c, a.tr("settings.tools.pathsDesc")).FontSize(11).TextColor(t.TextMuted)
 	settingsLabeledInput(c, a.tr("settings.tools.ytdlpPath"), &a.settingsDraft.YtDlpPath, a.tr("settings.tools.autoPath"))
 	settingsLabeledInput(c, a.tr("settings.tools.ffmpegPath"), &a.settingsDraft.FFmpegPath, a.tr("settings.tools.autoPath"))
+	settingsLabeledInput(c, a.tr("settings.tools.ytdlpManifestURL"), &a.settingsDraft.YtDlpManifestURL, services.DefaultYtDlpManifestBaseURL)
 	if len(a.toolChecks) == 0 {
 		ui.Text(c, a.tr("settings.tools.checking")).FontSize(11).TextColor(t.TextMuted)
 	}
 	for _, check := range a.toolChecks {
 		a.toolStatusRow(c, check)
 	}
-	if ui.Button(c, a.tr("settings.tools.recheck")).Clicked() {
-		// Apply the paths currently shown in the form before probing, so
-		// "Check again" validates the value the user just typed rather than
-		// the last saved value. Saving still persists it.
-		a.appliedYtDlpPath = a.settingsDraft.YtDlpPath
-		a.appliedFFmpegPath = a.settingsDraft.FFmpegPath
-		tools.SetOverrides(a.settingsDraft.YtDlpPath, a.settingsDraft.FFmpegPath)
-		a.refreshToolChecks()
+	if a.toolInstallStatusRow(c) {
+		return
 	}
+	ui.Row(c).FillWidth().Gap(8).Children(func() {
+		if ui.Button(c, a.tr("settings.tools.updateYtDlp")).Clicked() {
+			a.startYtDlpUpdate(a.settingsDraftSnapshot().YtDlpManifestURL)
+		}
+		if ui.Button(c, a.tr("settings.tools.recheck")).Clicked() {
+			// Apply the paths currently shown in the form before probing, so
+			// "Check again" validates the value the user just typed rather than
+			// the last saved value. Saving still persists it.
+			a.appliedYtDlpPath = a.settingsDraft.YtDlpPath
+			a.appliedFFmpegPath = a.settingsDraft.FFmpegPath
+			tools.SetOverrides(a.settingsDraft.YtDlpPath, a.settingsDraft.FFmpegPath)
+			a.refreshToolChecks()
+		}
+	})
 }
 
 // toolStatusRow shows one dependency with its effective version, where it came
@@ -582,6 +592,10 @@ func (a *App) refreshToolChecks() {
 							} else if !check.TimedOut {
 								a.ffmpeg.SetFFprobePath("")
 							}
+						}
+					case "yt-dlp":
+						if a.ytdlp != nil && check.OK {
+							a.ytdlp.SetBinaryPath(check.Path)
 						}
 					}
 					a.invalidate()

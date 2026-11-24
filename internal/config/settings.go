@@ -32,6 +32,7 @@ type AppSettings struct {
 	Language            string            `json:"language"`   // system | en | zh-Hans
 	YtDlpPath           string            `json:"ytdlp_path,omitempty"`
 	FFmpegPath          string            `json:"ffmpeg_path,omitempty"`
+	YtDlpManifestURL    string            `json:"ytdlp_manifest_url,omitempty"`
 	ARYPlusAPIKey       string            `json:"aryplus_api_key,omitempty"`
 }
 
@@ -136,6 +137,7 @@ func (r *SettingsRepository) Load() (AppSettings, error) {
 	}
 	s.YtDlpPath = strings.TrimSpace(s.YtDlpPath)
 	s.FFmpegPath = strings.TrimSpace(s.FFmpegPath)
+	s.YtDlpManifestURL = strings.TrimSpace(s.YtDlpManifestURL)
 	s.ARYPlusAPIKey = strings.TrimSpace(s.ARYPlusAPIKey)
 	return s, nil
 }
@@ -148,6 +150,7 @@ func (r *SettingsRepository) Save(s AppSettings) error {
 	}
 	s.YtDlpPath = strings.TrimSpace(s.YtDlpPath)
 	s.FFmpegPath = strings.TrimSpace(s.FFmpegPath)
+	s.YtDlpManifestURL = strings.TrimSpace(s.YtDlpManifestURL)
 	s.ARYPlusAPIKey = strings.TrimSpace(s.ARYPlusAPIKey)
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

@@ -478,7 +478,7 @@ func (a *App) downloadAllExtracted() {
 	if res == nil || len(a.extractItems) == 0 {
 		return
 	}
-	if !a.requireTools(false) {
+	if !a.requireTools(true, false) {
 		return
 	}
 	playlistTitle := strings.TrimSpace(res.Title)

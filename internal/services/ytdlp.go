@@ -101,6 +101,17 @@ func NewYtDlpService(ffmpegPath string, settings func() config.AppSettings) *YtD
 	}
 }
 
+// SetBinaryPath adopts a path already verified by the tool check without
+// probing it again on the UI thread.
+func (s *YtDlpService) SetBinaryPath(path string) {
+	if path == "" {
+		return
+	}
+	s.mu.Lock()
+	s.ytdlpPath = path
+	s.mu.Unlock()
+}
+
 // SetFFmpegPath keeps --ffmpeg-location aligned with the path selected by the
 // tool check without re-resolving yt-dlp on the UI thread.
 func (s *YtDlpService) SetFFmpegPath(path string) {
@@ -463,10 +474,15 @@ func (s *YtDlpService) Download(ctx context.Context, task *models.DownloadTask, 
 		// The command runs in an isolated directory, so a fallback can only
 		// select files created by this request. This avoids associating an
 		// unrelated or concurrently downloaded file from the shared output dir.
-		if _, inStaging := relativeStagingPath(stagingDir, lastPath); !inStaging || !isStagedMediaFile(lastPath) {
+		if _, inStaging := relativeStagingPath(stagingDir, lastPath); !inStaging || !isStagedRegularFile(lastPath) {
 			lastPath, err = singleStagedMediaFile(stagingDir)
 			if err != nil {
-				return "", fmt.Errorf("%w: %v", ErrStagedOutputMissing, err)
+				// Keep the staging tree: it may hold the completed media, a
+				// playlist subdirectory, or resumable parts. The old code
+				// deleted it and told the user to look in an empty folder.
+				cleanupStaging = false
+				task.SetErrorDetail(stagingDir)
+				return "", fmt.Errorf("%w: %v (staging kept at %s)", ErrStagedOutputMissing, err, stagingDir)
 			}
 		}
 		lastPath, err = promoteStagedDownload(stagingDir, task.Request.OutputDir, lastPath)
@@ -647,8 +663,21 @@ func moveStagedFile(source, destination string) error {
 	return os.Remove(source)
 }
 
-// isStagedMediaFile is the validation for both the after_move path and the
-// fallback candidates. It rejects sidecars, .part files, and symlinks.
+// isStagedRegularFile trusts an after_move path inside staging unless it is a
+// symlink, a non-file, or a .part file. The extension is not restricted: the
+// reported final path is authoritative.
+func isStagedRegularFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return !strings.HasSuffix(strings.ToLower(filepath.Base(path)), ".part")
+}
+
+// isStagedMediaFile is the whitelist used only when guessing a fallback file.
 func isStagedMediaFile(path string) bool {
 	if path == "" {
 		return false
@@ -1464,35 +1493,39 @@ func isUnavailableProgressValue(value string) bool {
 // .part and sidecars such as .srt, .vtt, .jpg, .webp, .json, and .description
 // are deliberately absent.
 var stagedMediaExtensions = map[string]bool{
-	"avi": true, "flv": true, "m4a": true, "m4v": true, "mkv": true,
-	"mov": true, "mp3": true, "mp4": true, "ogg": true, "opus": true,
-	"ts": true, "wav": true, "webm": true, "aac": true, "flac": true,
+	"3gp": true, "aac": true, "avi": true, "flac": true, "flv": true,
+	"m2ts": true, "m4a": true, "m4b": true, "m4v": true, "mkv": true,
+	"mov": true, "mp3": true, "mp4": true, "mpeg": true, "mpg": true,
+	"ogg": true, "opus": true, "ts": true, "wav": true, "webm": true,
+	"wmv": true,
 }
 
 // singleStagedMediaFile is the only fallback allowed when yt-dlp did not
 // report after_move:filepath. It returns the sole media file and refuses to
 // guess when the staging directory holds none or several.
 func singleStagedMediaFile(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", fmt.Errorf("read staging directory: %w", err)
-	}
 	var files []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		path := filepath.Join(dir, entry.Name())
+		if info == nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
 		if isStagedMediaFile(path) {
 			files = append(files, path)
 		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("read staging tree: %w", err)
 	}
 	switch len(files) {
 	case 1:
 		return files[0], nil
 	case 0:
-		return "", errors.New("no media file in staging directory")
+		return "", errors.New("no media file in staging tree")
 	default:
-		return "", fmt.Errorf("%d media files in staging directory", len(files))
+		return "", fmt.Errorf("%d media files in staging tree", len(files))
 	}
 }

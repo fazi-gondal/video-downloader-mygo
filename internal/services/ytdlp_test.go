@@ -77,6 +77,9 @@ func writeYtDlpHelperOutput() {
 	path := filepath.Join(filepath.Dir(outputTemplate), "helper-"+name+".mp4")
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 	_ = os.WriteFile(path, []byte(name), 0o644)
+	if os.Getenv("GO_WANT_YTDLP_HELPER_AMBIGUOUS") == "1" {
+		_ = os.WriteFile(filepath.Join(filepath.Dir(outputTemplate), "helper-extra.webm"), []byte("extra"), 0o644)
+	}
 }
 
 func TestYtDlpHelperProcess(t *testing.T) {
@@ -208,6 +211,39 @@ func TestYtDlpDownloadDrainsStdoutAndStderrConcurrently(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("Download() output: %v", err)
 	}
+}
+
+func TestYtDlpDownloadKeepsAmbiguousStaging(t *testing.T) {
+	service := testYtDlpHelperService(t)
+	task := models.NewDownloadTask(models.DownloadRequest{URL: "https://example.test/video", OutputDir: t.TempDir()})
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_OUTPUT", "1")
+	_ = os.Setenv("GO_WANT_YTDLP_HELPER_AMBIGUOUS", "1")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_OUTPUT")
+	defer os.Unsetenv("GO_WANT_YTDLP_HELPER_AMBIGUOUS")
+
+	path, err := service.Download(context.Background(), task, nil)
+	if !errors.Is(err, ErrStagedOutputMissing) {
+		t.Fatalf("Download() error = %v, want ErrStagedOutputMissing", err)
+	}
+	if path != "" {
+		t.Fatalf("Download() path = %q, want empty", path)
+	}
+	staging := task.StagingDir()
+	if staging == "" {
+		t.Fatal("ambiguous download cleared its staging directory")
+	}
+	if _, statErr := os.Stat(staging); statErr != nil {
+		t.Fatalf("staging directory was removed: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(staging, "helper-video.mp4")); statErr != nil {
+		t.Fatalf("completed media was removed: %v", statErr)
+	}
+	if task.Snapshot().ErrorDetail != staging {
+		t.Fatalf("error detail = %q, want staging path %q", task.Snapshot().ErrorDetail, staging)
+	}
+	_ = os.RemoveAll(staging)
 }
 
 func TestYtDlpDownloadDoesNotUseUnrelatedOutputFile(t *testing.T) {

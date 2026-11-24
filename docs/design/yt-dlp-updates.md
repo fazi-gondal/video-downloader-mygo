@@ -1,82 +1,150 @@
-# Proposal: in-app yt-dlp updates
+# Signed yt-dlp updates
 
-Status: **proposal only; not implemented.** The setup card currently installs
-FFmpeg/FFprobe and lets the user choose an existing yt-dlp path. It does not
-download or update yt-dlp.
+Status: **implemented** with the project-owned signed manifest. The update is
+user-initiated from Settings → Tools and from the Home setup card.
 
 ## Why this is separate from FFmpeg
 
 FFmpeg is pinned to a known build and checksum. yt-dlp changes frequently, and
-its extractor fixes are the reason users need a newer version. An in-app
-updater needs a trusted, changing source and a compatibility check, so it
-carries a different risk profile from the fixed FFmpeg download.
+its extractor fixes are the reason users need a newer version. The update
+channel therefore uses a changing signed manifest instead of a fixed asset.
+The FFmpeg installer and the yt-dlp updater share the download, checksum,
+self-check, atomic-replace, backup/restore, cancellation, and managed-directory
+primitives.
 
-## Reuse the FFmpeg installer
+## Signed channel
 
-The update can reuse the same primitives:
+The channel is a GitHub release named `yt-dlp-channel` with two assets:
 
-- download with progress and cancellation
-- SHA-256 verification before execution
-- `yt-dlp --version` self-check
-- atomic replace from a temporary directory
-- backup/restore on any failure
-- managed directory under the app's Application Support folder
-- probe-cache reset and immediate service refresh
+```text
+yt-dlp-manifest.json
+yt-dlp-manifest.sig
+```
 
-The entry belongs in the setup card and Settings → Tools, next to FFmpeg. It
-must be user-initiated; no silent or scheduled update.
+The manifest is the exact JSON bytes that are signed. The signature is a
+base64-encoded Ed25519 signature of those bytes. The app verifies the signature
+before parsing the JSON, then selects the file for its platform:
 
-## Trust model
+```json
+{
+  "version": "2026.11.23",
+  "generatedAt": "2026-11-24T00:00:00Z",
+  "files": {
+    "darwin-arm64": {
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.11.23/yt-dlp_macos",
+      "sha256": "…",
+      "size": 37123456
+    }
+  }
+}
+```
 
-Two options:
+Asset URLs must be HTTPS without credentials. The manifest covers
+`windows-amd64`, `windows-arm64`, `linux-amd64`, `linux-arm64`, `darwin-amd64`,
+and `darwin-arm64`; the two macOS entries point at the same universal asset.
 
-1. **GitHub release + `SHA2-256SUMS` (simple).** Query the latest release,
-   download the platform asset, and verify against the checksum published in
-   the same release. This protects against transport corruption, but not a
-   compromised or rewritten release: the checksum and binary share a trust
-   root.
-2. **Project-owned signed manifest (recommended).** CI downloads the upstream
-   asset, verifies it, and publishes a manifest signed with an Ed25519 key whose
-   public half is embedded in the app. The app verifies the manifest and the
-   asset before installing. This adds release automation and key management,
-   but gives a real update trust root and supports rollback metadata.
+The default source is:
 
-A third option is to keep relying on the user's system copy, which the app
-already prefers when it is newer. That requires no new trust root.
+```text
+https://github.com/fazi-gondal/video-downloader-mygo/releases/download/yt-dlp-channel
+```
 
-## Resolution and rollback
+Settings → Tools exposes an update-source field so a fork can use its own
+channel. The embedded public key remains the trust anchor; changing the source
+cannot bypass the signature.
 
-- Store the managed binary in the same app-owned directory as FFmpeg.
-- Resolve yt-dlp as: explicit path, then the highest version among managed,
-  bundled, and system; ties prefer managed, then bundled, then system.
-- Keep the previous binary until the new one passes `--version` and is moved
-  into place. On failure, restore it.
-- Show the installed and effective versions in Settings → Tools. If a newer
-  system copy exists, keep using it and say so.
+## Public key and key custody
+
+The app embeds this Ed25519 public key in `internal/services/ytdlpupdate.go`:
+
+```text
+05kcvsShTqh0+52Ur9v7v2uXpTC2o92OPbgH+M+MDUk=
+```
+
+The matching private seed is **not** in the repository. During this setup it was
+written to:
+
+```text
+~/.config/video-downloader/ytdlp-manifest.key   (mode 0600)
+```
+
+Add it to the repository that will publish the channel:
+
+```bash
+gh secret set YTDLP_MANIFEST_PRIVATE_KEY \
+  --repo 7Mrlan/video-downloader-mygo \
+  < ~/.config/video-downloader/ytdlp-manifest.key
+```
+
+Anyone with this seed can sign yt-dlp updates for this app. Keep it out of the
+repository and out of logs. Rotating it requires replacing the public key
+constant and rebuilding the app, so treat rotation as a release decision.
+
+## Publishing the channel
+
+The workflow `.github/workflows/yt-dlp-channel.yml` is manual:
+
+```bash
+gh workflow run yt-dlp-channel.yml \
+  --repo 7Mrlan/video-downloader-mygo \
+  -f tag=2026.11.23
+```
+
+It runs `go run ./cmd/ytdlp-manifest`, which downloads the upstream assets,
+records their SHA-256 and size, writes and signs the manifest, and then uploads
+the two channel assets to the `yt-dlp-channel` release. Leave `tag` empty to
+fetch the latest upstream release. The workflow fails clearly when
+`YTDLP_MANIFEST_PRIVATE_KEY` is absent.
+
+The upstream `fazi-gondal` channel uses the same public key only if its owner
+has the matching private seed. Otherwise the upstream owner should generate a
+new keypair with `go run ./cmd/ytdlp-manifest -keygen -private-key …`, replace
+the embedded public key, and rebuild.
+
+## Update flow
+
+1. The user clicks **Update yt-dlp** in Settings → Tools or the Home setup card.
+2. The app fetches the manifest and signature with a 30-second timeout and
+   verifies the signature before parsing.
+3. It selects the current platform, compares the manifest version with the
+   effective yt-dlp version, and reports “up to date” when appropriate.
+4. Otherwise it downloads the binary, verifies its SHA-256, runs
+   `yt-dlp --version` and checks the reported version, backs up the old managed
+   binary, and atomically replaces it.
+5. Any failure or cancellation restores the old binary; success refreshes the
+   probe cache and the effective path without restarting the app.
+
+Resolution remains: explicit path, then the highest version among managed,
+bundled, and system; ties prefer managed, then bundled, then system. A newer
+system copy still wins, and the Tools card shows the effective source/version.
+
+No update runs silently or on a schedule, and no auto-update is enabled.
 
 ## Risks
 
-- **Supply chain:** a latest-release checksum is not an independent signature;
-  a signed project manifest is stronger but requires a private key.
-- **Compatibility:** a future yt-dlp can change flags or post-processing
-  behavior. `--version` is not enough; a dry-run analysis of a known public URL
-  would be a better smoke test, but adds network dependence.
-- **Platform coverage:** macOS uses a universal build; Windows and Linux need
-  separate assets. The update must fail clearly when no asset exists.
-- **Notarization:** the bundled binary is signed with the app's helper
-  entitlements. A downloaded yt-dlp must remain runnable after replacement;
-  this needs testing on a signed build.
-- **Partial downloads and cancellation:** reuse the tested temporary-directory
-  and rollback path, not a direct overwrite.
-- **Rate limits and offline use:** updates must be optional and never block
-  opening the app or starting a download.
-- **Version comparison:** use yt-dlp's date version; do not compare arbitrary
-  strings.
+- **Private-key custody:** the channel is only as trustworthy as the seed. Leak
+  or loss requires a new app build with a new public key.
+- **Upstream assets:** the publisher trusts GitHub-hosted upstream release
+  assets. The signature protects the manifest and checksums, not a compromised
+  upstream release.
+- **Compatibility:** `--version` is checked, but a future yt-dlp could change
+  flags or post-processing behavior. A dry-run analysis of a public URL would
+  be a stronger smoke test at the cost of network dependence.
+- **Platform coverage:** the manifest must include every supported platform;
+  a missing file fails clearly instead of falling back silently.
+- **Notarization:** a downloaded yt-dlp must remain runnable after replacement;
+  test this on a signed build. The helper-entitlements path is unchanged.
+- **Offline/rate-limited use:** the update is optional and never blocks opening
+  the app or starting a download.
+- **Version comparison:** date-style yt-dlp versions are compared numerically;
+  unusual nightly suffixes still need a deliberate check.
 
-## Recommendation
+## Rollout checklist
 
-Do not add the updater until the trust model is chosen. The existing explicit
-path and newer-system-copy preference already solve the immediate "use a fixed
-extractor without reinstalling the app" need. If an in-app updater is wanted,
-prefer the signed manifest path and implement it as a separate change with its
-own tests and a staged rollout.
+1. Add `YTDLP_MANIFEST_PRIVATE_KEY` to the fork.
+2. Run the `yt-dlp update channel` workflow for the desired tag.
+3. In Settings → Tools, set the update source to
+   `https://github.com/7Mrlan/video-downloader-mygo/releases/download/yt-dlp-channel`
+   (or leave the upstream default when publishing there) and save.
+4. Click **Update yt-dlp** and confirm the Tools card shows the new version and
+   the app-managed source.
