@@ -202,7 +202,9 @@ The Linux archive may require GTK/WebKit runtime packages on minimal distributio
 
 ### macOS
 
-The current release workflow targets macOS arm64. Local builds can also target macOS amd64 when run on a compatible environment. The macOS package bundles yt-dlp only; it uses the FFmpeg you install (Homebrew, MacPorts, or a static build) so the installer stays small and a broken bundled dylib cannot shadow a working copy. Release packages are Developer ID-signed and notarized when the repository's Apple signing secrets are configured; otherwise they are ad-hoc signed and may be blocked by Gatekeeper. See [BUILD.md](BUILD.md#macos) for the local signed-build script and the required secrets.
+The current release workflow targets macOS arm64. Local builds can also target macOS amd64 when run on a compatible environment. The macOS package bundles yt-dlp only; it uses the FFmpeg you install (Homebrew, MacPorts, or a static build) so the installer stays small and a broken bundled dylib cannot shadow a working copy.
+
+**No paid Apple Developer account is required to use the app.** Release packages are ad-hoc signed unless the repository owner configures Developer ID signing. On first launch, open **System Settings → Privacy & Security**, scroll to **Security**, and choose **Open Anyway** for Video Downloader (or right-click the app and choose **Open**). Locally built apps are not quarantined. Developer ID signing and notarization are optional for maintainers; see [BUILD.md](BUILD.md#macos).
 
 ## Run from source
 
@@ -558,6 +560,25 @@ This is intentional. MKV is the reliable container for several audio streams and
 ### The format list is empty
 
 Initial analysis is intentionally lightweight. Open the format section and choose **Load available formats**. This runs the full yt-dlp format extraction only when needed.
+
+### macOS blocks the app after download
+
+Ad-hoc signed builds are not notarized. To open one:
+
+1. Double-click the app once and dismiss the warning.
+2. Open **System Settings → Privacy & Security**.
+3. In the **Security** section, choose **Open Anyway** for Video Downloader.
+4. Confirm **Open**.
+
+If the button is not shown, right-click the app in Finder and choose **Open**.
+As a last resort, remove the quarantine attribute:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Video Downloader.app"
+```
+
+This is expected for an ad-hoc build; no Apple Developer account is needed.
+Developer ID signing and notarization are optional for maintainers.
 
 ### Windows SmartScreen warns about the installer
 

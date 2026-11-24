@@ -172,6 +172,11 @@ Signing is optional for local development and not configured by default.
 
 ### macOS
 
+Signing and notarization are optional. Without them the app is ad-hoc signed and
+users open it once through **System Settings → Privacy & Security → Open Anyway**
+(or right-click → Open). No paid Apple Developer account is required to build or
+use the app.
+
 Release macOS packages are Developer ID-signed and notarized when the Apple
 credentials are configured. Local development builds stay ad-hoc unless you use
 the signed build script.

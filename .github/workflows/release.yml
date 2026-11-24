@@ -105,7 +105,7 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           if [ -z "${MACOS_CERTIFICATE:-}" ]; then
-            echo "::warning::MACOS_CERTIFICATE is not configured; building an ad-hoc signed macOS app."
+            echo "::warning::MACOS_CERTIFICATE is not configured; building an ad-hoc signed macOS app. Users can open it through System Settings -> Privacy & Security -> Open Anyway."
             exit 0
           fi
           if [ -z "${MACOS_CERTIFICATE_PASSWORD:-}" ] || [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ] || [ -z "${APPLE_APP_PASSWORD:-}" ]; then
