@@ -190,8 +190,8 @@ func TestExtractSiteMediaRejectsPrivateRedirect(t *testing.T) {
 	defer server.Close()
 
 	_, err := extractSiteMediaWithClient(t.Context(), "http://93.184.216.34/page", publicSiteTestClient(server))
-	if err == nil {
-		t.Fatal("private redirect was not rejected")
+	if !errors.Is(err, ErrNonPublicPage) {
+		t.Fatalf("private redirect error = %v, want ErrNonPublicPage", err)
 	}
 	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), server.URL) {
 		t.Fatalf("error includes redirect details: %v", err)

@@ -14,6 +14,10 @@ import (
 
 const maxRedirects = 10
 
+// ErrNonPublicDestination marks a URL or redirect that resolves to a blocked
+// address. Callers can map it to a user-facing privacy message.
+var ErrNonPublicDestination = errors.New("destination is not public")
+
 // ValidURL reports whether u is an http(s) URL with a public-looking hostname
 // and no embedded credentials. IP literals in blocked ranges are rejected here;
 // hostnames are resolved and checked again by the transport.
@@ -47,7 +51,7 @@ func WrapClient(client *http.Client) *http.Client {
 	previous := client.CheckRedirect
 	wrapped.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if !ValidURL(req.URL) {
-			return errors.New("redirect destination is not public")
+			return ErrNonPublicDestination
 		}
 		if previous != nil {
 			return previous(req, via)
@@ -162,7 +166,7 @@ func resolveIPs(ctx context.Context, u *url.URL) (*resolvedIPs, error) {
 	}
 	for _, ip := range ips {
 		if isBlockedIP(ip) {
-			return nil, errors.New("destination is not public")
+			return nil, ErrNonPublicDestination
 		}
 	}
 	return &resolvedIPs{host: host, ips: ips}, nil

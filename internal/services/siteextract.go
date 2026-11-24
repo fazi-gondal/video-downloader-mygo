@@ -124,6 +124,9 @@ func extractSiteMediaWithClient(ctx context.Context, pageURL string, client *htt
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		if errors.Is(err, netguard.ErrNonPublicDestination) {
+			return nil, ErrNonPublicPage
+		}
 		// net/http errors can embed redirect targets and signed query values.
 		return nil, errors.New("load page: request failed")
 	}
