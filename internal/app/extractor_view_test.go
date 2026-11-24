@@ -198,6 +198,13 @@ func TestPreferredLocaleHonorsSetting(t *testing.T) {
 	}
 }
 
+func TestExtractErrorLocalizesNonPublicPage(t *testing.T) {
+	a := &App{lang: "zh-Hans"}
+	if got := a.extractErrorText(services.ErrNonPublicPage); !strings.Contains(got, "公开") {
+		t.Fatalf("non-public extractor error = %q", got)
+	}
+}
+
 func TestFriendlyErrorMapsFFmpegFailure(t *testing.T) {
 	a := &App{lang: "zh-Hans"}
 	got := a.friendlyError("ERROR: Postprocessing: ffmpeg not found. Please install or provide the path using --ffmpeg-location")

@@ -279,5 +279,6 @@
   "setup.stageLabel.verifying": "Checksum",
   "setup.stageLabel.installing": "Install",
   "setup.stageLabel.selfCheck": "Self-check",
-  "setup.stageLabel.homebrew": "Homebrew install"
+  "setup.stageLabel.homebrew": "Homebrew install",
+  "extractor.errPrivate": "This page address is not allowed. Use a public http(s) URL."
 }

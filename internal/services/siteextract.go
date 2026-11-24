@@ -39,6 +39,7 @@ const siteExtractMaxBody = 8 << 20 // 8 MiB
 var (
 	ErrEncryptedConfig = errors.New("page hands the player an encrypted config")
 	ErrNoPlayableMedia = errors.New("no playable media URL on the page")
+	ErrNonPublicPage   = errors.New("page URL is not public")
 )
 
 var (
@@ -106,7 +107,7 @@ func extractSiteMediaWithClient(ctx context.Context, pageURL string, client *htt
 		return nil, fmt.Errorf("invalid page URL: %w", err)
 	}
 	if !netguard.ValidURL(parsed) {
-		return nil, errors.New("page URL is not public")
+		return nil, ErrNonPublicPage
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)

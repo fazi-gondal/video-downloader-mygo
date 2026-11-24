@@ -279,5 +279,6 @@
   "setup.stageLabel.verifying": "校验",
   "setup.stageLabel.installing": "安装",
   "setup.stageLabel.selfCheck": "自检",
-  "setup.stageLabel.homebrew": "Homebrew 安装"
+  "setup.stageLabel.homebrew": "Homebrew 安装",
+  "extractor.errPrivate": "这个页面地址不允许访问，请使用公开的 http(s) 链接。"
 }
