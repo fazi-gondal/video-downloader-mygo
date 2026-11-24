@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,7 +20,7 @@ func requireAryPlusAPIKey(t *testing.T) {
 	}
 }
 
-func TestAryPlusCallAPIUsesDefaultAPIKey(t *testing.T) {
+func TestAryPlusCallAPIUsesUserKey(t *testing.T) {
 	var gotAPIKey string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAPIKey = r.Header.Get("x-api-key")
@@ -32,6 +33,8 @@ func TestAryPlusCallAPIUsesDefaultAPIKey(t *testing.T) {
 
 	t.Setenv("ARYPLUS_API_BASE", server.URL)
 	t.Setenv("ARYPLUS_API_KEY", "")
+	SetAryPlusAPIKey("user-provided-key")
+	t.Cleanup(func() { SetAryPlusAPIKey("") })
 
 	result, err := aryPlusCallAPI(context.Background(), "/test", url.Values{})
 	if err != nil {
@@ -40,8 +43,29 @@ func TestAryPlusCallAPIUsesDefaultAPIKey(t *testing.T) {
 	if result["ok"] != true {
 		t.Errorf("aryPlusCallAPI() result = %v, want ok=true", result)
 	}
-	if gotAPIKey != aryPlusDefaultAPIKey {
-		t.Errorf("x-api-key header was not set to the built-in default")
+	if gotAPIKey != "user-provided-key" {
+		t.Errorf("x-api-key header = %q, want the user-provided key", gotAPIKey)
+	}
+}
+
+func TestAryPlusCallAPIRequiresUserKey(t *testing.T) {
+	t.Setenv("ARYPLUS_API_KEY", "")
+	SetAryPlusAPIKey("")
+	t.Cleanup(func() { SetAryPlusAPIKey("") })
+
+	_, err := aryPlusCallAPI(context.Background(), "/test", url.Values{})
+	if !errors.Is(err, ErrAryPlusAPIKeyMissing) {
+		t.Fatalf("aryPlusCallAPI() error = %v, want ErrAryPlusAPIKeyMissing", err)
+	}
+}
+
+func TestAryPlusAPIKeyPrefersEnvironment(t *testing.T) {
+	t.Setenv("ARYPLUS_API_KEY", "env-key")
+	SetAryPlusAPIKey("settings-key")
+	t.Cleanup(func() { SetAryPlusAPIKey("") })
+
+	if got := aryPlusAPIKey(); got != "env-key" {
+		t.Fatalf("aryPlusAPIKey() = %q, want the environment override", got)
 	}
 }
 
@@ -181,5 +205,19 @@ func TestFetchAryPlusSeriesPlaylistLive(t *testing.T) {
 	}
 	if first.Duration <= 0 {
 		t.Errorf("first entry Duration = %v, want > 0", first.Duration)
+	}
+}
+
+func TestResolveAryPlusEpisodeRequiresUserKey(t *testing.T) {
+	t.Setenv("ARYPLUS_API_KEY", "")
+	SetAryPlusAPIKey("")
+	t.Cleanup(func() { SetAryPlusAPIKey("") })
+
+	_, err := ResolveAryPlusEpisode(
+		context.Background(),
+		"https://aryplus.tv/video/v2/3/6a6e0b1e9bc4b079859bc14b/6a57868b5bf57c474cc00a50",
+	)
+	if !errors.Is(err, ErrAryPlusAPIKeyMissing) {
+		t.Fatalf("ResolveAryPlusEpisode() error = %v, want ErrAryPlusAPIKeyMissing", err)
 	}
 }

@@ -42,6 +42,12 @@ All notable user-visible changes are recorded here. Release tags use the version
 - VP9 format sorting now compares resolution before codec, so a higher-resolution
   H.264/AV1 stream is not skipped for a lower-resolution VP9 one.
 
+### Security
+
+- ARY Plus now requires a user-provided API key. The bundled third-party key was
+  removed; the key is stored in the local settings file (owner-only) and excluded
+  from exported settings. `ARYPLUS_API_KEY` still overrides it.
+
 ### Fixed
 
 - Cancelling or pausing a download now terminates yt-dlp's whole process group,

@@ -206,6 +206,13 @@ func (a *App) refinedSettingsPage(c *ui.Context) {
 			settingsLabeledInput(c, a.tr("Rate limit"), &a.settingsRateLimit, a.tr("0 = unlimited (Kbps)"))
 		})
 
+		settingsCard(c, appui.IconVideo, a.tr("settings.aryplus.title"), a.tr("settings.aryplus.desc"), func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, a.tr("settings.aryplus.key")).FontSize(12).TextColor(t.TextMuted).Width(86)
+				ui.TextInput(c, &a.settingsDraft.ARYPlusAPIKey).Grow(1).Password().Placeholder(a.tr("settings.aryplus.placeholder"))
+			})
+		})
+
 		settingsCard(c, nil, a.tr("Custom headers"), a.tr("One header per line in the form Key: Value."), func() {
 			ui.TextArea(c, &a.settingsHeaders).FillWidth().Height(86).Placeholder(a.tr("Accept-Language: en-US"))
 		})

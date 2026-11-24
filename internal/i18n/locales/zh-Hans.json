@@ -241,5 +241,10 @@
   "settings.tools.unavailable": "不可用",
   "settings.tools.ffmpegHint": "请安装 FFmpeg，或在上方填写程序路径。",
   "settings.tools.ffmpegHintMac": "可运行 brew install ffmpeg 安装，或在上方填写 FFmpeg 路径。",
-  "errors.ytdlpMissing": "yt-dlp 缺失或无法运行。请安装，或在设置 → 工具状态里填写程序路径。"
+  "errors.ytdlpMissing": "yt-dlp 缺失或无法运行。请安装，或在设置 → 工具状态里填写程序路径。",
+  "settings.aryplus.title": "ARY Plus",
+  "settings.aryplus.desc": "可选；使用 ARY Plus 链接时需要。只保存在本机，导出设置时不会包含。环境变量 ARYPLUS_API_KEY 优先。",
+  "settings.aryplus.key": "API Key",
+  "settings.aryplus.placeholder": "ak_…",
+  "errors.aryPlusKey": "ARY Plus 需要 API Key，请在设置 → ARY Plus 中填写。"
 }

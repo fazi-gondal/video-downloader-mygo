@@ -241,5 +241,10 @@
   "settings.tools.unavailable": "Unavailable",
   "settings.tools.ffmpegHint": "Install FFmpeg, or set its path above.",
   "settings.tools.ffmpegHintMac": "Install FFmpeg with brew install ffmpeg, or set its path above.",
-  "errors.ytdlpMissing": "yt-dlp is missing or can't run. Install it or set its path in Settings → Tools."
+  "errors.ytdlpMissing": "yt-dlp is missing or can't run. Install it or set its path in Settings → Tools.",
+  "settings.aryplus.title": "ARY Plus",
+  "settings.aryplus.desc": "Optional. Required for ARY Plus links. Stored locally; excluded from exported settings. ARYPLUS_API_KEY overrides it.",
+  "settings.aryplus.key": "API key",
+  "settings.aryplus.placeholder": "ak_…",
+  "errors.aryPlusKey": "ARY Plus needs an API key. Add it in Settings → ARY Plus."
 }

@@ -10,8 +10,9 @@ This repository is a native-UI MyGo application. It has no Bun, Vite, or web fro
 - yt-dlp and, on Windows/Linux, FFmpeg/FFprobe on `PATH`, or downloaded into
   `resources/<platform>/bin`. On macOS, FFmpeg is not bundled: install it with
   Homebrew, MacPorts, or a static build, or set its path in Settings → Tools.
-- ARY Plus uses the built-in public client key. `ARYPLUS_API_KEY` can override
-  it at runtime, and `ARYPLUS_API_BASE` can select a compatible API endpoint.
+- ARY Plus is optional and requires a user-provided API key. Add it in
+  Settings → ARY Plus or set `ARYPLUS_API_KEY`; no third-party key is bundled.
+  `ARYPLUS_API_BASE` can select a compatible API endpoint.
 - TikTok, Instagram, X/Twitter, and YouTube Shorts downloads do not require a
   cookies file or browser-cookie configuration. The direct flow uses yt-dlp's
   best available video/audio selection and does not expose manual quality
@@ -89,10 +90,8 @@ pinned fallback) matches; update the release name and checksum together when
 intentionally upgrading it. Do not commit the downloaded files: `resources/*/bin/*` is
 ignored because FFmpeg binaries are large.
 
-The shared `resources/yt-dlp-plugins` directory is packaged with the
-application and loaded by yt-dlp through `--plugin-dirs`. Each child is a
-standard yt-dlp plugin package; this is how the ARY Plus extractor is available
-in local and packaged runs.
+ARY Plus is handled by the native Go resolver in `internal/services`; no
+yt-dlp plugin directory is required for it.
 
 ## Local production builds
 

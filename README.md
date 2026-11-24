@@ -63,7 +63,7 @@ This project is the native Go/MyGo rewrite of [Video-Downloader](https://github.
 - Press **Enter** in the Home URL field to start analysis without clicking the
   Analyze button.
 - Direct one-click HD downloads for TikTok, Instagram, X/Twitter, and YouTube Shorts. The metadata card provides the download action without a quality picker and without browser cookies.
-- ARY Plus episode and series downloads through the bundled yt-dlp plugin.
+- ARY Plus episode and series downloads through the native resolver, with a user-provided API key.
 - Video thumbnail loading with bounded, validated image decoding.
 - Human-readable media title, uploader, duration, extractor, audio-track, and subtitle information.
 - Playlist selection with select-all, select-none, persistent per-entry checkboxes, and batch progress.
@@ -317,9 +317,10 @@ Runtime lookup order is:
 
 The bundled ARY Plus extractor supports aryplus.tv episode URLs and series
 playlists, multi-quality HLS streams up to 4K, thumbnails, and DRM checks.
-ARY Plus API access uses the built-in public client key; you may override it
-with `ARYPLUS_API_KEY` and set `ARYPLUS_API_BASE` to use a compatible API
-endpoint.
+ARY Plus is optional and requires your own API key: add it in Settings →
+ARY Plus (stored locally and excluded from exported settings) or set
+`ARYPLUS_API_KEY`. No third-party key is bundled. `ARYPLUS_API_BASE` can
+select a compatible API endpoint.
 
 ## Using the application
 
@@ -428,6 +429,7 @@ Current settings fields are:
 | `theme_mode` | string | `system`, `dark`, or `light`. |
 | `ytdlp_path` | string | Optional yt-dlp binary path; empty selects automatically. |
 | `ffmpeg_path` | string | Optional FFmpeg binary path; empty selects automatically. |
+| `aryplus_api_key` | string | Optional user-provided ARY Plus API key; stored locally and excluded from exports. |
 
 The Settings page is the preferred way to edit this file. It validates numeric ranges, proxy schemes, headers, cookies-browser input, subtitle languages, and theme values before writing.
 

@@ -214,3 +214,25 @@ func TestPerformanceSlidersClampLoadedValuesToTheirRanges(t *testing.T) {
 		t.Fatalf("fragments slider = %v, want upper bound 32", a.concurrentFragmentsSlider)
 	}
 }
+
+func TestExportableSettingsDropsAryPlusKey(t *testing.T) {
+	got := exportableSettings(config.AppSettings{ARYPlusAPIKey: "local-secret"})
+	if got.ARYPlusAPIKey != "" {
+		t.Fatalf("exported ARY Plus key = %q, want empty", got.ARYPlusAPIKey)
+	}
+}
+
+func TestImportedSettingsKeepsLocalAryPlusKey(t *testing.T) {
+	got := importedSettings(config.AppSettings{}, config.AppSettings{ARYPlusAPIKey: "local-secret"})
+	if got.ARYPlusAPIKey != "local-secret" {
+		t.Fatalf("imported key = %q, want the local key preserved", got.ARYPlusAPIKey)
+	}
+
+	got = importedSettings(
+		config.AppSettings{ARYPlusAPIKey: "imported-secret"},
+		config.AppSettings{ARYPlusAPIKey: "local-secret"},
+	)
+	if got.ARYPlusAPIKey != "imported-secret" {
+		t.Fatalf("imported key = %q, want the imported key", got.ARYPlusAPIKey)
+	}
+}

@@ -212,6 +212,10 @@ func TestFriendlyErrorMapsFFmpegFailure(t *testing.T) {
 	if !strings.Contains(missing, "yt-dlp") {
 		t.Fatalf("missing yt-dlp error = %q", missing)
 	}
+	aryKey := a.friendlyError("ARY Plus API key is not configured; add it in Settings → ARY Plus")
+	if !strings.Contains(aryKey, "ARY Plus") {
+		t.Fatalf("missing ARY Plus key error = %q", aryKey)
+	}
 	if !strings.Contains(a.friendlyError("ERROR: Unsupported URL: https://example.com"), "网页提取") {
 		t.Fatalf("unsupported error not mapped")
 	}

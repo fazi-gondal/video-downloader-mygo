@@ -226,6 +226,7 @@ func (a *App) applySettings(settings config.AppSettings) (toolPathsChanged bool)
 	settings = cloneAppSettings(settings)
 	toolPathsChanged = a.appliedYtDlpPath != settings.YtDlpPath || a.appliedFFmpegPath != settings.FFmpegPath
 	tools.SetOverrides(settings.YtDlpPath, settings.FFmpegPath)
+	services.SetAryPlusAPIKey(settings.ARYPlusAPIKey)
 	a.appliedYtDlpPath = settings.YtDlpPath
 	a.appliedFFmpegPath = settings.FFmpegPath
 	a.setSettings(settings)
@@ -248,6 +249,7 @@ func New() *App {
 		log.Println("settings:", err)
 	}
 	tools.SetOverrides(settings.YtDlpPath, settings.FFmpegPath)
+	services.SetAryPlusAPIKey(settings.ARYPlusAPIKey)
 	ffmpeg := services.NewFFmpegService()
 	a := &App{
 		settingsRepo:         repo,
@@ -1781,6 +1783,8 @@ func (a *App) friendlyError(message string) string {
 	case strings.Contains(lower, "yt-dlp") && (strings.Contains(lower, "not found") ||
 		strings.Contains(lower, "executable file not found")):
 		return a.tr("errors.ytdlpMissing")
+	case strings.Contains(lower, "ary plus api key") || strings.Contains(lower, "aryplus_api_key"):
+		return a.tr("errors.aryPlusKey")
 	case strings.Contains(lower, "unsupported url"):
 		return a.tr("errors.unsupported")
 	case strings.Contains(lower, "http error 403"), strings.Contains(lower, "403: forbidden"):
@@ -3170,7 +3174,7 @@ func (a *App) exportSettings(settings config.AppSettings) {
 	if err != nil || path == "" {
 		return
 	}
-	data, err := json.MarshalIndent(settings, "", "  ")
+	data, err := json.MarshalIndent(exportableSettings(settings), "", "  ")
 	if err != nil {
 		a.updateOnMain(func() { a.showToast(a.tr("Could not export settings: ") + err.Error()) })
 		return
@@ -3180,6 +3184,21 @@ func (a *App) exportSettings(settings config.AppSettings) {
 		return
 	}
 	a.updateOnMain(func() { a.showToast(a.tr("Settings exported")) })
+}
+
+// exportableSettings removes local credentials before writing a settings file.
+func exportableSettings(settings config.AppSettings) config.AppSettings {
+	settings.ARYPlusAPIKey = ""
+	return settings
+}
+
+// importedSettings preserves the locally stored ARY Plus key when an imported
+// file does not carry one; exported files intentionally omit it.
+func importedSettings(imported, existing config.AppSettings) config.AppSettings {
+	if strings.TrimSpace(imported.ARYPlusAPIKey) == "" {
+		imported.ARYPlusAPIKey = existing.ARYPlusAPIKey
+	}
+	return imported
 }
 
 func (a *App) importSettings() {
@@ -3197,6 +3216,9 @@ func (a *App) importSettings() {
 		a.updateOnMain(func() { a.showToast(a.tr("Invalid settings file")) })
 		return
 	}
+	// Exported settings never contain the ARY Plus key. Keep the user's local
+	// key when importing a file that omits it.
+	settings = importedSettings(settings, a.settingsSnapshot())
 	var headerLines []string
 	for key, value := range settings.CustomHeaders {
 		headerLines = append(headerLines, key+": "+value)
