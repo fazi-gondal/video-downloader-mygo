@@ -602,6 +602,24 @@ func (a *App) quitFromTray() {
 	win.Close()
 }
 
+// ShowMainWindow brings the existing instance to the front when a second
+// launch is handed over to this process.
+func (a *App) ShowMainWindow() {
+	if a.HasTray() {
+		a.showFromTray()
+		return
+	}
+	win := a.window()
+	if win == nil {
+		return
+	}
+	win.Show()
+	if win.IsMinimized() {
+		win.Restore()
+	}
+	win.Focus()
+}
+
 // HasTray reports whether a tray icon is currently shown (i.e. the app is
 // running in the background). Used by main.go to guard OnWindowAllClosed.
 func (a *App) HasTray() bool {

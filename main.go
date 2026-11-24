@@ -10,7 +10,13 @@ import (
 )
 
 func main() {
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
 	a := app.New()
+	mygo.App.OnSecondInstance(func([]string, string) {
+		a.ShowMainWindow()
+	})
 	mygo.App.OnWindowAllClosed(func() {
 		// If the user chose "Minimize to tray", the window is hidden but the
 		// tray icon keeps the app alive. Do NOT quit in that case.
