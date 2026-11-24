@@ -172,13 +172,74 @@ Signing is optional for local development and not configured by default.
 
 ### macOS
 
-Set a Developer ID identity in `mygo.json` or pass the MyGo signing flag:
+Release macOS packages are Developer ID-signed and notarized when the Apple
+credentials are configured. Local development builds stay ad-hoc unless you use
+the signed build script.
+
+Prerequisites:
+
+- An Apple Developer Program membership.
+- A `Developer ID Application` certificate with its private key in the login
+  keychain. An Apple Development certificate cannot be notarized.
+- An app-specific password for the Apple ID that owns the team.
+
+Check the certificate:
 
 ```bash
-CGO_ENABLED=0 go tool mygo build -sign "Developer ID Application: …"
+security find-identity -v -p codesigning
 ```
 
-See the MyGo [GitHub Actions guide](https://mygo.egoist.dev/docs/github-actions) for notarization credentials and keychain setup.
+Local signed build:
+
+1. Export the `Developer ID Application` certificate and private key from
+   Keychain Access as a password-protected `.p12`, then import it into the login
+   keychain on the build Mac.
+2. Store the notary credentials once:
+
+   ```bash
+   xcrun notarytool store-credentials notary \
+     --apple-id "you@example.com" --team-id "TEAMID" \
+     --password "app-specific-password"
+   ```
+
+3. Build the app and DMG:
+
+   ```bash
+   MACOS_SIGNING_IDENTITY="Developer ID Application: Name (TEAMID)" \
+     bash scripts/build-macos-signed.sh
+   ```
+
+   The script adds `macos.signingIdentity` and `macos.notarize` to `mygo.json`
+   for the build, then restores the file on exit. No identity or credential is
+   written to the repository.
+
+4. Verify the result:
+
+   ```bash
+   codesign --verify --deep --strict "build/darwin-arm64/Video Downloader.app"
+   spctl --assess --type execute --verbose "build/darwin-arm64/Video Downloader.app"
+   xcrun stapler validate "build/darwin-arm64/Video Downloader.app"
+   ```
+
+The committed `mygo.json` only configures the bundled yt-dlp helper's
+hardened-runtime entitlements (`resources/yt-dlp.entitlements.plist`), because
+its PyInstaller launcher loads extracted libraries at runtime.
+
+For releases, add these repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE` | base64 of the password-protected Developer ID `.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | the `.p12` password |
+| `APPLE_ID` | the Apple ID of the developer account |
+| `APPLE_TEAM_ID` | the team ID in the identity, for example `TEAMID` |
+| `APPLE_APP_PASSWORD` | an app-specific password for the Apple ID |
+
+The release workflow imports the certificate and notary credentials into an
+ephemeral keychain, injects the signing/notarization configuration, and builds
+the app and DMG. If `MACOS_CERTIFICATE` is absent, it warns and builds an ad-hoc
+app as before; if the other secrets are missing, the release fails so a partial
+signing setup is not published silently.
 
 ### Windows
 

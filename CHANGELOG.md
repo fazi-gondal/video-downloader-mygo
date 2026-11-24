@@ -36,6 +36,11 @@ All notable user-visible changes are recorded here. Release tags use the version
   installed on the machine (or a path set in Settings → Tools), which keeps the
   installer small and cannot ship a broken bundled dylib. Missing FFmpeg now
   produces an actionable message instead of a raw loader error.
+- macOS release builds are Developer ID-signed and notarized when the Apple
+  signing secrets are configured; the workflow falls back to ad-hoc signing with
+  a warning when they are absent. The bundled yt-dlp helper gets its own
+  hardened-runtime entitlements, and `scripts/build-macos-signed.sh` supports
+  local signed builds.
 - The selected container is authoritative. MP4 stays MP4 even when the VP9
   preference is on; VP9 applies to MKV/WebM. The UI explains the rule where the
   container is chosen.

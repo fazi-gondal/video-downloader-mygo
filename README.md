@@ -202,7 +202,7 @@ The Linux archive may require GTK/WebKit runtime packages on minimal distributio
 
 ### macOS
 
-The current release workflow targets macOS arm64. Local builds can also target macOS amd64 when run on a compatible environment. The macOS package bundles yt-dlp only; it uses the FFmpeg you install (Homebrew, MacPorts, or a static build) so the installer stays small and a broken bundled dylib cannot shadow a working copy. Unsigned/ad-hoc builds may be blocked by Gatekeeper; configure Developer ID signing and notarization for public distribution.
+The current release workflow targets macOS arm64. Local builds can also target macOS amd64 when run on a compatible environment. The macOS package bundles yt-dlp only; it uses the FFmpeg you install (Homebrew, MacPorts, or a static build) so the installer stays small and a broken bundled dylib cannot shadow a working copy. Release packages are Developer ID-signed and notarized when the repository's Apple signing secrets are configured; otherwise they are ad-hoc signed and may be blocked by Gatekeeper. See [BUILD.md](BUILD.md#macos) for the local signed-build script and the required secrets.
 
 ## Run from source
 
